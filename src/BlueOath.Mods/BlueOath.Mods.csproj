@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><AssemblyName>BlueOath.Mods</AssemblyName><RootNamespace>BlueOath.Mods</RootNamespace></PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\BlueOath.Core\BlueOath.Core.csproj" /></ItemGroup>
+</Project>

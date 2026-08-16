@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><AssemblyName>BlueOath.Core</AssemblyName><RootNamespace>BlueOath.Core</RootNamespace></PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\BlueOath.Protocol\BlueOath.Protocol.csproj" /></ItemGroup>
+</Project>

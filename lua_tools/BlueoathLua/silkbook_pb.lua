@@ -1,0 +1,41 @@
+local protobuf = require("net.protobuf.protobuf")
+silkbook_pb = {}
+local m = silkbook_pb
+local g = _G
+local rawget = rawget
+local rawset = rawset
+_ENV = setmetatable({}, {
+  __index = function(t, k)
+    return rawget(m, k) or rawget(g, k)
+  end,
+  __newindex = m
+})
+TSILKBOOKINFO = protobuf.Descriptor()
+local TSILKBOOKINFO_VOLUME_FIELD = protobuf.FieldDescriptor()
+local TSILKBOOKINFO_FRAGMENT_FIELD = protobuf.FieldDescriptor()
+TSILKBOOKINFO_VOLUME_FIELD.name = "Volume"
+TSILKBOOKINFO_VOLUME_FIELD.full_name = ".pb.TSilkbookInfo.Volume"
+TSILKBOOKINFO_VOLUME_FIELD.number = 1
+TSILKBOOKINFO_VOLUME_FIELD.index = 0
+TSILKBOOKINFO_VOLUME_FIELD.label = 1
+TSILKBOOKINFO_VOLUME_FIELD.has_default_value = false
+TSILKBOOKINFO_VOLUME_FIELD.default_value = nil
+TSILKBOOKINFO_VOLUME_FIELD.type = 5
+TSILKBOOKINFO_VOLUME_FIELD.cpp_type = 1
+TSILKBOOKINFO_FRAGMENT_FIELD.name = "Fragment"
+TSILKBOOKINFO_FRAGMENT_FIELD.full_name = ".pb.TSilkbookInfo.Fragment"
+TSILKBOOKINFO_FRAGMENT_FIELD.number = 2
+TSILKBOOKINFO_FRAGMENT_FIELD.index = 1
+TSILKBOOKINFO_FRAGMENT_FIELD.label = 1
+TSILKBOOKINFO_FRAGMENT_FIELD.has_default_value = false
+TSILKBOOKINFO_FRAGMENT_FIELD.default_value = nil
+TSILKBOOKINFO_FRAGMENT_FIELD.type = 5
+TSILKBOOKINFO_FRAGMENT_FIELD.cpp_type = 1
+TSILKBOOKINFO.name = "TSilkbookInfo"
+TSILKBOOKINFO.full_name = ".pb.TSilkbookInfo"
+TSILKBOOKINFO.nested_types = {}
+TSILKBOOKINFO.enum_types = {}
+TSILKBOOKINFO.fields = {TSILKBOOKINFO_VOLUME_FIELD, TSILKBOOKINFO_FRAGMENT_FIELD}
+TSILKBOOKINFO.is_extendable = false
+TSILKBOOKINFO.extensions = {}
+TSilkbookInfo = protobuf.Message(TSILKBOOKINFO)

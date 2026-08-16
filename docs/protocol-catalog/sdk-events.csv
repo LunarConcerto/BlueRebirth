@@ -1,0 +1,5 @@
+id,name,trigger,parameters,evidence,confidence
+"1","sdk_initialized","initSDK callback","ActionType;errornu","confirmed","0.95"
+"19","apple_review","getAppleReview","errornu;applereview","confirmed","0.95"
+"27","switch_state","switch/getstate","errornu;errordesc;DNS_sw.state","confirmed","0.95"
+"1007","platform_data","getPlData/getPlData","errornu;errordesc;data (shape unresolved)","confirmed","0.95"

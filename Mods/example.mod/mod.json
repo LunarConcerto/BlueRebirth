@@ -1,0 +1,9 @@
+{
+  "id": "example.mod",
+  "version": "1.0.0",
+  "entry": "main.lua",
+  "targetClients": ["jp-1.4.0", "cn-1.5.20"],
+  "dependencies": [],
+  "loadOrder": 100,
+  "enabled": true
+}

@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><AssemblyName>BlueOath.Protocol</AssemblyName><RootNamespace>BlueOath.Protocol</RootNamespace></PropertyGroup>
+</Project>

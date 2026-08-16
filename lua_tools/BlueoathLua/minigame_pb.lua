@@ -1,0 +1,24 @@
+local protobuf = require("net.protobuf.protobuf")
+local miniGame_pb = {}
+_ENV = miniGame_pb
+TMINIGAME = protobuf.Descriptor()
+local TMINIGAME_ID_FIELD = protobuf.FieldDescriptor()
+TMINIGAME_ID_FIELD.name = "Id"
+TMINIGAME_ID_FIELD.full_name = ".pb.TMiniGame.Id"
+TMINIGAME_ID_FIELD.number = 1
+TMINIGAME_ID_FIELD.index = 0
+TMINIGAME_ID_FIELD.label = 1
+TMINIGAME_ID_FIELD.has_default_value = false
+TMINIGAME_ID_FIELD.default_value = nil
+TMINIGAME_ID_FIELD.type = 5
+TMINIGAME_ID_FIELD.cpp_type = 1
+TMINIGAME.file_name = miniGame_pb
+TMINIGAME.name = "TMiniGame"
+TMINIGAME.full_name = ".pb.TMiniGame"
+TMINIGAME.nested_types = {}
+TMINIGAME.enum_types = {}
+TMINIGAME.fields = {TMINIGAME_ID_FIELD}
+TMINIGAME.is_extendable = false
+TMINIGAME.extensions = {}
+TMiniGame = protobuf.Message(TMINIGAME)
+return _ENV

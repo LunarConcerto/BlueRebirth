@@ -1,0 +1,169 @@
+local protobuf = require("net.protobuf.protobuf")
+local net_type_pb = {}
+_ENV = net_type_pb
+TREQUEST = protobuf.Descriptor()
+local TREQUEST_METHOD_FIELD = protobuf.FieldDescriptor()
+local TREQUEST_ARGS_FIELD = protobuf.FieldDescriptor()
+local TREQUEST_CALLBACKHANDLER_FIELD = protobuf.FieldDescriptor()
+local TREQUEST_TOKEN_FIELD = protobuf.FieldDescriptor()
+TRESPONSE = protobuf.Descriptor()
+local TRESPONSE_ERR_FIELD = protobuf.FieldDescriptor()
+local TRESPONSE_ERRMSG_FIELD = protobuf.FieldDescriptor()
+local TRESPONSE_METHOD_FIELD = protobuf.FieldDescriptor()
+local TRESPONSE_RET_FIELD = protobuf.FieldDescriptor()
+local TRESPONSE_CALLBACKHANDLER_FIELD = protobuf.FieldDescriptor()
+local TRESPONSE_TIME_FIELD = protobuf.FieldDescriptor()
+local TRESPONSE_TOKEN_FIELD = protobuf.FieldDescriptor()
+local TRESPONSE_SEQ_FIELD = protobuf.FieldDescriptor()
+local TRESPONSE_ISRESPONSE_FIELD = protobuf.FieldDescriptor()
+TREQUEST_METHOD_FIELD.name = "Method"
+TREQUEST_METHOD_FIELD.full_name = ".pb.TRequest.Method"
+TREQUEST_METHOD_FIELD.number = 1
+TREQUEST_METHOD_FIELD.index = 0
+TREQUEST_METHOD_FIELD.label = 1
+TREQUEST_METHOD_FIELD.has_default_value = false
+TREQUEST_METHOD_FIELD.default_value = nil
+TREQUEST_METHOD_FIELD.type = 9
+TREQUEST_METHOD_FIELD.cpp_type = 9
+TREQUEST_ARGS_FIELD.name = "Args"
+TREQUEST_ARGS_FIELD.full_name = ".pb.TRequest.Args"
+TREQUEST_ARGS_FIELD.number = 2
+TREQUEST_ARGS_FIELD.index = 1
+TREQUEST_ARGS_FIELD.label = 1
+TREQUEST_ARGS_FIELD.has_default_value = false
+TREQUEST_ARGS_FIELD.default_value = nil
+TREQUEST_ARGS_FIELD.type = 12
+TREQUEST_ARGS_FIELD.cpp_type = 9
+TREQUEST_CALLBACKHANDLER_FIELD.name = "CallbackHandler"
+TREQUEST_CALLBACKHANDLER_FIELD.full_name = ".pb.TRequest.CallbackHandler"
+TREQUEST_CALLBACKHANDLER_FIELD.number = 3
+TREQUEST_CALLBACKHANDLER_FIELD.index = 2
+TREQUEST_CALLBACKHANDLER_FIELD.label = 1
+TREQUEST_CALLBACKHANDLER_FIELD.has_default_value = false
+TREQUEST_CALLBACKHANDLER_FIELD.default_value = nil
+TREQUEST_CALLBACKHANDLER_FIELD.type = 13
+TREQUEST_CALLBACKHANDLER_FIELD.cpp_type = 3
+TREQUEST_TOKEN_FIELD.name = "Token"
+TREQUEST_TOKEN_FIELD.full_name = ".pb.TRequest.Token"
+TREQUEST_TOKEN_FIELD.number = 4
+TREQUEST_TOKEN_FIELD.index = 3
+TREQUEST_TOKEN_FIELD.label = 1
+TREQUEST_TOKEN_FIELD.has_default_value = false
+TREQUEST_TOKEN_FIELD.default_value = nil
+TREQUEST_TOKEN_FIELD.type = 9
+TREQUEST_TOKEN_FIELD.cpp_type = 9
+TREQUEST.file_name = net_type_pb
+TREQUEST.name = "TRequest"
+TREQUEST.full_name = ".pb.TRequest"
+TREQUEST.nested_types = {}
+TREQUEST.enum_types = {}
+TREQUEST.fields = {
+  TREQUEST_METHOD_FIELD,
+  TREQUEST_ARGS_FIELD,
+  TREQUEST_CALLBACKHANDLER_FIELD,
+  TREQUEST_TOKEN_FIELD
+}
+TREQUEST.is_extendable = false
+TREQUEST.extensions = {}
+TRESPONSE_ERR_FIELD.name = "Err"
+TRESPONSE_ERR_FIELD.full_name = ".pb.TResponse.Err"
+TRESPONSE_ERR_FIELD.number = 1
+TRESPONSE_ERR_FIELD.index = 0
+TRESPONSE_ERR_FIELD.label = 1
+TRESPONSE_ERR_FIELD.has_default_value = false
+TRESPONSE_ERR_FIELD.default_value = nil
+TRESPONSE_ERR_FIELD.type = 5
+TRESPONSE_ERR_FIELD.cpp_type = 1
+TRESPONSE_ERRMSG_FIELD.name = "ErrMsg"
+TRESPONSE_ERRMSG_FIELD.full_name = ".pb.TResponse.ErrMsg"
+TRESPONSE_ERRMSG_FIELD.number = 2
+TRESPONSE_ERRMSG_FIELD.index = 1
+TRESPONSE_ERRMSG_FIELD.label = 1
+TRESPONSE_ERRMSG_FIELD.has_default_value = false
+TRESPONSE_ERRMSG_FIELD.default_value = nil
+TRESPONSE_ERRMSG_FIELD.type = 9
+TRESPONSE_ERRMSG_FIELD.cpp_type = 9
+TRESPONSE_METHOD_FIELD.name = "Method"
+TRESPONSE_METHOD_FIELD.full_name = ".pb.TResponse.Method"
+TRESPONSE_METHOD_FIELD.number = 3
+TRESPONSE_METHOD_FIELD.index = 2
+TRESPONSE_METHOD_FIELD.label = 1
+TRESPONSE_METHOD_FIELD.has_default_value = false
+TRESPONSE_METHOD_FIELD.default_value = nil
+TRESPONSE_METHOD_FIELD.type = 9
+TRESPONSE_METHOD_FIELD.cpp_type = 9
+TRESPONSE_RET_FIELD.name = "Ret"
+TRESPONSE_RET_FIELD.full_name = ".pb.TResponse.Ret"
+TRESPONSE_RET_FIELD.number = 4
+TRESPONSE_RET_FIELD.index = 3
+TRESPONSE_RET_FIELD.label = 1
+TRESPONSE_RET_FIELD.has_default_value = false
+TRESPONSE_RET_FIELD.default_value = nil
+TRESPONSE_RET_FIELD.type = 12
+TRESPONSE_RET_FIELD.cpp_type = 9
+TRESPONSE_CALLBACKHANDLER_FIELD.name = "CallbackHandler"
+TRESPONSE_CALLBACKHANDLER_FIELD.full_name = ".pb.TResponse.CallbackHandler"
+TRESPONSE_CALLBACKHANDLER_FIELD.number = 5
+TRESPONSE_CALLBACKHANDLER_FIELD.index = 4
+TRESPONSE_CALLBACKHANDLER_FIELD.label = 1
+TRESPONSE_CALLBACKHANDLER_FIELD.has_default_value = false
+TRESPONSE_CALLBACKHANDLER_FIELD.default_value = nil
+TRESPONSE_CALLBACKHANDLER_FIELD.type = 13
+TRESPONSE_CALLBACKHANDLER_FIELD.cpp_type = 3
+TRESPONSE_TIME_FIELD.name = "Time"
+TRESPONSE_TIME_FIELD.full_name = ".pb.TResponse.Time"
+TRESPONSE_TIME_FIELD.number = 6
+TRESPONSE_TIME_FIELD.index = 5
+TRESPONSE_TIME_FIELD.label = 1
+TRESPONSE_TIME_FIELD.has_default_value = false
+TRESPONSE_TIME_FIELD.default_value = nil
+TRESPONSE_TIME_FIELD.type = 13
+TRESPONSE_TIME_FIELD.cpp_type = 3
+TRESPONSE_TOKEN_FIELD.name = "Token"
+TRESPONSE_TOKEN_FIELD.full_name = ".pb.TResponse.Token"
+TRESPONSE_TOKEN_FIELD.number = 7
+TRESPONSE_TOKEN_FIELD.index = 6
+TRESPONSE_TOKEN_FIELD.label = 1
+TRESPONSE_TOKEN_FIELD.has_default_value = false
+TRESPONSE_TOKEN_FIELD.default_value = nil
+TRESPONSE_TOKEN_FIELD.type = 9
+TRESPONSE_TOKEN_FIELD.cpp_type = 9
+TRESPONSE_SEQ_FIELD.name = "Seq"
+TRESPONSE_SEQ_FIELD.full_name = ".pb.TResponse.Seq"
+TRESPONSE_SEQ_FIELD.number = 8
+TRESPONSE_SEQ_FIELD.index = 7
+TRESPONSE_SEQ_FIELD.label = 1
+TRESPONSE_SEQ_FIELD.has_default_value = false
+TRESPONSE_SEQ_FIELD.default_value = nil
+TRESPONSE_SEQ_FIELD.type = 13
+TRESPONSE_SEQ_FIELD.cpp_type = 3
+TRESPONSE_ISRESPONSE_FIELD.name = "IsResponse"
+TRESPONSE_ISRESPONSE_FIELD.full_name = ".pb.TResponse.IsResponse"
+TRESPONSE_ISRESPONSE_FIELD.number = 9
+TRESPONSE_ISRESPONSE_FIELD.index = 8
+TRESPONSE_ISRESPONSE_FIELD.label = 1
+TRESPONSE_ISRESPONSE_FIELD.has_default_value = false
+TRESPONSE_ISRESPONSE_FIELD.default_value = nil
+TRESPONSE_ISRESPONSE_FIELD.type = 5
+TRESPONSE_ISRESPONSE_FIELD.cpp_type = 1
+TRESPONSE.file_name = net_type_pb
+TRESPONSE.name = "TResponse"
+TRESPONSE.full_name = ".pb.TResponse"
+TRESPONSE.nested_types = {}
+TRESPONSE.enum_types = {}
+TRESPONSE.fields = {
+  TRESPONSE_ERR_FIELD,
+  TRESPONSE_ERRMSG_FIELD,
+  TRESPONSE_METHOD_FIELD,
+  TRESPONSE_RET_FIELD,
+  TRESPONSE_CALLBACKHANDLER_FIELD,
+  TRESPONSE_TIME_FIELD,
+  TRESPONSE_TOKEN_FIELD,
+  TRESPONSE_SEQ_FIELD,
+  TRESPONSE_ISRESPONSE_FIELD
+}
+TRESPONSE.is_extendable = false
+TRESPONSE.extensions = {}
+TRequest = protobuf.Message(TREQUEST)
+TResponse = protobuf.Message(TRESPONSE)
+return _ENV

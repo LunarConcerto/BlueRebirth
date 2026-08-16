@@ -1,0 +1,98 @@
+{
+  "SchemaVersion": "1.0",
+  "GeneratedUtc": "2026-08-13T04:31:35.9455424+00:00",
+  "Clients": [
+    {
+      "Id": "jp-1.4.0",
+      "ImageBase": 268435456,
+      "SizeOfImage": 33456128,
+      "MaxFieldTypeIndex": 63183,
+      "Candidates": [
+        {
+          "RegistrationRva": 28424312,
+          "RegistrationVa": 296859768,
+          "GenericClassesCount": 28594,
+          "GenericClassesPointer": 295865056,
+          "GenericInstsCount": 6123,
+          "GenericMethodTableCount": 52438,
+          "TypesCount": 63429,
+          "TypesPointer": 293199880,
+          "MethodSpecsCount": 54156,
+          "FieldOffsetsCount": 11582,
+          "TypeDefinitionSizesCount": 11582,
+          "MetadataUsagesCount": 58517,
+          "TypeSamples": 257,
+          "ValidTypeSamples": 257,
+          "ValidTypeRatio": 1,
+          "DistinctTypeEnums": [
+            "0x03",
+            "0x04",
+            "0x05",
+            "0x06",
+            "0x07",
+            "0x08",
+            "0x09",
+            "0x0a",
+            "0x0b",
+            "0x0e",
+            "0x11",
+            "0x12",
+            "0x13",
+            "0x15",
+            "0x1c",
+            "0x1d",
+            "0x1e"
+          ],
+          "Confidence": "strong",
+          "Score": 134
+        }
+      ]
+    },
+    {
+      "Id": "cn-1.5.20",
+      "ImageBase": 268435456,
+      "SizeOfImage": 33132544,
+      "MaxFieldTypeIndex": 62291,
+      "Candidates": [
+        {
+          "RegistrationRva": 28140392,
+          "RegistrationVa": 296575848,
+          "GenericClassesCount": 28137,
+          "GenericClassesPointer": 295581184,
+          "GenericInstsCount": 5972,
+          "GenericMethodTableCount": 51729,
+          "TypesCount": 62533,
+          "TypesPointer": 292844048,
+          "MethodSpecsCount": 53377,
+          "FieldOffsetsCount": 11453,
+          "TypeDefinitionSizesCount": 11453,
+          "MetadataUsagesCount": 57989,
+          "TypeSamples": 257,
+          "ValidTypeSamples": 257,
+          "ValidTypeRatio": 1,
+          "DistinctTypeEnums": [
+            "0x03",
+            "0x04",
+            "0x05",
+            "0x06",
+            "0x07",
+            "0x08",
+            "0x09",
+            "0x0a",
+            "0x0b",
+            "0x0e",
+            "0x11",
+            "0x12",
+            "0x13",
+            "0x15",
+            "0x1c",
+            "0x1d",
+            "0x1e"
+          ],
+          "Confidence": "strong",
+          "Score": 134
+        }
+      ]
+    }
+  ]
+}

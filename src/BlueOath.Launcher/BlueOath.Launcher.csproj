@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><AssemblyName>BlueOath.Launcher</AssemblyName><RootNamespace>BlueOath.Launcher</RootNamespace></PropertyGroup><ItemGroup><ProjectReference Include="..\BlueOath.Protocol\BlueOath.Protocol.csproj"/><Compile Include="..\BlueOath.Bootstrap\Adapter.cs" Link="Bootstrap\Adapter.cs"/></ItemGroup></Project>

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "1.2",
+  "profiles": [
+    {
+      "id": "jp-1.4.0",
+      "gameAssemblySha256": "8AEE607813A759E047D81C2428990609322DE072437DD4597F80E8E3FAD1D404",
+      "metadataSha256": "61546AA9C5BE1EE11750738EB207A12B353EA36D11AB43BAE9CDD7B9D32D0DE9",
+      "sdkEvents": {},
+      "messageIds": {},
+      "framing": {
+        "status": "unresolved",
+        "lengthEndian": null,
+        "headerBytes": null
+      },
+      "transforms": {
+        "compression": "unresolved",
+        "encryption": "unresolved"
+      },
+      "capabilities": {}
+    },
+    {
+      "id": "cn-1.5.20",
+      "gameAssemblySha256": "AB1C009D1565F69B815703EAAE39F4FB4BD3533EF5FE823D620B355C62A1A9C0",
+      "metadataSha256": "BC05B1828B8D26EEE1A39B8E18678BE7FA855DCB9528332937723425D5A7A325",
+      "sdkEvents": {},
+      "messageIds": {},
+      "framing": {
+        "status": "unresolved",
+        "lengthEndian": null,
+        "headerBytes": null
+      },
+      "transforms": {
+        "compression": "unresolved",
+        "encryption": "unresolved"
+      },
+      "capabilities": {}
+    }
+  ]
+}

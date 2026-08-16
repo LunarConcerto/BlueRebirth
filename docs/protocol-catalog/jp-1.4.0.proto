@@ -1,0 +1,588 @@
+syntax = "proto2";
+
+// Generated static draft for jp-1.4.0. Tags marked inferred are not wire-confirmed.
+package blueoath;
+
+message TAckPack {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 ack_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 56592
+  repeated TNetOperation ope_list = 2;
+}
+
+message TArgApplyGuild {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 guild_id = 1;
+}
+
+message TArgAppoint {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 uid = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 post = 2;
+}
+
+message TArgArtifactTrain {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 artifact_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 train_times = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 train_cost_way = 3;
+}
+
+message TArgAtkStage {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 chapter_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 index = 2;
+}
+
+message TArgCancelApply {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 guild_id = 1;
+}
+
+message TArgCreateGuild {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string name = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 emblem = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 frame = 3;
+}
+
+message TArgCreateUser {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string uname = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 class_value = 2;
+}
+
+message TArgGetChatInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 channel = 1;
+}
+
+message TArgGetChatInfoN {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 channel = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 start_recv_time = 2;
+}
+
+message TArgGetGuildList {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 from_rank = 1;
+}
+
+message TArgGetSacrificeReward {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 reward = 1;
+}
+
+message TArgGuildSacrifice {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 mode = 1;
+}
+
+message TArgGuildShopGetInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 shop_id = 1;
+}
+
+message TArgGuildSkill {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 type = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 skill_id = 2;
+}
+
+message TArgLogin {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string pid = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 timestamp = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string open_date_time = 3;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string hash = 4;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57811
+  optional TSampleInfo sample_info = 5;
+}
+
+message TArgModiGuildInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string name = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 emblem = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string enounce = 3;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string notice = 4;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57618
+  optional TGuildLimit limit = 5;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 frame = 6;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string chat_room = 7;
+}
+
+message TArgModifyChannel {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 channel = 1;
+}
+
+message TArgModifyChannelOld {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57473
+  repeated TChannelState state = 1;
+}
+
+message TArgPickCopyReward {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 reward_type = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 cid = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 index = 3;
+}
+
+message TArgPush {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 uid = 1;
+}
+
+message TArgRemove {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 uid = 1;
+}
+
+message TArgSearchGuild {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 guild_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string name = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 type = 3;
+}
+
+message TArgSendMessage {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 channel = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string message_value = 2;
+}
+
+message TArgSendOneReward {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 47347
+  repeated uint64 uid_list = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57824
+  repeated TObj r_obj_list = 2;
+}
+
+message TArgSleep {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30648
+  optional uint32 ms = 1;
+}
+
+message TArgTransfer {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 uid = 1;
+}
+
+message TArgUniteLogin {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string uname = 1;
+}
+
+message TArgUseGiftCode {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string code = 1;
+}
+
+message TArgUserId {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 uid = 1;
+}
+
+message TArgUserLogin {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 uid = 1;
+}
+
+message TArgUserRank {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 rank_type = 1;
+}
+
+message TArgVerifyGuild {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 uid = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 mode = 2;
+}
+
+message TNetOperation {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 frame = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 index = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 op_code = 3;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 31044
+  optional bytes data = 4;
+}
+
+message TRetActiveShopGoodsInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30535
+  optional bool can_buy = 1;
+}
+
+message TRetArtifactData {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 artifact_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 42213
+  repeated int32 crrnt_attr = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 42213
+  repeated int32 add_attr = 3;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 42213
+  repeated int32 skills_level = 4;
+}
+
+message TRetArtifactInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57365
+  repeated TRetArtifactData artifact_data = 1;
+}
+
+message TRetChangeGuideState {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 guide_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 oprate_type = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 step_id = 3;
+}
+
+message TRetChangeGuideStepState {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 guide_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 step_id = 2;
+}
+
+message TRetGetGuildApplyInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57666
+  repeated TGuildApplyInfo apply_list = 1;
+}
+
+message TRetGetGuildInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string name = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 emblem = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string enounce = 3;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string notice = 4;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 level = 5;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 exp = 6;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57618
+  optional TGuildLimit limit = 7;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 member_num = 8;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string leader_name = 9;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 leader_id = 10;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 47347
+  repeated uint64 deputy = 11;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 frame = 12;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57648
+  repeated TGuildTip tip_list = 13;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 process = 14;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57649
+  repeated TSacrificeInfo sacrifice_info = 15;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57650
+  repeated TGuildSkillSub skill_list = 16;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 apply_num = 17;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 create_time = 18;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string chat_room = 19;
+}
+
+message TRetGetGuildList {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 total_num = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57610
+  repeated TBaseGuildInfo guild_list = 2;
+}
+
+message TRetGetGuildMessageInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57670
+  repeated TGuildMessageInfo msg_list = 1;
+}
+
+message TRetGetGuildTipInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57674
+  repeated TGuildTipInfo tip_list = 1;
+}
+
+message TRetGetMemberInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57641
+  repeated TGuildMemberInfo s_member = 1;
+}
+
+message TRetGetOtherUserInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 uid = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string uname = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 head = 3;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 head_frame = 4;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 sex = 5;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 class_value = 6;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 level = 7;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 vip_level = 8;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 power = 9;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 achieve_point = 10;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 htid = 11;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 guild_id = 12;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string guild_name = 13;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 vip_exp = 14;
+}
+
+message TRetGetSvrTime {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 now_time = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 svr_start_time = 2;
+}
+
+message TRetGetUserInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 uid = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string uname = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 last_login_time = 3;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 head = 4;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 head_frame = 5;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 sex = 6;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 class_value = 7;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 vip_level = 8;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57946
+  repeated TUserRecover recover_data = 9;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 level = 10;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 exp = 11;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 diamond = 12;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 gold = 13;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 vigour = 14;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 spirit = 15;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 hero_shop_point = 16;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 awake_shop_point = 17;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 pet_shop_point = 18;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 prestige = 19;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 token = 20;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 achievement = 21;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 reputation = 22;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 refresh_time = 23;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 guild_coin = 24;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 hero_soul = 25;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 god_soul = 26;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 pet_soul = 27;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 soul_jade = 28;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 achieve_point = 29;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 power = 30;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 vip_exp = 31;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 change_u_name_times = 32;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 login_days = 33;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 create_time = 34;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 guild_copy_atk_num = 35;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 arena_point = 36;
+}
+
+message TRetGetUsers {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57818
+  repeated TUserInfo arr_user = 1;
+}
+
+message TRetGuildShopInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 shop_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57705
+  repeated TShopShelfGoodsData guild_shelf_goods_data = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57706
+  repeated TShopGoodsData user_shelf_goods_data = 3;
+}
+
+message TRetGuildUserInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 32853
+  optional uint64 guild_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 message_count = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 quit_time = 3;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57650
+  repeated TGuildSkillSub skill_list = 4;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 sacrifice_time = 5;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 sacrifice_box = 6;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 47347
+  repeated uint64 apply_list = 7;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 47347
+  repeated uint64 del_apply_list = 8;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57659
+  repeated TGuildApply apply = 9;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 post = 10;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 sacrifice_mode = 11;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 sacrifice_reward = 12;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57660
+  optional TGuildEvent event = 13;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 42213
+  repeated int32 first_reward = 14;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 daily_reward_time = 15;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 last_atk_time = 16;
+}
+
+message TRetInitQueueInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 queue_pos = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 queue_len = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 self_pos = 3;
+}
+
+message TRetKickInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string info = 1;
+}
+
+message TRetLogin {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string ret = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string feign_role_id = 2;
+}
+
+message TRetPopMsg {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string msg = 1;
+}
+
+message TRetPsUserRankData {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57580
+  optional TRetGetOtherUserInfo user = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 star = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 thumbs_up_count = 3;
+}
+
+message TRetQueueInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 queue_pos = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 queue_len = 2;
+}
+
+message TRetSearchGuild {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57610
+  repeated TBaseGuildInfo guild_list = 1;
+}
+
+message TRetShopInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 shop_id = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 reset_count = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57705
+  repeated TShopShelfGoodsData shop_shelf_goods_data = 3;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57706
+  repeated TShopGoodsData shop_goods_data = 4;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 empty_flag = 5;
+}
+
+message TRetShopsInfo {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57889
+  repeated TRetShopInfo shop_info = 1;
+}
+
+message TRetShowRedTip {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30648
+  optional uint32 type = 1;
+}
+
+message TRetUserLogin {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string ret = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30894
+  optional string ban_msg = 2;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 ban_time = 3;
+}
+
+message TRetUserRank {
+  // evidence: inferred-property-order; IL2CPP typeIndex: 30826
+  optional int32 user_rank = 1;
+  // evidence: inferred-property-order; IL2CPP typeIndex: 57986
+  repeated TRetGetOtherUserInfo user = 2;
+}
+

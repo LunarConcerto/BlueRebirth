@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><AssemblyName>BlueOath.Storage</AssemblyName><RootNamespace>BlueOath.Storage</RootNamespace></PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\BlueOath.Core\BlueOath.Core.csproj" /><PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" /></ItemGroup>
+</Project>

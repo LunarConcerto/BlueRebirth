@@ -1,0 +1,33 @@
+# ---- Build artifacts ----
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+.idea/
+
+# ---- Python cache ----
+__pycache__/
+*.pyc
+
+# ---- Logs / dumps ----
+*.log
+*.dmp
+*.pdb
+
+# ---- Game clients (original binaries, NOT source) ----
+/blueoath/
+/苍蓝誓约/
+
+# ---- Reverse-engineering artifacts (regenerable via Il2CppDumper) ----
+/il2cppdump/
+
+# ---- Runtime / temp artifacts ----
+/runtime/
+/tmp-server/
+
+# ---- Native build outputs and backups ----
+/native/bin-x86/
+/native/build-x86/
+/native/build-x86-nmake/
+/native/_backup/

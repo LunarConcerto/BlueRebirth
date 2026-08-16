@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><AssemblyName>BlueOath.Tests</AssemblyName><RootNamespace>BlueOath.Tests</RootNamespace></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\BlueOath.Protocol\BlueOath.Protocol.csproj" />
+    <ProjectReference Include="..\BlueOath.Core\BlueOath.Core.csproj" />
+    <ProjectReference Include="..\BlueOath.Storage\BlueOath.Storage.csproj" />
+    <ProjectReference Include="..\BlueOath.Mods\BlueOath.Mods.csproj" />
+  </ItemGroup>
+</Project>

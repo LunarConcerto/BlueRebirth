@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "1.1",
+  "semanticId": "prologue-0-4-first-battle",
+  "clients": ["jp-1.4.0", "cn-1.5.20"],
+  "evidence": "confirmed-static-config",
+  "chapter": {
+    "table": "config_chapter",
+    "id": 1,
+    "levelListContains": 4
+  },
+  "display": {
+    "table": "config_copy_display",
+    "id": 4,
+    "copyIndex": "0-4",
+    "japanName": "初陣",
+    "chinaName": "初战",
+    "levelLimit": 1,
+    "battleTimeSeconds": 360,
+    "firstRewardId": 509035
+  },
+  "scene": {
+    "table": "config_copy",
+    "copyId": 4,
+    "recordId": 40,
+    "sceneId": "10000",
+    "fleetIds": [200401],
+    "battleTimeSeconds": 360,
+    "selection": "normal branch with blood_range_lower=-1 and random_weight=1000"
+  },
+  "enemyFleet": {
+    "table": "config_fleet",
+    "id": 200401,
+    "enemyIds": [100000],
+    "formation": 1,
+    "isLastFleet": true,
+    "battleTimeSeconds": 60,
+    "playerExp": 56
+  },
+  "enemy": {
+    "table": "config_ship_enemy",
+    "id": 100000,
+    "name": "敌驱逐",
+    "level": 1,
+    "hp": 238,
+    "attack": 1,
+    "defense": 5,
+    "type": 2,
+    "shipInfoId": 9011011
+  },
+  "playerAssistFleet": {
+    "source": "stage attached_fleet",
+    "table": "config_assist_fleet",
+    "id": 1,
+    "formation": 1,
+    "formationSemantic": "SingleColumn",
+    "assistShipIds": [10002101],
+    "ship": {
+      "table": "config_assist_ship_info",
+      "id": 10002101,
+      "name": "剧情1-5战斗奥克兰",
+      "level": 10,
+      "shipMainId": 10210513,
+      "fashionId": 1021051,
+      "equipmentIds": [30083, 30423, 30253, 30513, 30493, 30543],
+      "equipmentLevels": [5, 5, 5, 5, 5, 5]
+    },
+    "persistence": "stage-only; not an owned account ship"
+  },
+  "firstReward": {
+    "table": "config_rewards",
+    "id": 509035,
+    "rewards": [[3, 20210111, 1]],
+    "tupleMeaning": "[rewardType, targetId, quantity]",
+    "rewardType": 3,
+    "rewardTypeSemantic": "ship",
+    "target": {
+      "table": "config_ship_main",
+      "smId": 20210111,
+      "shipInfoId": 2021011,
+      "name": "天龙",
+      "quantity": 1
+    }
+  },
+  "notes": [
+    "The key IDs and enemy stats are identical in JP and CN clients.",
+    "config_copy record 39 is a special HP-range branch and is not the default baseline.",
+    "Reward types 1=item, 2=equipment, 3=ship and 5=currency have 100% target-table coverage in both clients.",
+    "The assist fleet is stage-only; the persistent owned ship is granted by the first-clear reward."
+  ]
+}

@@ -1,0 +1,172 @@
+local protobuf = require("net.protobuf.protobuf")
+local copy_pb = require("net.protobuflua.copy_pb")
+local mopUp_pb = {}
+_ENV = mopUp_pb
+MOPUPDATA = protobuf.Descriptor()
+local MOPUPDATA_FLEETID_FIELD = protobuf.FieldDescriptor()
+local MOPUPDATA_COPYID_FIELD = protobuf.FieldDescriptor()
+local MOPUPDATA_STARTTIME_FIELD = protobuf.FieldDescriptor()
+local MOPUPDATA_ENDTIME_FIELD = protobuf.FieldDescriptor()
+local MOPUPDATA_SWEEPCOUNTS_FIELD = protobuf.FieldDescriptor()
+local MOPUPDATA_CHAPERID_FIELD = protobuf.FieldDescriptor()
+TMOPUPRET = protobuf.Descriptor()
+local TMOPUPRET_SWEEPFLEETSNUM_FIELD = protobuf.FieldDescriptor()
+local TMOPUPRET_DATA_FIELD = protobuf.FieldDescriptor()
+local TMOPUPRET_PASSRETS_FIELD = protobuf.FieldDescriptor()
+TMOPUPARG = protobuf.Descriptor()
+local TMOPUPARG_FLEETID_FIELD = protobuf.FieldDescriptor()
+local TMOPUPARG_COPYID_FIELD = protobuf.FieldDescriptor()
+local TMOPUPARG_SWEEPCOUNTS_FIELD = protobuf.FieldDescriptor()
+MOPUPDATA_FLEETID_FIELD.name = "fleetId"
+MOPUPDATA_FLEETID_FIELD.full_name = ".pb.MopUpData.fleetId"
+MOPUPDATA_FLEETID_FIELD.number = 1
+MOPUPDATA_FLEETID_FIELD.index = 0
+MOPUPDATA_FLEETID_FIELD.label = 1
+MOPUPDATA_FLEETID_FIELD.has_default_value = false
+MOPUPDATA_FLEETID_FIELD.default_value = nil
+MOPUPDATA_FLEETID_FIELD.type = 5
+MOPUPDATA_FLEETID_FIELD.cpp_type = 1
+MOPUPDATA_COPYID_FIELD.name = "copyId"
+MOPUPDATA_COPYID_FIELD.full_name = ".pb.MopUpData.copyId"
+MOPUPDATA_COPYID_FIELD.number = 2
+MOPUPDATA_COPYID_FIELD.index = 1
+MOPUPDATA_COPYID_FIELD.label = 1
+MOPUPDATA_COPYID_FIELD.has_default_value = false
+MOPUPDATA_COPYID_FIELD.default_value = nil
+MOPUPDATA_COPYID_FIELD.type = 5
+MOPUPDATA_COPYID_FIELD.cpp_type = 1
+MOPUPDATA_STARTTIME_FIELD.name = "startTime"
+MOPUPDATA_STARTTIME_FIELD.full_name = ".pb.MopUpData.startTime"
+MOPUPDATA_STARTTIME_FIELD.number = 3
+MOPUPDATA_STARTTIME_FIELD.index = 2
+MOPUPDATA_STARTTIME_FIELD.label = 1
+MOPUPDATA_STARTTIME_FIELD.has_default_value = false
+MOPUPDATA_STARTTIME_FIELD.default_value = nil
+MOPUPDATA_STARTTIME_FIELD.type = 3
+MOPUPDATA_STARTTIME_FIELD.cpp_type = 2
+MOPUPDATA_ENDTIME_FIELD.name = "endTime"
+MOPUPDATA_ENDTIME_FIELD.full_name = ".pb.MopUpData.endTime"
+MOPUPDATA_ENDTIME_FIELD.number = 4
+MOPUPDATA_ENDTIME_FIELD.index = 3
+MOPUPDATA_ENDTIME_FIELD.label = 1
+MOPUPDATA_ENDTIME_FIELD.has_default_value = false
+MOPUPDATA_ENDTIME_FIELD.default_value = nil
+MOPUPDATA_ENDTIME_FIELD.type = 3
+MOPUPDATA_ENDTIME_FIELD.cpp_type = 2
+MOPUPDATA_SWEEPCOUNTS_FIELD.name = "sweepCounts"
+MOPUPDATA_SWEEPCOUNTS_FIELD.full_name = ".pb.MopUpData.sweepCounts"
+MOPUPDATA_SWEEPCOUNTS_FIELD.number = 5
+MOPUPDATA_SWEEPCOUNTS_FIELD.index = 4
+MOPUPDATA_SWEEPCOUNTS_FIELD.label = 1
+MOPUPDATA_SWEEPCOUNTS_FIELD.has_default_value = false
+MOPUPDATA_SWEEPCOUNTS_FIELD.default_value = nil
+MOPUPDATA_SWEEPCOUNTS_FIELD.type = 5
+MOPUPDATA_SWEEPCOUNTS_FIELD.cpp_type = 1
+MOPUPDATA_CHAPERID_FIELD.name = "chaperId"
+MOPUPDATA_CHAPERID_FIELD.full_name = ".pb.MopUpData.chaperId"
+MOPUPDATA_CHAPERID_FIELD.number = 6
+MOPUPDATA_CHAPERID_FIELD.index = 5
+MOPUPDATA_CHAPERID_FIELD.label = 1
+MOPUPDATA_CHAPERID_FIELD.has_default_value = false
+MOPUPDATA_CHAPERID_FIELD.default_value = nil
+MOPUPDATA_CHAPERID_FIELD.type = 5
+MOPUPDATA_CHAPERID_FIELD.cpp_type = 1
+MOPUPDATA.file_name = mopUp_pb
+MOPUPDATA.name = "MopUpData"
+MOPUPDATA.full_name = ".pb.MopUpData"
+MOPUPDATA.nested_types = {}
+MOPUPDATA.enum_types = {}
+MOPUPDATA.fields = {
+  MOPUPDATA_FLEETID_FIELD,
+  MOPUPDATA_COPYID_FIELD,
+  MOPUPDATA_STARTTIME_FIELD,
+  MOPUPDATA_ENDTIME_FIELD,
+  MOPUPDATA_SWEEPCOUNTS_FIELD,
+  MOPUPDATA_CHAPERID_FIELD
+}
+MOPUPDATA.is_extendable = false
+MOPUPDATA.extensions = {}
+TMOPUPRET_SWEEPFLEETSNUM_FIELD.name = "sweepFleetsNum"
+TMOPUPRET_SWEEPFLEETSNUM_FIELD.full_name = ".pb.TMopUpRet.sweepFleetsNum"
+TMOPUPRET_SWEEPFLEETSNUM_FIELD.number = 1
+TMOPUPRET_SWEEPFLEETSNUM_FIELD.index = 0
+TMOPUPRET_SWEEPFLEETSNUM_FIELD.label = 1
+TMOPUPRET_SWEEPFLEETSNUM_FIELD.has_default_value = false
+TMOPUPRET_SWEEPFLEETSNUM_FIELD.default_value = nil
+TMOPUPRET_SWEEPFLEETSNUM_FIELD.type = 5
+TMOPUPRET_SWEEPFLEETSNUM_FIELD.cpp_type = 1
+TMOPUPRET_DATA_FIELD.name = "data"
+TMOPUPRET_DATA_FIELD.full_name = ".pb.TMopUpRet.data"
+TMOPUPRET_DATA_FIELD.number = 2
+TMOPUPRET_DATA_FIELD.index = 1
+TMOPUPRET_DATA_FIELD.label = 3
+TMOPUPRET_DATA_FIELD.has_default_value = false
+TMOPUPRET_DATA_FIELD.default_value = {}
+TMOPUPRET_DATA_FIELD.message_type = MOPUPDATA
+TMOPUPRET_DATA_FIELD.type = 11
+TMOPUPRET_DATA_FIELD.cpp_type = 10
+TMOPUPRET_PASSRETS_FIELD.name = "passRets"
+TMOPUPRET_PASSRETS_FIELD.full_name = ".pb.TMopUpRet.passRets"
+TMOPUPRET_PASSRETS_FIELD.number = 3
+TMOPUPRET_PASSRETS_FIELD.index = 2
+TMOPUPRET_PASSRETS_FIELD.label = 3
+TMOPUPRET_PASSRETS_FIELD.has_default_value = false
+TMOPUPRET_PASSRETS_FIELD.default_value = {}
+TMOPUPRET_PASSRETS_FIELD.message_type = copy_pb.TPASSBASERET
+TMOPUPRET_PASSRETS_FIELD.type = 11
+TMOPUPRET_PASSRETS_FIELD.cpp_type = 10
+TMOPUPRET.file_name = mopUp_pb
+TMOPUPRET.name = "TMopUpRet"
+TMOPUPRET.full_name = ".pb.TMopUpRet"
+TMOPUPRET.nested_types = {}
+TMOPUPRET.enum_types = {}
+TMOPUPRET.fields = {
+  TMOPUPRET_SWEEPFLEETSNUM_FIELD,
+  TMOPUPRET_DATA_FIELD,
+  TMOPUPRET_PASSRETS_FIELD
+}
+TMOPUPRET.is_extendable = false
+TMOPUPRET.extensions = {}
+TMOPUPARG_FLEETID_FIELD.name = "fleetId"
+TMOPUPARG_FLEETID_FIELD.full_name = ".pb.TMopUpArg.fleetId"
+TMOPUPARG_FLEETID_FIELD.number = 1
+TMOPUPARG_FLEETID_FIELD.index = 0
+TMOPUPARG_FLEETID_FIELD.label = 1
+TMOPUPARG_FLEETID_FIELD.has_default_value = false
+TMOPUPARG_FLEETID_FIELD.default_value = nil
+TMOPUPARG_FLEETID_FIELD.type = 5
+TMOPUPARG_FLEETID_FIELD.cpp_type = 1
+TMOPUPARG_COPYID_FIELD.name = "copyId"
+TMOPUPARG_COPYID_FIELD.full_name = ".pb.TMopUpArg.copyId"
+TMOPUPARG_COPYID_FIELD.number = 2
+TMOPUPARG_COPYID_FIELD.index = 1
+TMOPUPARG_COPYID_FIELD.label = 1
+TMOPUPARG_COPYID_FIELD.has_default_value = false
+TMOPUPARG_COPYID_FIELD.default_value = nil
+TMOPUPARG_COPYID_FIELD.type = 5
+TMOPUPARG_COPYID_FIELD.cpp_type = 1
+TMOPUPARG_SWEEPCOUNTS_FIELD.name = "sweepCounts"
+TMOPUPARG_SWEEPCOUNTS_FIELD.full_name = ".pb.TMopUpArg.sweepCounts"
+TMOPUPARG_SWEEPCOUNTS_FIELD.number = 3
+TMOPUPARG_SWEEPCOUNTS_FIELD.index = 2
+TMOPUPARG_SWEEPCOUNTS_FIELD.label = 1
+TMOPUPARG_SWEEPCOUNTS_FIELD.has_default_value = false
+TMOPUPARG_SWEEPCOUNTS_FIELD.default_value = nil
+TMOPUPARG_SWEEPCOUNTS_FIELD.type = 5
+TMOPUPARG_SWEEPCOUNTS_FIELD.cpp_type = 1
+TMOPUPARG.file_name = mopUp_pb
+TMOPUPARG.name = "TMopUpArg"
+TMOPUPARG.full_name = ".pb.TMopUpArg"
+TMOPUPARG.nested_types = {}
+TMOPUPARG.enum_types = {}
+TMOPUPARG.fields = {
+  TMOPUPARG_FLEETID_FIELD,
+  TMOPUPARG_COPYID_FIELD,
+  TMOPUPARG_SWEEPCOUNTS_FIELD
+}
+TMOPUPARG.is_extendable = false
+TMOPUPARG.extensions = {}
+MopUpData = protobuf.Message(MOPUPDATA)
+TMopUpArg = protobuf.Message(TMOPUPARG)
+TMopUpRet = protobuf.Message(TMOPUPRET)
+return _ENV
