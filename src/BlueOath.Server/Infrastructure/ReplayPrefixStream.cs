@@ -1,5 +1,9 @@
-namespace BlueOath.Server;
+namespace BlueOath.Server.Infrastructure;
 
+/// <summary>
+/// 一个只读流包装器：先把已读取的头部字节「回放」给调用方，再继续透传底层流。
+/// 用于主端口在嗅探前 8 字节之后，把这些字节重新交给 JSON 帧解码器读取。
+/// </summary>
 internal sealed class ReplayPrefixStream : Stream
 {
     private readonly ReadOnlyMemory<byte> _prefix;

@@ -1,1 +1,14 @@
-<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><AssemblyName>BlueOath.Server</AssemblyName><RootNamespace>BlueOath.Server</RootNamespace></PropertyGroup><ItemGroup><ProjectReference Include="..\BlueOath.Core\BlueOath.Core.csproj"/><ProjectReference Include="..\BlueOath.Protocol\BlueOath.Protocol.csproj"/><ProjectReference Include="..\BlueOath.Storage\BlueOath.Storage.csproj"/></ItemGroup></Project>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>BlueOath.Server</AssemblyName>
+    <RootNamespace>BlueOath.Server</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BlueOath.Core\BlueOath.Core.csproj" />
+    <ProjectReference Include="..\BlueOath.Protocol\BlueOath.Protocol.csproj" />
+    <ProjectReference Include="..\BlueOath.Storage\BlueOath.Storage.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+  </ItemGroup>
+</Project>

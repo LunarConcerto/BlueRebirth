@@ -2,8 +2,12 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
-namespace BlueOath.Server;
+namespace BlueOath.Server.Infrastructure;
 
+/// <summary>
+/// 本地开发用的自签名 TLS 证书：生成一个根证书与一个叶子服务器证书（含多个 SAN），
+/// 并把它们导出为 .cer/.pfx/.pem 文件供启动脚本和 OpenSSL 代理使用。
+/// </summary>
 internal sealed class DevelopmentTlsMaterial : IDisposable
 {
     private DevelopmentTlsMaterial(X509Certificate2 serverCertificate, X509Certificate2 rootCertificate,
@@ -28,6 +32,7 @@ internal sealed class DevelopmentTlsMaterial : IDisposable
     {
         Directory.CreateDirectory(outputDirectory);
 
+        // 根证书（自签名，用于签发叶子证书）。
         var rootKey = RSA.Create(2048);
         var rootRequest = new CertificateRequest(
             "CN=BlueOath Local Development Root",
@@ -44,6 +49,7 @@ internal sealed class DevelopmentTlsMaterial : IDisposable
             now.AddMinutes(-5),
             now.AddDays(7));
 
+        // 叶子服务器证书，SAN 覆盖真实客户端会访问到的域名与本机回环地址。
         var leafKey = RSA.Create(2048);
         var leafRequest = new CertificateRequest(
             "CN=mapijpshipgirl.blueoath.com",
@@ -72,6 +78,7 @@ internal sealed class DevelopmentTlsMaterial : IDisposable
             serial);
         var serverCertificate = unsignedLeaf.CopyWithPrivateKey(leafKey);
 
+        // 导出多种格式：根证书 .cer、叶子证书 .pfx 以及给 OpenSSL 代理的 .pem/.key。
         var rootCertificatePath = Path.Combine(outputDirectory, "blueoath-local-root.cer");
         var leafCertificatePath = Path.Combine(outputDirectory, "blueoath-local-leaf.pfx");
         var leafPemPath = Path.Combine(outputDirectory, "blueoath-local-leaf.pem");
