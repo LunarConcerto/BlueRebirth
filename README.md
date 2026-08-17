@@ -82,3 +82,70 @@ encoded[i] = decoded[i] XOR 0x55
 ```
 
 当前将此规则作为已知的配置解码线索。解码后的文本编码、是否还有压缩层，以及不同表或客户端版本是否采用完全相同的处理流程，仍需通过样本和客户端调用点验证。
+
+### 配置 <-> Excel 双向转换
+
+一键脚本（导出到 `<仓库>\excel`，反导时自动备份原配置）：
+
+```powershell
+.\export-config.bat [jp|cn]   # 导出：所有 config_*.db -> <仓库>\excel
+.\import-config.bat [jp|cn]   # 反导：<仓库>\excel -> 配置数据库（自动备份）
+```
+
+脚本底层调用 `BlueOath.Tools` 的 `--config-excel` 子命令，把加密的 `config_*.db` 导出为可编辑的
+`.xlsx`，也能把编辑后的 Excel 反导回配置数据库。每个表一个 `.xlsx` 文件（`config_<表>.xlsx`），
+内含两个工作表：
+
+- `data`：业务行，列为 `id` / `indexid` / `json`（`json` 为已解密的明文 JSON，直接编辑即可）。
+- `_meta`：元数据行（`id = nill` 的整表校验哈希，`jsonbytes_base64` 为已解密字节，一般无需改动）。
+
+导出：
+
+```powershell
+dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel --region=jp [--output=<目录>]
+```
+
+默认输出到 `<仓库>\config-excel\<region>`，并生成 `_manifest.json` 记录每张表源库 SHA-256。
+`--region` 支持 `jp` / `cn`，也可用 `--config-root=<目录>` 直接指定任意 config 目录。
+
+反导回数据库（默认原位写回，写回前自动备份被覆盖的 `.db`）：
+
+```powershell
+dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel-import --region=jp --input=<目录或单个.xlsx>
+```
+
+- `--input` 可指向整个导出目录，或单个 `config_*.xlsx`（表名取自文件名）。
+- 默认写回原 config 目录；如需先落到暂存目录验证，加 `--output=<目录>`。
+- 反导前自动把将被覆盖的 `.db` 备份到 config 目录旁的 `config-backup\<时间戳>\`；用 `--no-backup` 可关闭。
+
+整目录快照备份（一次性保护原始配置）：
+
+```powershell
+dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel-backup --region=jp [--output=<目录>]
+```
+
+自检（临时目录内完成一次导出/反导字节级回环验证）：
+
+```powershell
+dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel-self-test
+```
+
+### 配置 -> C# 强类型类（仅结构）
+
+解析每张表的 JSON 结构（跨全部业务行推断字段类型），生成仅含结构的 C# DTO 类，供本地服反序列化配置使用：
+
+```powershell
+.\generate-config-cs.bat [jp|cn]   # 生成到 src\BlueOath.Server\configs
+```
+
+底层命令：
+
+```powershell
+dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-cs --region=jp --output=src\BlueOath.Server\configs [--namespace=BlueOath.Server.Configs]
+```
+
+- 每张表一个 `Config<表名>.cs`，命名空间 `BlueOath.Server.Configs`。
+- 字段名转 PascalCase，并带 `[JsonPropertyName("原字段名")]` 保证 JSON 双向映射。
+- 类型推断：整数 -> `long`，浮点/整浮混用 -> `double`，字符串 -> `string`，布尔 -> `bool`，
+  数组 -> `List<T>`（支持 `List<List<T>>` 嵌套），类型混用/结构不明 -> `object`（可空）。
+- 生成目录会先清理旧的 `Config*.cs`，再整体重写，可安全重复运行。

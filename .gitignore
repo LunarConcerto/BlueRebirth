@@ -25,6 +25,8 @@ __pycache__/
 # ---- Runtime / temp artifacts ----
 /runtime/
 /tmp-server/
+/config-excel/
+/excel/
 
 # ---- Native build outputs and backups ----
 /native/bin-x86/

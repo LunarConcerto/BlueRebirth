@@ -368,7 +368,8 @@ static class ConfigExcelTool
             {
                 new ConfigRow("1", "", "{\"name\":\"ok\",\"n\":1}"),
                 new ConfigRow("2", "idx", "{\"name\":\"测试中文\",\"arr\":[1,2,3],\"nested\":{\"a\":true}}"),
-                new ConfigRow("10", "", "{\"empty\":\"\",\"f\":1.5}")
+                new ConfigRow("10", "", "{\"empty\":\"\",\"f\":1.5}"),
+                new ConfigRow("", "", "{\"legacyEmptyId\":true}")
             }, [new MetaRow("nill", null, Encoding.ASCII.GetBytes("abcdef0123456789abcdef0123456789"))]);
 
             BuildDatabase(Path.Combine(src, "config_beta.db"),

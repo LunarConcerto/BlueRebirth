@@ -19,6 +19,9 @@ if (args.Contains("--analyze-wire", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--analyze-il2cpp", StringComparer.OrdinalIgnoreCase))
     return await Il2CppMetadataTool.RunAsync(args);
 
+if (args.Contains("--config-cs", StringComparer.OrdinalIgnoreCase))
+    return ConfigClassTool.RunAsync(args);
+
 if (args.Contains("--config-excel", StringComparer.OrdinalIgnoreCase) ||
     args.Contains("--config-excel-import", StringComparer.OrdinalIgnoreCase) ||
     args.Contains("--config-excel-backup", StringComparer.OrdinalIgnoreCase) ||
