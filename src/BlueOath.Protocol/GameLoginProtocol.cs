@@ -103,11 +103,37 @@ public static class TMessageCodec
         return output.ToArray();
     }
 
+    public static string DecodeRetUserLogin(ReadOnlySpan<byte> payload)
+    {
+        var reader = new PbReader(payload);
+        var ret = string.Empty;
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            if (field == 1 && wire == 2) ret = reader.ReadString();
+            else reader.Skip(wire);
+        }
+        return ret;
+    }
+
     public static byte[] EncodeRetGetSvrTime(int nowTime, int svrStartTime)
     {
         using var output = new MemoryStream();
         if (nowTime != 0) WriteVarintField(output, 1, unchecked((uint)nowTime));
         if (svrStartTime != 0) WriteVarintField(output, 2, unchecked((uint)svrStartTime));
+        return output.ToArray();
+    }
+
+    public static byte[] EncodeRetGetUserInfo(ulong uid, string uname, int level, int cls, uint secretaryId = 1)
+    {
+        using var output = new MemoryStream();
+        if (uid != 0) WriteVarintField(output, 1, uid);
+        if (!string.IsNullOrEmpty(uname)) WriteBytes(output, 2, Encoding.UTF8.GetBytes(uname));
+        if (cls != 0) WriteVarintField(output, 7, unchecked((uint)cls));
+        if (level != 0) WriteVarintField(output, 10, unchecked((uint)level));
+        WriteVarintField(output, 12, unchecked((uint)1000));    // Diamond
+        WriteVarintField(output, 13, unchecked((uint)100000));  // Gold
+        WriteVarintField(output, 14, unchecked((uint)100));     // Supply (vigour)
+        WriteVarintField(output, 23, secretaryId);              // SecretaryId (hero instance id)
         return output.ToArray();
     }
 
@@ -119,6 +145,12 @@ public static class TMessageCodec
     }
 
     private static void WriteVarintField(Stream output, int field, uint value)
+    {
+        WriteVarint(output, (ulong)(field << 3));
+        WriteVarint(output, value);
+    }
+
+    private static void WriteVarintField(Stream output, int field, ulong value)
     {
         WriteVarint(output, (ulong)(field << 3));
         WriteVarint(output, value);
@@ -201,7 +233,7 @@ public sealed record TArgLogin(
     string Pid = "", int Timestamp = 0, string OpenDateTime = "", string Hash = "",
     TSampleInfo? SampleInfo = null);
 
-public sealed record TRetLogin(string Ret = "", string FeignRoleId = "");
+public sealed record TRetLogin(string Ret = "", string FeignRoleId = "", int ErrCode = 0);
 
 public static class GameLoginCodec
 {
@@ -247,6 +279,10 @@ public static class GameLoginCodec
         using var output = new MemoryStream();
         ProtoWriter.String(output, 1, value.Ret);
         ProtoWriter.String(output, 2, value.FeignRoleId);
+        // ErrCode (field 3) is checked explicitly by the client (msg.ErrCode == 0), so it
+        // must be written even when its value is 0 (protobuf would otherwise omit it).
+        ProtoWriter.Varint(output, 3u << 3);
+        ProtoWriter.Varint(output, unchecked((ulong)(long)value.ErrCode));
         return output.ToArray();
     }
 
@@ -313,7 +349,7 @@ public static class GameLoginCodec
             output.Write(value);
         }
 
-        private static void Varint(Stream output, ulong value)
+        internal static void Varint(Stream output, ulong value)
         {
             while (value >= 0x80)
             {
@@ -387,6 +423,36 @@ public static class GameLoginCodec
 public sealed record GameLoginFrame(int Operation, byte[] Payload);
 
 public sealed record ClientGameMessage(byte Channel, byte Operation, long SessionId, byte State, byte[] Payload);
+
+public sealed record TUserInfo(ulong Uid = 0, string Uname = "", int Level = 0, int Class = 0);
+
+public static class UserInfoCodec
+{
+    public static byte[] Encode(TUserInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.Uid != 0) { WriteKey(output, 1, 0); WriteVarint(output, value.Uid); }
+        if (!string.IsNullOrEmpty(value.Uname)) { WriteKey(output, 2, 2); WriteStringBody(output, value.Uname); }
+        if (value.Level != 0) { WriteKey(output, 3, 0); WriteVarint(output, unchecked((ulong)(long)value.Level)); }
+        if (value.Class != 0) { WriteKey(output, 4, 0); WriteVarint(output, unchecked((ulong)(long)value.Class)); }
+        return output.ToArray();
+    }
+
+    private static void WriteKey(Stream output, int field, int wire) => WriteVarint(output, (ulong)((field << 3) | wire));
+
+    private static void WriteVarint(Stream output, ulong value)
+    {
+        while (value >= 0x80) { output.WriteByte((byte)(value | 0x80)); value >>= 7; }
+        output.WriteByte((byte)value);
+    }
+
+    private static void WriteStringBody(Stream output, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        WriteVarint(output, (ulong)bytes.Length);
+        output.Write(bytes);
+    }
+}
 
 public static class ClientGameWireCodec
 {
@@ -518,6 +584,25 @@ public static class GameLoginFrameCodec
         var payload = new byte[length - 4];
         if (!await ReadExactAsync(stream, payload, ct)) throw new EndOfStreamException("Truncated game login frame");
         return new GameLoginFrame(BinaryPrimitives.ReadInt32BigEndian(header.AsSpan(4)), payload);
+    }
+
+    public static byte[] Encode(GameLoginFrame frame)
+    {
+        if (frame.Payload.Length > 4 * 1024 * 1024) throw new InvalidDataException("Game login frame is too large");
+        var result = new byte[8 + frame.Payload.Length];
+        BinaryPrimitives.WriteInt32BigEndian(result, checked(frame.Payload.Length + 4));
+        BinaryPrimitives.WriteInt32BigEndian(result.AsSpan(4), frame.Operation);
+        frame.Payload.CopyTo(result, 8);
+        return result;
+    }
+
+    public static GameLoginFrame Decode(ReadOnlySpan<byte> packet)
+    {
+        if (packet.Length < 8) throw new InvalidDataException("Truncated game login frame");
+        var length = BinaryPrimitives.ReadInt32BigEndian(packet);
+        if (length is < 4 || packet.Length < length + 4) throw new InvalidDataException("Invalid game login frame length");
+        var operation = BinaryPrimitives.ReadInt32BigEndian(packet.Slice(4));
+        return new GameLoginFrame(operation, packet.Slice(8, length - 4).ToArray());
     }
 
     private static async Task<bool> ReadExactAsync(Stream stream, byte[] buffer, CancellationToken ct)

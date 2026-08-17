@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('redirect', 'bypass')][string]$Mode = 'redirect',
+  [ValidateSet('redirect')][string]$Mode = 'redirect',
   [switch]$SkipBuild,
   [switch]$KeepLog
 )
@@ -44,7 +44,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "TLS material generation failed: $materialLine" }
   $material = $materialLine | ConvertFrom-Json
 
-  $serverArgs = @($serverDll, '--port=0', '--region=jp', "--data=$dataRoot", "--capture=$traffic", '--kcp-game-login-port=7201')
+  $serverArgs = @($serverDll, '--port=0', '--region=jp', "--data=$dataRoot", "--capture=$traffic", '--game-login-port=7201')
   $serverStart = [System.Diagnostics.ProcessStartInfo]::new('dotnet')
   $serverStart.UseShellExecute = $false
   $serverStart.CreateNoWindow = $true
@@ -87,7 +87,6 @@ try {
     '-Region', 'jp', '-Redirect', '-Port', [string]$proxyReady.port,
     '-HttpPort', [string]$ready.port, '-AllowUntrusted'
   )
-  if ($Mode -eq 'bypass') { $injectArgs += '-BypassSdk' }
   $injectOutput = & powershell @injectArgs 2>&1 | Out-String
   if ($LASTEXITCODE -ne 0) { throw "Injector failed: $injectOutput" }
   if ($injectOutput -match 'Injected PID\s+(\d+)') {
@@ -101,7 +100,7 @@ try {
   Write-Host ('Game injected (PID ' + $gamePid + '). Mode=' + $Mode + '.') -ForegroundColor Green
   Write-Host ('  server http port : ' + $ready.port) -ForegroundColor Green
   Write-Host ('  proxy tls port   : ' + $proxyReady.port) -ForegroundColor Green
-  Write-Host ('  kcp game port    : 7201') -ForegroundColor Green
+  Write-Host ('  game login port  : 7201') -ForegroundColor Green
   Write-Host ('  payload log (live): ' + $payloadLog) -ForegroundColor Green
   Write-Host ('  run dir (server/proxy logs): ' + $runRoot) -ForegroundColor Green
   Write-Host ''

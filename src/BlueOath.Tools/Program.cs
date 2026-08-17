@@ -441,7 +441,7 @@ static class TrafficClassifier
         var firstLineEnd = text.IndexOf("\r\n", StringComparison.Ordinal);
         var firstLine = firstLineEnd >= 0 ? text[..firstLineEnd] : text;
         var host = text.Split("\r\n", StringSplitOptions.None)
-            .FirstOrDefault(x => x.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))?[5..].Trim();
+            .FirstOrDefault(x => x.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))?[5..]?.Trim();
         return new("http", firstLine, host);
     }
 

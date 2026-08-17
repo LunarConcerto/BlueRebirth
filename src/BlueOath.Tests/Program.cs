@@ -243,17 +243,36 @@ static async Task GameLoginIntegrationTest()
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var client = new TcpClient();
         await client.ConnectAsync("127.0.0.1", port, timeout.Token);
-        await client.GetStream().WriteAsync(ClientGameWireCodec.EncodeClientRequest(GameOperationCodes.Login,
-            GameLoginCodec.Encode(new TArgLogin("protobuf-player", 1, "open", "hash"))), timeout.Token);
-        var responseBuffer = new byte[4096];
-        var responseLength = await client.GetStream().ReadAsync(responseBuffer, timeout.Token);
-        if (responseLength == 0) throw new InvalidDataException("login response was empty");
-        var responseFrame = ClientGameWireCodec.DecodeServerResponse(responseBuffer.AsSpan(0, responseLength));
-        Assert(responseFrame.Operation == GameOperationCodes.Login, "login response operation mismatch");
-        var response = GameLoginCodec.DecodeLoginResponse(responseFrame.Payload);
-        Assert(response.Ret == "0" && response.FeignRoleId == "protobuf-player", "login response mismatch");
-        var repo = new SqliteGameRepository(data);
-        Assert(await repo.LoadAsync("protobuf-player", timeout.Token) is not null, "login did not create profile");
+        var stream = client.GetStream();
+
+        async Task<TResponse> RoundTrip(string method, byte[]? args)
+        {
+            var request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+            Assert(frame is not null, $"empty response for {method}");
+            return TMessageCodec.DecodeResponse(frame!.Value.Payload);
+        }
+
+        var login = await RoundTrip("player.Login",
+            GameLoginCodec.Encode(new TArgLogin("protobuf-player", 1, "open", "hash")));
+        Assert(login.Method == "player.Login", "login response method mismatch");
+        Assert(GameLoginCodec.DecodeLoginResponse(login.Ret!).Ret == "ok", "login response ret mismatch");
+
+        var list = await RoundTrip("player.GetUserList", null);
+        Assert(list.Method == "player.GetUserList", "get user list response method mismatch");
+
+        var create = await RoundTrip("player.CreateUser",
+            new byte[] { 0x0A, 0x05, (byte)'t', (byte)'e', (byte)'s', (byte)'t', (byte)'1', 0x10, 0x01 });
+        Assert(create.Method == "player.CreateUser", "create user response method mismatch");
+
+        var userLogin = await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
+        Assert(userLogin.Method == "user.UserLogin", "user login response method mismatch");
+        Assert(TMessageCodec.DecodeRetUserLogin(userLogin.Ret!) == "ok", "user login response ret mismatch");
+
+        var userInfo = await RoundTrip("user.GetUserInfo", null);
+        Assert(userInfo.Method == "user.GetUserInfo", "get user info response method mismatch");
+        Assert(userInfo.Ret is { Length: > 0 }, "get user info response was empty");
     }
     finally
     {

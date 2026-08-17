@@ -16,6 +16,18 @@ namespace BlueOath.Server;
 internal static class Program
 {
     private static int _kcpGameLoginPort;
+    private static int _gameLoginPort;
+    private static readonly object GameLoginLogLock = new();
+    private static string? _gameLoginLogPath;
+
+    private static void LogGameLogin(string message)
+    {
+        lock (GameLoginLogLock)
+        {
+            _gameLoginLogPath ??= Path.Combine(AppContext.BaseDirectory, "game-login.log");
+            File.AppendAllText(_gameLoginLogPath, message + Environment.NewLine);
+        }
+    }
 
     public static async Task Main(string[] args)
     {
@@ -63,6 +75,7 @@ internal static class Program
             ? (int?)null
             : ((IPEndPoint)kcpGameLoginListener.Client.LocalEndPoint!).Port;
         _kcpGameLoginPort = actualKcpGameLoginPort ?? 0;
+        _gameLoginPort = actualGameLoginPort ?? 0;
         Console.WriteLine(JsonSerializer.Serialize(new
         {
             ready = true,
@@ -133,36 +146,53 @@ internal static class Program
         using (client)
         {
             var remote = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
-            Console.Error.WriteLine($"game-login[{connectionId}] accepted remote={remote}");
+            LogGameLogin($"game-login[{connectionId}] accepted remote={remote}");
             try
             {
                 var stream = client.GetStream();
-                var packet = await ReadGamePacketAsync(stream, ct);
-                Console.Error.WriteLine($"game-login[{connectionId}] received bytes={packet.Length} " +
-                    $"preview={Convert.ToHexString(packet.AsSpan(0, Math.Min(packet.Length, 16)))}");
-                if (packet.Length == 0) return;
-                var frame = ClientGameWireCodec.DecodeClientRequest(packet);
-                Console.Error.WriteLine($"game-login[{connectionId}] decoded channel={frame.Channel} " +
-                    $"operation={frame.Operation} session={frame.SessionId} state={frame.State}");
-                if (frame.Channel != ClientGameWireCodec.DefaultChannel)
-                    throw new InvalidDataException(
-                        $"Unsupported game channel/operation {frame.Channel}/{frame.Operation}");
-                var responsePacket = frame.Operation switch
+                while (!ct.IsCancellationRequested)
                 {
-                    GameOperationCodes.Login => await HandleLoginRequestAsync(frame.Payload, repo, ct),
-                    GameOperationCodes.C2S => HandleC2SRequest(frame.Payload),
-                    _ => throw new InvalidDataException($"Unsupported game operation {frame.Operation}")
-                };
-                await stream.WriteAsync(responsePacket, ct);
-                await stream.FlushAsync(ct);
-                Console.Error.WriteLine($"game-login[{connectionId}] response bytes={responsePacket.Length}");
+                    var frame = await NetSocketFrameCodec.ReadAsync(stream, ct);
+                    if (frame is null) break;
+                    var (type, payload) = frame.Value;
+                    LogGameLogin($"game-login[{connectionId}] netsocket type={type} len={payload.Length} " +
+                        $"preview={Convert.ToHexString(payload.AsSpan(0, Math.Min(payload.Length, 16)))}");
+                    if (type == NetSocketFrameCodec.TypePing)
+                    {
+                        await NetSocketFrameCodec.WriteAsync(stream, ReadOnlyMemory<byte>.Empty,
+                            NetSocketFrameCodec.TypePing, ct);
+                        continue;
+                    }
+                    if (payload.Length == 0) continue;
+                    var (_, responsePayload) = BuildC2SResponse(payload);
+                    if (responsePayload.Length == 0) continue;
+                    await NetSocketFrameCodec.WriteAsync(stream, responsePayload, NetSocketFrameCodec.TypeData, ct);
+                    LogGameLogin($"game-login[{connectionId}] response bytes={responsePayload.Length} " +
+                        $"hex={Convert.ToHexString(responsePayload)}");
+                    if (TMessageCodec.DecodeRequest(payload).Method == "user.GetUserInfo")
+                    {
+                        var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+                        var push = BuildUpdateUserInfoPush(now);
+                        await NetSocketFrameCodec.WriteAsync(stream, push, NetSocketFrameCodec.TypeData, ct);
+                        LogGameLogin($"game-login[{connectionId}] push user.UpdateUserInfo bytes={push.Length} " +
+                            $"hex={Convert.ToHexString(push)}");
+
+                        foreach (var extra in BuildSyncPushes(now))
+                        {
+                            await NetSocketFrameCodec.WriteAsync(stream, extra, NetSocketFrameCodec.TypeData, ct);
+                            LogGameLogin($"game-login[{connectionId}] push sync bytes={extra.Length} " +
+                                $"hex={Convert.ToHexString(extra)}");
+                        }
+                    }
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"game-login[{connectionId}] failed: {ex}");
+                LogGameLogin($"game-login[{connectionId}] failed: {ex}");
             }
         }
     }
@@ -290,44 +320,88 @@ internal static class Program
             $"session={frame.SessionId} state={frame.State}");
         if (frame.Channel != ClientGameWireCodec.DefaultChannel)
             return [];
-        return frame.Operation switch
+        var (operation, payload) = frame.Operation switch
         {
-            GameOperationCodes.Login => await HandleLoginRequestAsync(frame.Payload, repo, ct),
-            GameOperationCodes.C2S => HandleC2SRequest(frame.Payload),
-            _ => []
+            GameOperationCodes.Login => await BuildLoginPayloadAsync(frame.Payload, repo, ct),
+            GameOperationCodes.C2S => BuildC2SResponse(frame.Payload),
+            _ => (0, Array.Empty<byte>())
         };
+        return operation == 0 ? [] : ClientGameWireCodec.EncodeServerResponse((byte)operation, payload);
     }
 
-    private static async Task<byte[]> HandleLoginRequestAsync(byte[] payload,
+    private static async Task<(int Operation, byte[] Payload)> BuildLoginPayloadAsync(byte[] payload,
         SqliteGameRepository repo, CancellationToken ct)
     {
         var request = GameLoginCodec.DecodeLogin(payload);
         var profileId = string.IsNullOrWhiteSpace(request.Pid) ? "local-player" : request.Pid;
-        Console.Error.WriteLine($"kcp-game-login login pid={profileId}");
+        Console.Error.WriteLine($"game-login login pid={profileId}");
         if (await repo.LoadAsync(profileId, ct) is null)
             await repo.CreateAsync(profileId, profileId, ct);
         var response = new TRetLogin("0", profileId);
-        return ClientGameWireCodec.EncodeServerResponse(GameOperationCodes.Login,
-            GameLoginCodec.Encode(response));
+        return (GameOperationCodes.Login, GameLoginCodec.Encode(response));
     }
 
-    private static byte[] HandleC2SRequest(ReadOnlySpan<byte> payload)
+    private static (int Operation, byte[] Payload) BuildC2SResponse(ReadOnlySpan<byte> payload)
     {
         var request = TMessageCodec.DecodeRequest(payload);
-        Console.Error.WriteLine($"kcp-game-login C2S method={request.Method} " +
+        LogGameLogin($"game-login C2S method={request.Method} " +
             $"callback={request.CallbackHandler} argsLen={request.Args?.Length ?? 0}");
         var now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         byte[] ret = request.Method switch
         {
-            "UserLogin" => TMessageCodec.EncodeRetUserLogin("0", "", 0),
+            "player.Login" => GameLoginCodec.Encode(new TRetLogin("ok", "1")),
+            "player.GetUserList" => [],
+            "player.CreateUser" => UserInfoCodec.Encode(new TUserInfo(1, "test1", 1, 1)),
+            "user.UserLogin" => TMessageCodec.EncodeRetUserLogin("ok", "", 0),
+            "user.GetUserInfo" => TMessageCodec.EncodeRetGetUserInfo(1, "test1", 1, 1),
             "GetSvrTime" => TMessageCodec.EncodeRetGetSvrTime(now, 0),
             _ => []
         };
         var response = new TResponse(Method: request.Method, Ret: ret,
             CallbackHandler: request.CallbackHandler, Time: checked((uint)now),
             Token: request.Token, Seq: 0, IsResponse: 1);
-        return ClientGameWireCodec.EncodeServerResponse(GameOperationCodes.S2C,
-            TMessageCodec.EncodeResponse(response));
+        return (GameOperationCodes.S2C, TMessageCodec.EncodeResponse(response));
+    }
+
+    private static byte[] BuildUpdateUserInfoPush(uint now)
+    {
+        // Server push (not a response) carrying the full user info, so the client's
+        // UserService._UpdateUserInfo sets Data.userData (used by HomeEnvManager._CheckLevel
+        // during home-scene selection). CallbackHandler/IsResponse stay 0 = push.
+        var push = new TResponse(Method: "user.UpdateUserInfo",
+            Ret: TMessageCodec.EncodeRetGetUserInfo(1, "test1", 1, 1), Time: now);
+        return TMessageCodec.EncodeResponse(push);
+    }
+
+    /// <summary>
+    /// Player-scope data the client's home stage reads before it has a chance to request it
+    /// (the build/bathroom queues are otherwise requested only after the HomePage opens, but
+    /// PushAllNotice iterates them during MainStage.StageEnter and errors on nil). Values are
+    /// minimal/empty now; each record is the extension point for real data later.
+    /// </summary>
+    private static IEnumerable<byte[]> BuildSyncPushes(uint now)
+    {
+        yield return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "build.BuildsInfo",
+            Ret: PlayerDataCodec.Encode(new BuildsInfoRet(
+                BuildingList: [new BuildFormula(EndTime: 0)])),
+            Time: now));
+
+        yield return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "bathroom.BathroomInfo",
+            Ret: PlayerDataCodec.Encode(new BathroomInfo(
+                HeroList: [new BathHeroInfo(HeroId: 0, StartTime: 0)])),
+            Time: now));
+
+        // The secretary hero (kanban ship girl). HeroId must match userData.SecretaryId.
+        // TemplateId=10210511 is config_parameter[17] ("main_ship_girl", default secretary);
+        // Fashioning=1021051 is its default fashion (limit_type=0) -> ship_show "u_cl_oakland".
+        yield return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "hero.UpdateHeroBagData",
+            Ret: PlayerDataCodec.Encode(new HeroBag(
+                HeroInfo: [new HeroGrid(HeroId: 1, TemplateId: 10210511, Lvl: 1, Fashioning: 1021051)],
+                HeroBagSize: 100)),
+            Time: now));
     }
 
     private static async Task HandleAsync(TcpClient client, int connectionId, GameService game,
@@ -474,7 +548,7 @@ internal static class Program
 
         var data = payload.ToArray();
         var analysis = AnalyzePayload(data);
-        Console.Error.WriteLine($"capture[{connectionId}] kind={analysis.Kind} detail={analysis.Detail}");
+        Console.Error.WriteLine($"capture[{connectionId}] kind={analysis.Kind} detail={analysis.Detail} host={analysis.ServerName}");
 
         if (captureRoot is not null)
         {
@@ -545,20 +619,37 @@ internal static class Program
             return new(200, "OK", "text/plain; charset=utf-8", "203.0.113.1");
 
         if (requestLine.Contains("/phone/switch/getstate", StringComparison.OrdinalIgnoreCase))
+            // switch (event 27) dispatches errornu:"-1" when its JSON parse fails. Live sample
+            // (catalog id=27) shows errornu as a STRING, while DNS_sw.state is asInt()'d as a
+            // number. Match that: errornu as string "0", state as number 1.
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":0,\"errordesc\":\"\",\"DNS_sw\":{\"state\":1}}");
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"DNS_sw\":{\"state\":1}}");
 
         if (requestLine.Contains("/sdk/gettime", StringComparison.OrdinalIgnoreCase))
             return new(200, "OK", "application/json; charset=utf-8",
                 "{\"time\":" + DateTimeOffset.UtcNow.ToUnixTimeSeconds() + "}");
 
         if (requestLine.Contains("/phone/applereview", StringComparison.OrdinalIgnoreCase))
-            return new(200, "OK", "application/json; charset=utf-8", "{\"errornu\":0,\"applereview\":0}");
+            // Live response (catalog.json id=19) uses errornu as a STRING "0" and
+            // applereview as a NUMBER. applereview=1 makes BabelTimeSDKManager.AppleReview
+            // == IS_REVIEW, which routes HotPatchFacade into OnlyInitHotPatchManager
+            // (local assetmap init, no getversion) and makes Lua LoginLogic:CheckUpdate
+            // skip the update check entirely -> straight to login. This avoids the
+            // getversion hot-patch download entirely for offline play.
+            return new(200, "OK", "application/json; charset=utf-8", "{\"errornu\":\"0\",\"applereview\":1}");
 
         if (requestLine.Contains("/phone/getversion/", StringComparison.OrdinalIgnoreCase))
+            // "script" branch deserializes into SDK.ScriptInfo (not PackageUpdateInfo):
+            //   errornu, script=VersionInfo[], static_url, spare_static_url.
+            // VersionInfo: pl/os/groupbase/gn/path/src_version/tar_version/updateType/file/
+            //   total_size/sizes/forceExit/forceUpdate. OnCallBack uses tar_version as the
+            //   server version; == local assetmap version "1.4.0" => NO_NEED_DOWNLOAD => FinishCheck.
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":0,\"errordesc\":\"\",\"version\":\"1.4.0\"," +
-                "\"packageVersion\":\"1.4.0\",\"scriptVersion\":\"1.4.0\",\"patchVersion\":\"1.4.0\"}");
+                "{\"errornu\":\"0\",\"script\":[{\"pl\":\"google_windows\",\"os\":\"android\"," +
+                "\"groupbase\":\"\",\"gn\":\"jpshipgirl\",\"path\":\"\"," +
+                "\"src_version\":\"1.4.0\",\"tar_version\":\"1.4.0\",\"updateType\":\"0\"," +
+                "\"file\":\"\",\"total_size\":0,\"sizes\":[],\"forceExit\":0,\"forceUpdate\":0}]," +
+                "\"static_url\":\"\",\"spare_static_url\":\"\"}");
 
         if (requestLine.Contains("/phone/getPlData/getPlData", StringComparison.OrdinalIgnoreCase))
             return new(200, "OK", "application/json; charset=utf-8",
@@ -577,43 +668,84 @@ internal static class Program
 
         if (requestLine.Contains("/gethash", StringComparison.OrdinalIgnoreCase))
         {
-            var kcpPort = _kcpGameLoginPort > 0 ? _kcpGameLoginPort : 7201;
+            var gamePort = _gameLoginPort > 0 ? _gameLoginPort : 7201;
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":0,\"errordesc\":\"\",\"pid\":\"local-player\",\"serverID\":\"game1\"," +
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"pid\":\"local-player\",\"serverID\":\"game1\"," +
                 "\"feignRoleId\":\"1\",\"qid\":\"1\",\"uuid\":\"00000000-0000-4000-8000-000000000001\"," +
-                "\"offset\":\"0\",\"host\":\"127.0.0.1\",\"port\":" + kcpPort + "}");
+                "\"offset\":\"0\",\"host\":\"127.0.0.1\",\"port\":" + gamePort + "}");
         }
 
         if (requestLine.Contains("/phone/serverlist/", StringComparison.OrdinalIgnoreCase))
         {
-            var kcpPort = _kcpGameLoginPort > 0 ? _kcpGameLoginPort : 7201;
+            var gamePort = _gameLoginPort > 0 ? _gameLoginPort : 7201;
             // The SDK (new_sdk.dll getServerList) does not parse the response body; it
             // stores the raw JSON and the Lua side (platformmanager.getServiceListAndAllServiceNotic)
-            // reads result.root.notice + result.root.item[]. Entry fields confirmed from the
-            // CN decompiled source (lua_tools/BlueoathLua/util/platformmanager.lua) and the JP
-            // bytecode string constants: name/serverIndex/new/groupid/openDateTime/status/hot/host/port/recommend_weight.
+            // reads result.root.notice + result.root.item[]. The Lua compares result.errornu
+            // against the STRING "0", so errornu must be a quoted "0" here (unlike the SDK's
+            // own getPlData which asInt()'s it as a number).
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":0,\"errordesc\":\"\",\"root\":{\"notice\":{\"open\":0,\"desc\":\"\"},\"item\":[" +
-                "{\"name\":\"local\",\"serverIndex\":1,\"new\":0,\"groupid\":\"1\",\"openDateTime\":\"20171109140000\"," +
-                "\"status\":1,\"hot\":0,\"host\":\"127.0.0.1\",\"port\":" + kcpPort + ",\"recommend_weight\":1}" +
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"root\":{\"notice\":{\"open\":0,\"desc\":\"\"},\"item\":[" +
+                "{\"name\":\"BlueoathRebirth\",\"serverIndex\":1,\"new\":0,\"groupid\":\"1\",\"openDateTime\":\"20171109140000\"," +
+                "\"status\":1,\"hot\":0,\"host\":\"127.0.0.1\",\"port\":" + gamePort + ",\"recommend_weight\":1}" +
                 "]}}");
         }
 
         if (requestLine.Contains("/phone/loginrole/", StringComparison.OrdinalIgnoreCase))
         {
-            var kcpPort = _kcpGameLoginPort > 0 ? _kcpGameLoginPort : 7201;
+            var gamePort = _gameLoginPort > 0 ? _gameLoginPort : 7201;
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":0,\"errordesc\":\"\",\"root\":{\"role\":[" +
-                "{\"name\":\"local\",\"serverIndex\":1,\"groupid\":\"1\",\"serverId\":\"1\"," +
-                "\"host\":\"127.0.0.1\",\"port\":" + kcpPort + ",\"status\":1,\"openDateTime\":\"20171109140000\"}" +
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"root\":{\"role\":[" +
+                "{\"name\":\"BlueoathRebirth\",\"serverIndex\":1,\"groupid\":\"1\",\"serverId\":\"1\"," +
+                "\"host\":\"127.0.0.1\",\"port\":" + gamePort + ",\"status\":1,\"openDateTime\":\"20171109140000\"}" +
                 "]}}");
         }
+
+        if (requestLine.Contains("/phone/platform/getPlatformUserInfo", StringComparison.OrdinalIgnoreCase))
+            // Real-name / fast-user check (event 1002). LoginPage._CheckRealName treats
+            // isFastUser == 1 or idcardStatus == 1 as "no real-name gate" and proceeds to
+            // OnSDKEnterGame -> LoginLogic.CheckUpdate -> getHash -> KCP login.
+            return new(200, "OK", "application/json; charset=utf-8",
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"data\":{" +
+                "\"isFastUser\":1,\"idcardStatus\":1,\"isAdult\":1,\"OnNoRealnameLogin\":0}}");
+
+        if (requestLine.Contains("/phone/platform/getGameMaintainNotice", StringComparison.OrdinalIgnoreCase))
+            // Game-maintenance / announcement notice (event 1006). AnnouncementManager.
+            // _SuperNoticeCallBack reads result.data (an array); an empty array is a no-op.
+            // The Lua getResult path requires errornu == "0" (string).
+            return new(200, "OK", "application/json; charset=utf-8",
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"data\":[]}");
+
+        if (requestLine.Contains("/phone/innerbrowse", StringComparison.OrdinalIgnoreCase))
+            // Browse-active info (event 22). PlatformManager.getBrowseActive reads
+            // result.noticear (an array); an empty array yields no active banner.
+            return new(200, "OK", "application/json; charset=utf-8",
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"noticear\":[]}");
+
+        if (requestLine.Contains("/phone/getuserextra/", StringComparison.OrdinalIgnoreCase))
+            // User extra function state (event 1008, after LoginOk).
+            // PlatformManager.CheckUserExtraFunctionState reads result.data.userInfo.readQuestion,
+            // result.data.payBack.returnGold/returnMonthCard and result.data.oldUser.returnUserReceiveGift.
+            return new(200, "OK", "application/json; charset=utf-8",
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"data\":{\"userInfo\":{\"readQuestion\":0}," +
+                "\"payBack\":{\"returnGold\":0,\"returnMonthCard\":0}," +
+                "\"oldUser\":{\"returnUserReceiveGift\":0}}}");
 
         if (requestLine.Contains("/c.gif", StringComparison.OrdinalIgnoreCase))
             return new(200, "OK", "text/plain; charset=utf-8", "ok");
 
+        // CDN hosts (static1/static3.zuiyouxi.com) serve the download speed test during
+        // SDK init (event 31) and, later, the hot-patch version manifest. Any path we do
+        // not explicitly understand yet still gets a 200 so the speed test succeeds and
+        // the request line + host above are logged for further analysis.
+        if (host is not null && IsCdnHost(host))
+            return new(200, "OK", "text/plain; charset=utf-8", "ok");
+
         return new(501, "Not Implemented", "text/plain; charset=utf-8", "");
     }
+
+    private static bool IsCdnHost(string host) =>
+        host.StartsWith("static", StringComparison.OrdinalIgnoreCase) &&
+        host.EndsWith(".zuiyouxi.com", StringComparison.OrdinalIgnoreCase);
 
     private sealed record BootstrapHttpResponse(
         int StatusCode, string ReasonPhrase, string ContentType, string Body);
@@ -645,7 +777,7 @@ internal static class Program
         var firstLineEnd = text.IndexOf("\r\n", StringComparison.Ordinal);
         var firstLine = firstLineEnd >= 0 ? text[..firstLineEnd] : text;
         var host = text.Split("\r\n", StringSplitOptions.None)
-            .FirstOrDefault(x => x.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))?[5..].Trim();
+            .FirstOrDefault(x => x.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))?[5..]?.Trim();
         return new("http", firstLine, host);
     }
 
