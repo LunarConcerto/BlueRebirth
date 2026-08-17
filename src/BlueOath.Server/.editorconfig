@@ -1,0 +1,66 @@
+# BlueOath.Server 代码规范（供 IDE 自动套用，详见 docs/本地服代码规范.md）
+# 说明：本文件只影响 IDE/编辑器与 Roslyn 源码分析；未开启 EnforceCodeStyleInBuild，
+# 因此不会影响 `dotnet build` 与测试（构建约束仍由 Directory.Build.props 的
+# TreatWarningsAsErrors 统一兜底）。
+root = true
+
+# ---------------- 通用 ----------------
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+tab_width = 4
+trim_trailing_whitespace = true
+
+[*.{md,csproj,sln,props}]
+indent_style = space
+indent_size = 4
+
+# ---------------- C# ----------------
+[*.cs]
+
+# 命名风格定义
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+dotnet_naming_style.camel_case.capitalization = camel_case
+dotnet_naming_style.private_field.capitalization = camel_case
+dotnet_naming_style.private_field.required_prefix = _
+
+# 私有字段：_camelCase
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private, internal, protected_internal
+dotnet_naming_rule.private_fields_should_be_camel_case.severity = warning
+dotnet_naming_rule.private_fields_should_be_camel_case.symbols = private_fields
+dotnet_naming_rule.private_fields_should_be_camel_case.style = private_field
+
+# 类型：PascalCase
+dotnet_naming_symbols.types.applicable_kinds = class, struct, interface, enum, delegate, record
+dotnet_naming_rule.types_should_be_pascal_case.severity = warning
+dotnet_naming_rule.types_should_be_pascal_case.symbols = types
+dotnet_naming_rule.types_should_be_pascal_case.style = pascal_case
+
+# 方法 / 属性：PascalCase
+dotnet_naming_symbols.members.applicable_kinds = method, property, event
+dotnet_naming_rule.members_should_be_pascal_case.severity = warning
+dotnet_naming_rule.members_should_be_pascal_case.symbols = members
+dotnet_naming_rule.members_should_be_pascal_case.style = pascal_case
+
+# 参数 / 局部变量：camelCase
+dotnet_naming_symbols.parameters.applicable_kinds = parameter
+dotnet_naming_rule.parameters_should_be_camel_case.severity = warning
+dotnet_naming_rule.parameters_should_be_camel_case.symbols = parameters
+dotnet_naming_rule.parameters_should_be_camel_case.style = camel_case
+
+dotnet_naming_symbols.locals.applicable_kinds = local
+dotnet_naming_rule.locals_should_be_camel_case.severity = warning
+dotnet_naming_rule.locals_should_be_camel_case.symbols = locals
+dotnet_naming_rule.locals_should_be_camel_case.style = camel_case
+
+# 格式偏好：类型内成员顺序与修饰符
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_preferred_modifier_order = public, private, protected, internal, static, extern, new, virtual, abstract, sealed, override, readonly, unsafe, required, volatile, async : warning
+csharp_style_namespace_declarations = file_scoped : suggestion
