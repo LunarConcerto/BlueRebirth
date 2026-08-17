@@ -2,6 +2,7 @@ using System.Text.Json;
 using BlueOath.Core;
 using BlueOath.Protocol;
 using BlueOath.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace BlueOath.Server.Sessions;
 
@@ -9,10 +10,11 @@ namespace BlueOath.Server.Sessions;
 /// 本地 JSON 帧游戏协议的每个连接处理器（<see cref="LocalGameClient"/> 与启动器使用的
 /// 临时长度前缀 wire 格式）。
 /// </summary>
-internal sealed class JsonGameSession(GameService game, SqliteGameRepository repo)
+internal sealed class JsonGameSession(GameService game, SqliteGameRepository repo, ILogger<JsonGameSession> logger)
 {
     private readonly GameService _game = game;
     private readonly SqliteGameRepository _repo = repo;
+    private readonly ILogger<JsonGameSession> _logger = logger;
 
     /// <summary>在单个连接上循环读取并分发 JSON 帧请求。</summary>
     public async Task RunAsync(Stream stream, CancellationToken ct)
