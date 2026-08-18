@@ -1,0 +1,24 @@
+local protobuf = require("net.protobuf.protobuf")
+local supply_pb = {}
+_ENV = supply_pb
+TSUPPLYSWITCHARG = protobuf.Descriptor()
+local TSUPPLYSWITCHARG_HEROIDS_FIELD = protobuf.FieldDescriptor()
+TSUPPLYSWITCHARG_HEROIDS_FIELD.name = "HeroIds"
+TSUPPLYSWITCHARG_HEROIDS_FIELD.full_name = ".pb.TSupplySwitchArg.HeroIds"
+TSUPPLYSWITCHARG_HEROIDS_FIELD.number = 1
+TSUPPLYSWITCHARG_HEROIDS_FIELD.index = 0
+TSUPPLYSWITCHARG_HEROIDS_FIELD.label = 3
+TSUPPLYSWITCHARG_HEROIDS_FIELD.has_default_value = false
+TSUPPLYSWITCHARG_HEROIDS_FIELD.default_value = {}
+TSUPPLYSWITCHARG_HEROIDS_FIELD.type = 13
+TSUPPLYSWITCHARG_HEROIDS_FIELD.cpp_type = 3
+TSUPPLYSWITCHARG.file_name = supply_pb
+TSUPPLYSWITCHARG.name = "TSupplySwitchArg"
+TSUPPLYSWITCHARG.full_name = ".pb.TSupplySwitchArg"
+TSUPPLYSWITCHARG.nested_types = {}
+TSUPPLYSWITCHARG.enum_types = {}
+TSUPPLYSWITCHARG.fields = {TSUPPLYSWITCHARG_HEROIDS_FIELD}
+TSUPPLYSWITCHARG.is_extendable = false
+TSUPPLYSWITCHARG.extensions = {}
+TSupplySwitchArg = protobuf.Message(TSUPPLYSWITCHARG)
+return _ENV

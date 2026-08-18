@@ -1,79 +1,60 @@
 # Lua 代码资料库（苍蓝誓约 JP 1.4.0）
 
-> 由 AssetBundle 提取 + 字符串级静态分析生成。Lua 源码已编译为字节码，本资料库
-> 记录可提取的结构信息（目录、关键文件、字符串常量、登录流程、服务器列表字段）。
+> **已全量反编译日服 Lua**（2026-08）：1526 个 `.lua` 文件反编译成功，
+> 落地在 `lua_tools/BlueoathLuaJP/`。日服字节码本质是**标准 Lua 5.3.5**
+> （4 字节指令、标准 LUAC_DATA），只有 header 两处小改（format=`01`、
+> sizeof Instruction 字段写 `8` 作为「红鲱鱼」）。此前文档里「可变长指令 /
+> CRLF 转义 / 紧凑编码」等结论，是 `tools/extract-lua.py` 用文本模式写文件
+> （`open(...,"w",encoding="utf-8",errors="ignore")`）把二进制字节码当文本写、
+> 丢掉了 `0x93` 等非 UTF-8 字节、并把 LF 转成 CRLF 造成的**提取损坏假象**，已证伪。
 >
-> **重要：已有国服（CN）完整反编译 Lua 源码**，位于
-> `lua_tools/BlueoathLua/`（1397 个可读 `.lua` 文件，覆盖 `logic/`、`UI/`、
-> `util/`、`net/`、`genluaapi/` 等）。国服与日服是同一款游戏，核心游戏逻辑（登录、
-> 网络、选服、数据类）基本一致，可直接对照参考；日服特有差异（SDK `new_sdk.dll`、
-> 服务器列表 JSON 字段、服务器地址）需结合字节码字符串常量交叉确认。
+> **重要**：国服（CN）完整反编译源码在 `lua_tools/BlueoathLua/`（1397 个 `.lua`）。
+> 日服与国服是同一款游戏、逻辑基本一致；日服有 129 个国服没有的文件（含 13 个空
+> stub）及少量差异（SDK `new_sdk.dll`、服务器列表字段等），现已能直接从日服字节码
+> 反编译对照。
 
-## 提取方式与现状
+## 字节码格式（正确结论，2026-08 定稿）
 
-- Lua 逻辑打包在 Unity AssetBundle `StreamingAssets/bundles/share/lua/*` 里，
-  为 **TextAsset**（`assets/generatedfiles/lua/32bit/...`）。
-- 共提取 **1526 个 .lua 文件**（约 11.6 MB），落地在 `runtime/lua-extract/`。
-- Lua 是**编译后的字节码**（Lua 5.3 变体，自定义 header：format=`0x01`、
-  Instruction 尺寸 `0x08`，非官方 format），**非明文**。字符串常量（类名/方法名/
-  局部变量名/JSON 字段名）可直接提取；完整逻辑需自写反编译器（Instruction 为
-  8 字节的变体）。
+日服字节码 = **标准 Lua 5.3.5**（x86 版，`xlua.dll` 内嵌 VM，版本串 `Lua 5.3.5`），
+仅 header 两处小改：
 
-## 字节码格式（已确认部分）
+| 偏移 | 内容 | 值 | 说明 |
+| --- | --- | --- | --- |
+| 0-3 | 签名 | `1B 4C 75 61` | 标准 |
+| 4 | 版本 | `53` | Lua 5.3 |
+| 5 | format | `01` | 官方为 `00`，fork 改成 `01` |
+| 6-11 | LUAC_DATA | `19 93 0D 0A 1A 0A` | **标准 6 字节** |
+| 12 | sizeof(int) | `04` | 标准 |
+| 13 | sizeof(size_t) | `04` | x86 |
+| 14 | sizeof(Instruction) | `08` | **红鲱鱼**（实际指令 4 字节，见下） |
+| 15 | sizeof(lua_Integer) | `08` | 标准 |
+| — | sizeof(lua_Number) | 省略 | 隐含 8（比官方少一个字段） |
+| 16-23 | LUAC_INT | `78 56 00...` = `0x5678` | 标准 |
+| 24-31 | LUAC_NUM | 370.5 | 标准 |
 
-header（33 字节）：
+header 共 **32 字节**（官方 33，因为少了 sizeof(lua_Number)）。
 
-| 偏移 | 内容 | 值 |
-| --- | --- | --- |
-| 0-3 | 签名 | `1B 4C 75 61`（`\x1bLua`） |
-| 4 | 版本 | `53`（Lua 5.3） |
-| 5 | format | `01`（非官方，官方为 `00`） |
-| 6-12 | LUAC_DATA | `19 0D 0D 0A 1A 0D 0A`（7 字节，含 CRLF） |
-| 13-16 | sizeof | `04 04 08 08`（int=4, size_t=4, Instruction=8, lua_Integer=8；lua_Number 省略，隐含 8） |
-| 17-24 | LUAC_INT | `78 56 00...` = `0x5678` |
-| 25-32 | LUAC_NUM | 370.5（double） |
+- **指令 = 官方 4 字节**（`opcode(6)|A(8)<<6|C(9)<<14|B(9)<<23`）。header 里
+  sizeof(Instruction)=`08` 只是骗过按标准 header 校验的工具；反汇编 `xlua.dll` 的
+  `LoadCode`（`LoadFunction` 内）可见代码段按 `sizecode*4` 字节读入，即 4 字节指令。
+- 反汇编 `xlua.dll` 的 `checkHeader` 确认：format 校验 `1`、checksize 4 个字段
+  （`4,4,8,8`，无 lua_Number）、LUAC_INT `0x5678`、LUAC_NUM `370.5`。
 
-字符串（源码名用 flag+string，常量用 type+string）：
+### 反编译方法（可复现）
 
-- 源码：`flag(1) [0=无/1=有] + len(1=strlen+1) + data(strlen)`，无 NUL。
-- 常量字符串：`type(1) + len(1=strlen+1) + data(strlen)`。
+1. **正确解包**：`tools/extract-normalize.py` 用 UnityPy 读 TextAsset，用
+   `ta.m_Script.encode('utf-8','surrogateescape')` 还原原始字节（`m_Script` 里的
+   非法 UTF-8 字节被 Python 存成了 surrogate，如 `0x93`→`\udc93`），**二进制写盘**。
+2. **归一化 header**：把 `format` 字节 `01`→`00`、`sizeof(Instruction)` `08`→`04`、
+   在 offset 16 插入 `sizeof(lua_Number)=08`，得到标准 33 字节 header。
+   输出到 `runtime/lua-normalized/`。
+3. **反编译**：`tools/decompile-all.py` 用 unluac（支持 Lua 5.3）逐个反编译，
+   输出到 `lua_tools/BlueoathLuaJP/`。
 
-常量类型（1 字节 tag）：`0`=nil、`1`=bool、`3`=num(float, 8B)、`0x13`=int(8B)、
-`4`=短字符串、`0x14`=长字符串。
-
-函数原型（顶层 chunk）字段顺序：
-
-```
-source(flag+string)  linedefined(i32 LE)  lastlinedefined(i32 LE)
-numparams(u8)  is_vararg(u8)  maxstack(u8)  sizecode(i32 LE)
-code(sizecode × Instruction)  sizek(i32)  constants  sizep(i32)  protos
-sizeupvalues(i32)  upvalue描述  debug(sizelineinfo, lineinfo, sizelocvars,
-locals, sizeupvalues, upvalue名)
-```
-
-- debug 段已确认：`sizelineinfo(i32) + lineinfo[i32] + sizelocvars(i32) + locals
-  (name+startpc+endpc) + sizeupvalues(i32) + upvalue 名(string)`，均为 4 字节 LE。
-- 主 chunk 固定 1 个 upvalue `_ENV`（debug 末尾可看到 `_ENV` 字符串）。
-
-**尚未破解**：Instruction 的具体位布局（8 字节 64 位变体）与 `sizek` 等计数字段
-的精确边界。`check.lua`（仅 1 条 `RETURN`，195 字节）的 code 为
-`26 00 00 00 00 00 00 01`，说明 opcode 在低 6 位（`0x26`=RETURN）、A=0、B=1 在
-最高字节（bits 56-63），但该布局与 `activityssrdata.lua`（sizecode=17）的 code
-段（57 字节）对不齐，存在「17 条指令放不进 code 段」的矛盾，需进一步定位
-fork 的指令编码（疑似「64 位指令集」第三方修改版）。
-
-> 已尝试 `lua_tools/cLuaDecompiler.exe`（Coldzer0/LuaDecompiler，支持 5.1-5.5 +
-> `--opcode-table`），对日服字节码报 `invalid LUAC_DATA in 5.3 header`（自定义
-> LUAC_DATA 7 字节 + Instruction 8 字节，非官方格式），无法直接反编译。
-> **再试「归一化 header」**：把 header 改成标准 5.3（format=0x00、LUAC_DATA 6 字节、
-> sizeof 5 字节）后，反编译器能过 header；但 Instruction 设 4 时在 offset 191
-> 报 `unknown constant type 0x5`（code/常量错位），设 8 时直接报
-> `only 4-byte instructions supported`。**由此确认日服 Instruction=8 字节**，
-> 该反编译器硬编码 4 字节、无法处理 8 字节指令。
-> **但已有国服反编译源码（`lua_tools/BlueoathLua/`）可直接对照，无需再破解日服
-> 指令编码**；日服特有差异仅需字节码字符串常量交叉确认。
-- 分析脚本（可复现）：`tools/extract-lua.py`（UnityPy 解包，依赖 `pip install
-  UnityPy`）、`tools/lua-strings.py`（字节码字符串提取 + 关键词检索）。
+- 分析脚本：`tools/extract-normalize.py`（解包+归一化）、`tools/decompile-all.py`
+  （批量反编译）、`tools/lua-strings.py`（字节码字符串检索）。
+- 反编译器：unluac（`java -jar unluac.jar <file>`，已下载到
+  `%TEMP%\opencode\unluac.jar`）。
 
 ## 目录结构（`runtime/lua-extract/`）
 

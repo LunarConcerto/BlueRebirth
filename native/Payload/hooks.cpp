@@ -634,6 +634,14 @@ void* setLuaButtonClickStolen = nullptr;
 bool setLuaButtonClickHookApplied = false;
 void* setOnClickLuaEventStolen = nullptr;
 bool setOnClickLuaEventHookApplied = false;
+void* getRedDotListStolen = nullptr;
+bool getRedDotListHookApplied = false;
+void* logExceptionStolen = nullptr;
+bool logExceptionHookApplied = false;
+void* logError2Stolen = nullptr;
+bool logError2HookApplied = false;
+void* logException2Stolen = nullptr;
+bool logException2HookApplied = false;
 
 void LogIl2CppString(const char* label, void* str) {
     std::string name;
@@ -706,6 +714,10 @@ void LogGetAll(void* self, void* tableName) {
 
 void LogCreatePart() {
     Log("CSUIHelper.CreatePart called");
+}
+
+void LogGetRedDotList(void* self) {
+    Log("UILuaPage.GetRedDotList called self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
 }
 
 void LogPlayMusic(void* self, void* musicId) {
@@ -782,6 +794,28 @@ void LogUIShipProxyCtor(void* self) {
 void LogDebugLog(void* msg) { LogIl2CppString("Unity.Log", msg); }
 void LogDebugLogError(void* msg) { LogIl2CppString("Unity.LogError", msg); }
 void LogDebugLogWarning(void* msg) { LogIl2CppString("Unity.LogWarning", msg); }
+
+void LogLogException(void* exception) {
+    if (!exception) {
+        Log("Debug.LogException called exception=<null>");
+        return;
+    }
+    const auto msg = ReadPtrSafe(reinterpret_cast<uintptr_t>(exception) + 0x8);
+    Log("Debug.LogException called exception=" + std::to_string(reinterpret_cast<uintptr_t>(exception)) +
+        " msg=" + ReadIl2CppString(reinterpret_cast<void*>(msg)));
+}
+
+void LogDebugLogError2(void* msg) { LogIl2CppString("Unity.LogError(2arg)", msg); }
+
+void LogLogException2(void* exception) {
+    if (!exception) {
+        Log("Debug.LogException(2arg) called exception=<null>");
+        return;
+    }
+    const auto msg = ReadPtrSafe(reinterpret_cast<uintptr_t>(exception) + 0x8);
+    Log("Debug.LogException(2arg) called exception=" + std::to_string(reinterpret_cast<uintptr_t>(exception)) +
+        " msg=" + ReadIl2CppString(reinterpret_cast<void*>(msg)));
+}
 
 typedef void(__cdecl* StageGotoFn)(void* self, int nextStateType, void* enterParam, int allowSameState);
 
@@ -1179,6 +1213,18 @@ __declspec(naked) void CreatePartTrampoline() {
     }
 }
 
+__declspec(naked) void GetRedDotListTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogGetRedDotList
+        add esp, 4
+        popad
+        jmp dword ptr [getRedDotListStolen]
+    }
+}
+
 __declspec(naked) void PlayMusicTrampoline() {
     __asm {
         pushad
@@ -1210,8 +1256,8 @@ __declspec(naked) void ShowTopPageTrampoline() {
 __declspec(naked) void SetLuaButtonClickTrampoline() {
     __asm {
         pushad
-        mov eax, dword ptr [esp + 36]
-        mov ecx, dword ptr [esp + 40]
+        mov eax, dword ptr [esp + 40]
+        mov ecx, dword ptr [esp + 44]
         push ecx
         push eax
         call LogSetLuaButtonClick
@@ -1224,8 +1270,8 @@ __declspec(naked) void SetLuaButtonClickTrampoline() {
 __declspec(naked) void SetOnClickLuaEventTrampoline() {
     __asm {
         pushad
-        mov eax, dword ptr [esp + 36]
-        mov ecx, dword ptr [esp + 40]
+        mov eax, dword ptr [esp + 40]
+        mov ecx, dword ptr [esp + 44]
         push ecx
         push eax
         call LogSetOnClickLuaEvent
@@ -1268,6 +1314,42 @@ __declspec(naked) void DebugLogWarningTrampoline() {
         add esp, 4
         popad
         jmp dword ptr [debugLogWarningStolen]
+    }
+}
+
+__declspec(naked) void LogExceptionTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 40]
+        push eax
+        call LogLogException
+        add esp, 4
+        popad
+        jmp dword ptr [logExceptionStolen]
+    }
+}
+
+__declspec(naked) void LogError2Trampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 40]
+        push eax
+        call LogDebugLogError2
+        add esp, 4
+        popad
+        jmp dword ptr [logError2Stolen]
+    }
+}
+
+__declspec(naked) void LogException2Trampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 40]
+        push eax
+        call LogLogException2
+        add esp, 4
+        popad
+        jmp dword ptr [logException2Stolen]
     }
 }
 
@@ -1404,6 +1486,12 @@ void TryApplyCreatePartHook() {
     InstallStrArgHook(0x2A9E40, &CreatePartTrampoline, &createPartStolen, 10, "CSUIHelper.CreatePart");
 }
 
+void TryApplyGetRedDotListHook() {
+    if (getRedDotListHookApplied) return;
+    getRedDotListHookApplied = true;
+    InstallStrArgHook(0x27A080, &GetRedDotListTrampoline, &getRedDotListStolen, 13, "UILuaPage.GetRedDotList");
+}
+
 void TryApplyPlayMusicHook() {
     if (playMusicHookApplied) return;
     playMusicHookApplied = true;
@@ -1444,6 +1532,24 @@ void TryApplyDebugLogWarningHook() {
     if (debugLogWarningHookApplied) return;
     debugLogWarningHookApplied = true;
     InstallStrArgHook(0xE51AE0, &DebugLogWarningTrampoline, &debugLogWarningStolen, 10, "Debug.LogWarning");
+}
+
+void TryApplyLogExceptionHook() {
+    if (logExceptionHookApplied) return;
+    logExceptionHookApplied = true;
+    InstallStrArgHook(0xE516A0, &LogExceptionTrampoline, &logExceptionStolen, 10, "Debug.LogException");
+}
+
+void TryApplyLogError2Hook() {
+    if (logError2HookApplied) return;
+    logError2HookApplied = true;
+    InstallStrArgHook(0xE51540, &LogError2Trampoline, &logError2Stolen, 10, "Debug.LogError(2arg)");
+}
+
+void TryApplyLogException2Hook() {
+    if (logException2HookApplied) return;
+    logException2HookApplied = true;
+    InstallStrArgHook(0xE51750, &LogException2Trampoline, &logException2Stolen, 10, "Debug.LogException(2arg)");
 }
 
 void TryApplyUnityTlsPatch() {
@@ -1809,6 +1915,7 @@ void InitializeHooks(HMODULE module) {
         TryApplyGetJsonDataHook();
         TryApplyGetAllHook();
         TryApplyCreatePartHook();
+        TryApplyGetRedDotListHook();
         TryApplyPlayMusicHook();
         TryApplyShowTopPageHook();
         TryApplySetLuaButtonClickHook();
@@ -1816,6 +1923,9 @@ void InitializeHooks(HMODULE module) {
         TryApplyDebugLogHook();
         TryApplyDebugLogErrorHook();
         TryApplyDebugLogWarningHook();
+        TryApplyLogExceptionHook();
+        TryApplyLogError2Hook();
+        TryApplyLogException2Hook();
         TryApplySdkLoginHook();
         TryApplyLoginMethodHook();
         TrySetSimulationMode();

@@ -1,0 +1,24 @@
+local protobuf = require("net.protobuf.protobuf")
+local module_pb = {}
+_ENV = module_pb
+TEMPTYARG = protobuf.Descriptor()
+TEMPTYRET = protobuf.Descriptor()
+TEMPTYARG.file_name = module_pb
+TEMPTYARG.name = "TEmptyArg"
+TEMPTYARG.full_name = ".pb.TEmptyArg"
+TEMPTYARG.nested_types = {}
+TEMPTYARG.enum_types = {}
+TEMPTYARG.fields = {}
+TEMPTYARG.is_extendable = false
+TEMPTYARG.extensions = {}
+TEMPTYRET.file_name = module_pb
+TEMPTYRET.name = "TEmptyRet"
+TEMPTYRET.full_name = ".pb.TEmptyRet"
+TEMPTYRET.nested_types = {}
+TEMPTYRET.enum_types = {}
+TEMPTYRET.fields = {}
+TEMPTYRET.is_extendable = false
+TEMPTYRET.extensions = {}
+TEmptyArg = protobuf.Message(TEMPTYARG)
+TEmptyRet = protobuf.Message(TEMPTYRET)
+return _ENV

@@ -1,0 +1,24 @@
+local protobuf = require("net.protobuf.protobuf")
+local activitysport_pb = {}
+_ENV = activitysport_pb
+TACTIVITYSPORTINFO = protobuf.Descriptor()
+local TACTIVITYSPORTINFO_DRAWID_FIELD = protobuf.FieldDescriptor()
+TACTIVITYSPORTINFO_DRAWID_FIELD.name = "DrawId"
+TACTIVITYSPORTINFO_DRAWID_FIELD.full_name = ".pb.TActivitySportInfo.DrawId"
+TACTIVITYSPORTINFO_DRAWID_FIELD.number = 1
+TACTIVITYSPORTINFO_DRAWID_FIELD.index = 0
+TACTIVITYSPORTINFO_DRAWID_FIELD.label = 1
+TACTIVITYSPORTINFO_DRAWID_FIELD.has_default_value = false
+TACTIVITYSPORTINFO_DRAWID_FIELD.default_value = nil
+TACTIVITYSPORTINFO_DRAWID_FIELD.type = 5
+TACTIVITYSPORTINFO_DRAWID_FIELD.cpp_type = 1
+TACTIVITYSPORTINFO.file_name = activitysport_pb
+TACTIVITYSPORTINFO.name = "TActivitySportInfo"
+TACTIVITYSPORTINFO.full_name = ".pb.TActivitySportInfo"
+TACTIVITYSPORTINFO.nested_types = {}
+TACTIVITYSPORTINFO.enum_types = {}
+TACTIVITYSPORTINFO.fields = {TACTIVITYSPORTINFO_DRAWID_FIELD}
+TACTIVITYSPORTINFO.is_extendable = false
+TACTIVITYSPORTINFO.extensions = {}
+TActivitySportInfo = protobuf.Message(TACTIVITYSPORTINFO)
+return _ENV

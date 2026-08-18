@@ -47,8 +47,13 @@ def main() -> int:
                 logical += ".lua"
             dest = os.path.join(out, logical.replace("/", os.sep))
             os.makedirs(os.path.dirname(dest), exist_ok=True)
-            with open(dest, "w", encoding="utf-8", errors="ignore") as f:
-                f.write(ta.m_Script)
+            # NOTE: must write BINARY, not text. The Lua bytecode is binary; a text-mode
+            # write (open "w" + utf-8) drops non-UTF-8 bytes (e.g. 0x93) and converts
+            # LF->CRLF, silently corrupting the bytecode. TextAsset.m_Script stores
+            # invalid bytes as surrogates, so use surrogateescape to recover them.
+            raw = ta.m_Script.encode("utf-8", "surrogateescape")
+            with open(dest, "wb") as f:
+                f.write(raw)
             count += 1
         total += count
         print(f"{fn}: {count}")
