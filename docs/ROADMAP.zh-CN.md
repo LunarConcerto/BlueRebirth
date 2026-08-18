@@ -245,7 +245,7 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 | 公会 (Guild) | 22 | 最大模块，含捐献/任务/公会战/公会商店 |
 | 好友 (Friend) | 1 | 好友列表/申请/搜索 |
 | 聊天 (Chat) | 6 | 含公会频道/弹幕 |
-| 邮件 (Mail) | 2 | 含附件领取 |
+| 邮件 (Mail) | 2 | 含附件领取；**已打通**（24 封货币邮件 + 无限领取，见会话记录） |
 | 排行 (Rank) | 4 | 含活动 Boss 排行/小游戏排行 |
 | 竞技场 (Sport) | 6 | 含挑战/排行/积分奖励 |
 | 教学 (Teaching) | 13 | 师徒系统 |
@@ -448,3 +448,53 @@ user.UserLogin 响应 → LuaEvent.LoginOk → LoginStage:_LoginOk
 2. **购买发放的资源类型分流**：道具→仓库、货币→UserInfo、时装→时装解锁，三种存储+推送协议各不相同。
 3. **客户端本地置灰**：商品因货币不足被客户端置灰（本地判断），服务器免费购买前需给足对应货币（或改商品 price）。
 4. **数据驱动 > 硬编码**：GM 商品列表、时装 SfId 映射都走 `gm-goods.json`，后续扩充 GM 商品只需改配置。
+
+---
+
+## 会话记录：2026-08-19 — 邮件系统 + GM 货币发放打通
+
+### 核心成果
+
+**邮件系统完全打通，作为 GM 商店的前置，为玩家提供无限领取的 24 种货币。** 邮件页面显示 24 封货币邮件，单选/全选领取发放对应货币；领取后邮件不删除（`IsGotReawrd` 恒 0），可反复领取。
+
+### 设计定位
+
+- 单机版无法发邮件，邮件的作用是「无限领取货币」的入口（GM 商店前置）。
+- 邮件数据驱动：`runtime/jp/gm-mails.json` 外置 24 封邮件（每种货币一封，各 10000）。
+- 领取只发放资源，不删除邮件。
+
+### 数据流
+
+- 邮件列表是 **C2S 主动请求**（非登录推送）：打开邮件页面 → `mail.GetMailList` → `TMailListRet{list}`。
+- 领取：`mail.FetchItem{Mid}`（单选）/ `mail.FetchAllItems`（全选）→ 发放货币 → `TMailListRet{list, Reward}`（`Reward`=`TCommonReward[]`，客户端 `fetchMailItem` 弹奖励）。
+- 登录后推 `payback.newPayback` → `EmailService._TagUpdataMail` 置 `updataTog=true`，打开邮件页面才 `SendGetMailList`。
+
+### 修复的报错
+
+| 报错 | 根因 | 修复 |
+|------|------|------|
+| `emaillogic.lua:45` compare nil | `mail.TempLateId > 0` 比较，`TempLateId=0` 未编码 → nil | `TempLateId` 无条件编码 |
+
+### 24 种持久货币全链路扩展
+
+邮件需求推动货币从 4 种扩展到 UserInfo 全部 24 种持久货币字段：
+
+- `PlayerCharacter` 新增 20 个货币字段（JSON 存档向后兼容）。
+- `EncodeRetGetUserInfo` 重构为 `UserInfoFields` record 重载，完整编码 24 种货币。
+- `AddCurrency` 覆盖 24 种 CurrencyType（1 金币/2 钻石/5 体力/8 主炮/9 鱼雷/10 飞机/11 其他/12 退役币/13 温泉币/14 战略点/15 勋章/18 塔币/22 演习币/23 时装点/24 公会贡献/25 幸运/26 教师勋章/27 教师声望/28 战令经验/29 战令金币/30 PVE点/31 公会币II/32 UR装备币/33 活动战令经验）。
+- 排除非 UserInfo 字段的 CurrencyType（BULLET/GAS/ShipExp/UserExp/RMB/MERITS/ELECTRIC/FOOD/STRENGTH）。
+
+### 改动文件
+
+- `src/BlueOath.Core/PlayerEntities.cs`：`PlayerCharacter` 加 20 货币字段；`GmMailConfig`/`GmMailsConfig` record。
+- `src/BlueOath.Protocol/GameLoginProtocol.cs`：`UserInfoFields` record + `EncodeRetGetUserInfo` 重载 + `DecodeMailMid`。
+- `src/BlueOath.Protocol/PlayerDataCodec.cs`：`MailItem`/`MailList`/`MailListRet` record + `Encode`。
+- `src/BlueOath.Server/Protocols/GameLoginMessageHandler.cs`：mail.* 方法分发、`BuildMailListRet`/`BuildFetchMailRetAsync`、`GmMailsConfigLoader`、`AddCurrency` 扩展。
+- `src/BlueOath.Server/Sessions/GameLoginSession.cs`：邮件领取后推 `user.UpdateUserInfo`。
+- `runtime/jp/gm-mails.json`：24 封货币邮件配置。
+
+### 关键知识点
+
+1. **邮件列表靠 C2S 拉取，不是推送**：邮件页面只在 `updataTog=true` 时才 `SendGetMailList`，`updataTog` 由 `payback.newPayback` 推送置位，缺这条推送 → 邮件页面永远空列表。
+2. **无限领取 = `IsGotReawrd` 恒 0**：客户端 `CanFetchItem` 判 `IsGotReawrd == 0` 才显示领取按钮，服务器不置位即可反复领取。
+3. **货币范围以 UserInfo 字段为准**：`userdata.lua GetCurrency` 映射的才是玩家持久货币，`user_pb.lua TGetUserInfoRet` 无字段的（GAS 等）是战斗/建筑临时值。
