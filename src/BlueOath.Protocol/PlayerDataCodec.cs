@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace BlueOath.Protocol;
 
 /// <summary>
@@ -31,6 +33,58 @@ public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, 
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
+
+/// <summary>单个图鉴条目（TIllustrateInfo）。IllustrateId 即 config_ship_handbook 的 key = ship_info_id。</summary>
+public sealed record IllustrateInfo(int IllustrateId = 0, long GetTime = 0, long LikeTime = 0,
+    bool NewHero = false, IReadOnlyList<int>? BehaviourList = null, int MarryCount = 0);
+
+/// <summary>图鉴装备条目（TIllustrateEquipInfo）。</summary>
+public sealed record IllustrateEquipInfo(int EquipTemplateId = 0, long GetEquipTime = 0, bool NewEquip = false);
+
+/// <summary>图鉴信息推送（TIllustrateInfoRet）。</summary>
+public sealed record IllustrateInfoRet(
+    IReadOnlyList<IllustrateInfo>? IllustrateList = null,
+    IReadOnlyList<IllustrateEquipInfo>? IllustrateEquipList = null);
+
+/// <summary>引导设置项（TGuideSetting，Key/Value 均为 string）。</summary>
+public sealed record GuideSetting(string Key, string Value);
+
+/// <summary>引导信息推送（TGuideInfo）。Setting 里用 GUIDE_DONE_STAGES/GUIDE_DOING_STAGE 标记引导进度。</summary>
+public sealed record GuideInfo(
+    IReadOnlyList<int>? FuncList = null,
+    IReadOnlyList<int>? PlotList = null,
+    IReadOnlyList<GuideSetting>? Setting = null);
+
+/// <summary>商店单个商品（TShopGoodsData）。GoodsId 对应 config_shop_goods 的 id。</summary>
+public sealed record ShopGoodsData(int GoodsId = 0, int Num = 0, int Status = 0);
+
+/// <summary>商店推荐商品（TShopRecommend）。</summary>
+public sealed record ShopRecommend(int Type = 0, int GoodId = 0, int Status = 0);
+
+/// <summary>单个商店信息（TRetShopInfo）。</summary>
+public sealed record RetShopInfo(int ShopId = 0, IReadOnlyList<ShopGoodsData>? ShopGoodsData = null,
+    int UsedFRefreshNum = 0, int FRefreshNum = 0, int FRefreshTime = 0);
+
+/// <summary>商店信息推送（TRetShopsInfo）。</summary>
+public sealed record RetShopsInfo(
+    IReadOnlyList<RetShopInfo>? ShopInfo = null,
+    IReadOnlyList<ShopRecommend>? GoodList = null,
+    IReadOnlyList<ShopRecommend>? CondGoodList = null);
+
+/// <summary>通用奖励（TCommonReward）。Type 对应 GoodsType，ConfigId 对应物品/货币 id。</summary>
+public sealed record CommonReward(int Type = 0, int ConfigId = 0, int Num = 0, int Id = 0);
+
+/// <summary>仓库格子（TGridInfo）。</summary>
+public sealed record BagGridInfo(int TemplateId = 0, int Num = 0);
+
+/// <summary>仓库信息（TBagInfoRet）。bagType=BagType.ITEM_BAG/EQUIP_BAG。</summary>
+public sealed record BagInfoRet(int BagType = 0, int BagSize = 0, IReadOnlyList<BagGridInfo>? BagInfo = null);
+
+/// <summary>单个船型的时装解锁信息（TFashionInfo）。</summary>
+public sealed record FashionInfo(int SfId = 0, IReadOnlyList<int>? FashionTid = null);
+
+/// <summary>时装列表（TFashionList）。</summary>
+public sealed record FashionList(IReadOnlyList<FashionInfo>? FashionInfo = null);
 
 /// <summary>
 /// Encodes the player-scope data pushed to the client after login (build queue, bathroom, ...).
@@ -125,6 +179,167 @@ public static class PlayerDataCodec
         if (value.UpdateTime != 0) WriteVarintField(output, 20, unchecked((ulong)value.UpdateTime));
         WriteVarintField(output, 21, unchecked((ulong)value.MarryType));
         if (value.Fashioning != 0) WriteVarintField(output, 22, unchecked((ulong)value.Fashioning));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(IllustrateInfoRet value)
+    {
+        using var output = new MemoryStream();
+        if (value.IllustrateList is not null)
+            foreach (var item in value.IllustrateList) WriteMessage(output, 1, Encode(item));
+        if (value.IllustrateEquipList is not null)
+            foreach (var item in value.IllustrateEquipList) WriteMessage(output, 9, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(IllustrateInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.IllustrateId != 0) WriteVarintField(output, 1, unchecked((ulong)value.IllustrateId));
+        if (value.GetTime != 0) WriteVarintField(output, 2, unchecked((ulong)value.GetTime));
+        // LikeTime 无条件编码：IsLike 里 `LikeTime ~= 0` 判断，nil ~= 0 为真会误判。
+        WriteVarintField(output, 3, unchecked((ulong)value.LikeTime));
+        if (value.NewHero) WriteVarintField(output, 4, 1);
+        // BehaviourList (field 5, repeated int32)：至少编码一个 0 元素，避免 nil 导致 pairs(nil) 崩溃。
+        if (value.BehaviourList is not null && value.BehaviourList.Count > 0)
+            foreach (var id in value.BehaviourList) WriteVarintField(output, 5, unchecked((ulong)id));
+        else
+            WriteVarintField(output, 5, 0);
+        // MarryCount 无条件编码：GetOwnShipNumByCamp 里 `0 < MarryCount`，nil 会崩。
+        WriteVarintField(output, 6, unchecked((ulong)value.MarryCount));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(IllustrateEquipInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.EquipTemplateId != 0) WriteVarintField(output, 1, unchecked((ulong)value.EquipTemplateId));
+        if (value.GetEquipTime != 0) WriteVarintField(output, 2, unchecked((ulong)value.GetEquipTime));
+        if (value.NewEquip) WriteVarintField(output, 3, 1);
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(GuideInfo value)
+    {
+        using var output = new MemoryStream();
+        // FuncList/PlotList（repeated int32）：至少一个 0 元素，避免 SetGuideData 里 #nil / pairs(nil) 崩溃。
+        if (value.FuncList is not null && value.FuncList.Count > 0)
+            foreach (var id in value.FuncList) WriteVarintField(output, 1, unchecked((ulong)id));
+        else
+            WriteVarintField(output, 1, 0);
+        if (value.PlotList is not null && value.PlotList.Count > 0)
+            foreach (var id in value.PlotList) WriteVarintField(output, 2, unchecked((ulong)id));
+        else
+            WriteVarintField(output, 2, 0);
+        if (value.Setting is not null)
+            foreach (var s in value.Setting) WriteMessage(output, 3, Encode(s));
+        // Event（field 4, repeated TGuideEvent）：编码 Key=0,Value=0 的有效元素，
+        // 空消息会解码成 [{}]，_SetGuideEventData 里 tblValue.Key=nil 报 "table index is nil"。
+        WriteMessage(output, 4, new byte[] { 0x08, 0x00, 0x10, 0x00 });
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(GuideSetting value)
+    {
+        using var output = new MemoryStream();
+        WriteMessage(output, 1, Encoding.UTF8.GetBytes(value.Key));
+        WriteMessage(output, 2, Encoding.UTF8.GetBytes(value.Value));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(RetShopsInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.ShopInfo is not null)
+            foreach (var item in value.ShopInfo) WriteMessage(output, 1, Encode(item));
+        // GoodList/CondGoodList 只在有值时才编码。空消息会被解码成单个空元素（Info.Type/GoodId=nil），
+        // 导致 SetShopsInfo 里 "table index is nil" 或 GetRecommendShopGoods 里 clone(nil) 崩溃。
+        if (value.GoodList is not null)
+            foreach (var item in value.GoodList) WriteMessage(output, 2, Encode(item));
+        if (value.CondGoodList is not null)
+            foreach (var item in value.CondGoodList) WriteMessage(output, 3, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(RetShopInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.ShopId != 0) WriteVarintField(output, 1, unchecked((ulong)value.ShopId));
+        // ShopGoodsData（field 3, repeated）：必须非 nil（GetShopInfoById 里 #nil 崩溃），至少一个空元素。
+        if (value.ShopGoodsData is not null && value.ShopGoodsData.Count > 0)
+            foreach (var item in value.ShopGoodsData) WriteMessage(output, 3, Encode(item));
+        else
+            WriteMessage(output, 3, []);
+        // UsedFRefreshNum/FRefreshNum/FRefreshTime 无条件编码：ShopItemShow._SetFreeRefresh 里
+        // `UsedFRefreshNum < init_times` 比较，nil 会崩。
+        WriteVarintField(output, 4, unchecked((ulong)value.UsedFRefreshNum));
+        WriteVarintField(output, 5, unchecked((ulong)value.FRefreshNum));
+        WriteVarintField(output, 6, unchecked((ulong)value.FRefreshTime));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(ShopGoodsData value)
+    {
+        using var output = new MemoryStream();
+        if (value.GoodsId != 0) WriteVarintField(output, 1, unchecked((ulong)value.GoodsId));
+        // Num/Status 无条件编码：ShopItemShow._SetShopGoodsStock 里
+        // math.tointeger(goodSerData.Num) 做减法，nil 会崩。
+        WriteVarintField(output, 2, unchecked((ulong)value.Num));
+        WriteVarintField(output, 3, unchecked((ulong)value.Status));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(ShopRecommend value)
+    {
+        using var output = new MemoryStream();
+        if (value.Type != 0) WriteVarintField(output, 1, unchecked((ulong)value.Type));
+        if (value.GoodId != 0) WriteVarintField(output, 2, unchecked((ulong)value.GoodId));
+        if (value.Status != 0) WriteVarintField(output, 3, unchecked((ulong)value.Status));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(CommonReward value)
+    {
+        using var output = new MemoryStream();
+        if (value.Type != 0) WriteVarintField(output, 1, unchecked((ulong)value.Type));
+        if (value.ConfigId != 0) WriteVarintField(output, 2, unchecked((ulong)value.ConfigId));
+        if (value.Num != 0) WriteVarintField(output, 3, unchecked((ulong)value.Num));
+        if (value.Id != 0) WriteVarintField(output, 4, unchecked((ulong)value.Id));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(BagInfoRet value)
+    {
+        using var output = new MemoryStream();
+        if (value.BagType != 0) WriteVarintField(output, 1, unchecked((ulong)value.BagType));
+        if (value.BagSize != 0) WriteVarintField(output, 2, unchecked((ulong)value.BagSize));
+        if (value.BagInfo is not null)
+            foreach (var item in value.BagInfo) WriteMessage(output, 3, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(BagGridInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.TemplateId != 0) WriteVarintField(output, 1, unchecked((ulong)value.TemplateId));
+        if (value.Num != 0) WriteVarintField(output, 2, unchecked((ulong)value.Num));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(FashionList value)
+    {
+        using var output = new MemoryStream();
+        if (value.FashionInfo is not null)
+            foreach (var item in value.FashionInfo) WriteMessage(output, 1, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(FashionInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.SfId != 0) WriteVarintField(output, 1, unchecked((ulong)value.SfId));
+        if (value.FashionTid is not null)
+            foreach (var tid in value.FashionTid) WriteVarintField(output, 2, unchecked((ulong)tid));
         return output.ToArray();
     }
 

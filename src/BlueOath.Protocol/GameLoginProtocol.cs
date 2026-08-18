@@ -134,7 +134,8 @@ public static class TMessageCodec
         return output.ToArray();
     }
 
-    public static byte[] EncodeRetGetUserInfo(ulong uid, string uname, int level, int cls, uint secretaryId = 1)
+    public static byte[] EncodeRetGetUserInfo(ulong uid, string uname, int level, int cls, uint secretaryId = 1,
+        int createTime = 0, int bath = 0, int gold = 99999999, int diamond = 999999, int supply = 9999)
     {
         using var output = new MemoryStream();
         if (uid != 0) WriteVarintField(output, 1, uid);
@@ -142,15 +143,79 @@ public static class TMessageCodec
         if (cls != 0) WriteVarintField(output, 7, unchecked((uint)cls));
         if (level != 0) WriteVarintField(output, 10, unchecked((uint)level));
         WriteVarintField(output, 11, unchecked((uint)0));        // Exp (HomePage:_PlayerData 读，缺则 nil 崩)
-        WriteVarintField(output, 12, unchecked((uint)1000));     // Diamond
-        WriteVarintField(output, 13, unchecked((uint)100000));   // Gold
-        WriteVarintField(output, 14, unchecked((uint)100));      // Supply (vigour)
+        WriteVarintField(output, 12, unchecked((uint)diamond));  // Diamond
+        WriteVarintField(output, 13, unchecked((uint)gold));     // Gold（GM 给足量，避免时装等高金币商品置灰）
+        WriteVarintField(output, 14, unchecked((uint)supply));   // Supply (vigour)
+        // CreateTime（field 22）无条件编码：PeriodManager calTime 里 type=CREATE 的 period
+        // 需要 GetCreateTime，缺则 os.date(nil) 报 "attempt to compare nil with number"。
+        WriteVarintField(output, 22, unchecked((uint)createTime));
         WriteVarintField(output, 23, secretaryId);               // SecretaryId (hero instance id)
+        WriteVarintField(output, 26, unchecked((uint)0));        // BuyGoldNum (BuyResourcePage 读)
+        WriteVarintField(output, 27, unchecked((uint)0));        // BuyGoldTime (isSameDay 算术，缺则 nil 崩)
+        WriteVarintField(output, 28, unchecked((uint)0));        // BuySupplyNum
+        WriteVarintField(output, 29, unchecked((uint)0));        // BuySupplyTime (isSameDay 算术，缺则 nil 崩)
+        WriteVarintField(output, 35, unchecked((uint)bath));     // Bath (SPA 温泉币，CurrencyType.SPA)
         WriteVarintField(output, 39, unchecked((uint)0));        // Medal (_ShowMedal:GetCurrency(MEDAL) 需要)
         WriteVarintField(output, 44, unchecked((uint)0));        // HeadShow (_ReverseMask,_SetSecretary 检查)
         WriteVarintField(output, 56, unchecked((uint)1));        // ServerId (HomePage:_PlayerData 读，缺则 nil 崩)
         WriteVarintField(output, 62, unchecked((uint)100));      // PvePt (TopPage:_ShowPvePt 读，缺则 SetText(nil) 崩)
         WriteVarintField(output, 46, unchecked((uint)7));        // NewTaskStage (ActivityLogic:IsCanShowRedDot 读，缺则 nil 崩；0 触发新手引导)
+        return output.ToArray();
+    }
+
+    // TBuyGoodsArg: ShopId(1)/GoodId(2)/BuyNum(3)/PriceIndex(5)。
+    public static (int ShopId, int GoodId, int BuyNum, int PriceIndex) DecodeBuyGoodsArg(ReadOnlySpan<byte> payload)
+    {
+        var reader = new PbReader(payload);
+        int shopId = 0, goodId = 0, buyNum = 0, priceIndex = 0;
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: shopId = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: goodId = checked((int)reader.ReadVarint()); break;
+                case 3 when wire == 0: buyNum = checked((int)reader.ReadVarint()); break;
+                case 5 when wire == 0: priceIndex = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return (shopId, goodId, buyNum, priceIndex);
+    }
+
+    // TBuyGoodsRet: Reward(1, repeated TCommonReward)/GoodId(2)/BuyNum(3)。
+    public static byte[] EncodeBuyGoodsRet(CommonReward reward, int goodId, int buyNum)
+    {
+        using var output = new MemoryStream();
+        WriteBytes(output, 1, PlayerDataCodec.Encode(reward));
+        if (goodId != 0) WriteVarintField(output, 2, unchecked((uint)goodId));
+        if (buyNum != 0) WriteVarintField(output, 3, unchecked((uint)buyNum));
+        return output.ToArray();
+    }
+
+    // TQualityBuyGoodsArg: ShopId(1)/GoodIdList(2, repeated int32)。
+    public static (int ShopId, IReadOnlyList<int> GoodIdList) DecodeQualityBuyGoodsArg(ReadOnlySpan<byte> payload)
+    {
+        var reader = new PbReader(payload);
+        int shopId = 0;
+        var goodIds = new List<int>();
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: shopId = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: goodIds.Add(checked((int)reader.ReadVarint())); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return (shopId, goodIds);
+    }
+
+    // TQualityBuyGoodsRet: Reward(1, repeated TCommonReward)/GoodIdList(2, repeated int32)。
+    public static byte[] EncodeQualityBuyGoodsRet(IReadOnlyList<CommonReward> rewards, IReadOnlyList<int> goodIds)
+    {
+        using var output = new MemoryStream();
+        foreach (var r in rewards) WriteBytes(output, 1, PlayerDataCodec.Encode(r));
+        foreach (var id in goodIds) WriteVarintField(output, 2, unchecked((uint)id));
         return output.ToArray();
     }
 

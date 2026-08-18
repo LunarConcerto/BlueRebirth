@@ -258,7 +258,7 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 | 爬塔 (Tower) | 17 | 含地图/装备/主题/奖励/重置 |
 | Battle Pass | 10 | 含进阶/购买等级/奖励预览 |
 | 远征 (Adventure) | 4 | 含敌人/角色/攻击结算 |
-| 收藏/许愿 (Illustrate) | 14 | 含图鉴/许愿/加速 |
+| 收藏/许愿 (Illustrate) | 14 | 含图鉴/许愿/加速；**图鉴部分已打通**（见会话记录） |
 | 杂志 (Magazine) | 3 | 含派遣/解锁 |
 | AR Kit | 5 | 含创建/加入/投影 |
 | Mini Game | 7 | 含限时/无限/排行榜 |
@@ -323,3 +323,128 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 
 - 剩余两个非致命报错集中在**改造（Remould）**模块，需补 `RemouldLV`(26)、`ArrRemouldEffect`(23) 字段
 - 第二梯队继续推进：装备（Equip）、背包（Bag）、学习（Study）
+
+---
+
+## 会话记录：2026-08-19 — 图鉴系统（Illustrate）打通
+
+### 核心成果
+
+**图鉴（Illustrate）系统功能几乎完整，无报错。** 打开图鉴界面显示全部图鉴条目，玩家拥有的舰娘显示为已解锁，其余显示为未解锁剪影。
+
+### 数据流
+
+- `illustrate.IllustrateInfo` 是登录后的 S2C 推送（Ret = `TIllustrateInfoRet`）。
+- 客户端 `IllustrateService._IllustrateInfo` → `PbToLua(TILLUSTRATEINFORET)` → `Data.illustrateData:SetIllustrateData` → `UpdateHero`。
+- `UpdateHero` 遍历 `IllustrateList` 标记已解锁条目，再遍历 `config_ship_handbook` 配置生成其余 LOCK/CLOSE 状态条目（**兜底逻辑：图鉴内容不依赖推送是否完整，只依赖推送是否到达**）。
+
+### 关键字段与推导
+
+| 项 | 值 | 说明 |
+|----|----|------|
+| `IllustrateId` | `config_ship_handbook` 的 key = `ship_info_id` | 由 TemplateId 推导：`(TemplateId - 1) / 10`（规范 `ship_main_id = ship_info_id * 10 + 1`） |
+| `IllustrateList`(1, repeated) | 玩家已解锁图鉴条目 | 必须非 nil（否则 `ipairs(nil)` 崩溃） |
+| `IllustrateEquipList`(9, repeated) | 装备图鉴条目 | 必须非 nil（同上） |
+| `LikeTime`(3) | 无条件编码 0 | `IsLike` 里 `LikeTime ~= 0`，`nil ~= 0` 为真会误判 |
+| `MarryCount`(6) | 无条件编码 0 | `0 < MarryCount`，nil 会崩 |
+| `BehaviourList`(5) | 至少编码一个 0 元素 | `pairs(nil)` 崩溃 |
+
+### 服务器端实现
+
+- `PlayerDataCodec.cs`：新增 `IllustrateInfo`/`IllustrateEquipInfo`/`IllustrateInfoRet` record + `Encode` 方法。
+- `GameLoginMessageHandler.cs`：`BuildSyncPushesAsync` 新增 `illustrate.IllustrateInfo` 推送，`IllustrateList` 从存档舰娘列表推导（`ToIllustrateId`）。
+- 秘书舰 TemplateId=10210511 → IllustrateId=1021051。
+
+---
+
+## 会话记录：2026-08-19 — 新手引导画面闪现修复
+
+### 核心成果
+
+**修复进入游戏时短暂闪现新手引导画面的问题。** 登录后不再触发引导系统第一个 stage。
+
+### 根因
+
+`guide.GuideInfo` 推送的**时序错误**。引导系统初始化发生在 `user.UserLogin` 响应阶段：
+
+```
+user.UserLogin 响应 → LuaEvent.LoginOk → LoginStage:_LoginOk
+                                        → guideHub:onLoginOK()
+                                          → guideManager:init()   ← 读取 GUIDE_DONE_STAGES（此时为空）
+                                          → LOGIN_END 触发第一个 stage(id=10000) → GuidePage
+```
+
+原实现把 `guide.GuideInfo` 推送放在 `user.GetUserInfo` 之后（`BuildSyncPushesAsync`），比 `guideManager:init()` 晚，导致 `GUIDE_DONE_STAGES` 读不到，所有引导 stage 被误判未完成。
+
+### 修复
+
+把 `guide.GuideInfo` 推送**提前到 `user.UserLogin` 应答之前**（与 `user.UpdateUserInfo` 同位置），确保 `guideManager:init()` 执行时 `GUIDE_DONE_STAGES` 已完整。
+
+### 关键知识点
+
+| 项 | 说明 |
+|----|------|
+| 引导触发链路 | `LoginOk` → `LoginStage:_LoginOk` → `guideHub:onLoginOK()` → `guideManager:init()` + `LOGIN_END` |
+| `GUIDE_DONE_STAGES` | 引导进度标记，value 是 `Serialize` 序列化的表（**字符串 key**），如 `{["10000"]=1,...}` |
+| `GUIDE_DOING_STAGE` | 进行中 stage，空字符串表示无 |
+| 引导 stage | `guideStageConfig.lua` 共 29 个顶层 stage，第一个 id=10000 的 `triggerType = LOGIN_END` |
+| 推送时序原则 | **依赖客户端初始化时机的推送，必须在触发该初始化的请求应答前发送**（`user.UpdateUserInfo`/`guide.GuideInfo` 都是 `user.UserLogin` 前） |
+
+### 改动文件
+
+- `PlayerDataCodec.cs`：新增 `GuideSetting`/`GuideInfo` record + `Encode`（`FuncList`/`PlotList`/`Event` 占位避免 nil 崩溃，补 `using System.Text`）
+- `GameLoginMessageHandler.cs`：新增 `BuildGuideInfoPush` 方法（`DoneGuideStages` 29 个 stage id 常量 + `BuildDoneGuideStages` 序列化）
+- `GameLoginSession.cs`：`user.UserLogin` 分支里，`user.UpdateUserInfo` 之后再推 `guide.GuideInfo`
+
+---
+
+## 会话记录：2026-08-19 — 商店系统 + GM 功能打通
+
+### 核心成果
+
+**商店系统完全打通，GM 功能（免费购买）可用。** 商店各分页正常访问，GM 商品显示、单选/多选购买、资源发放（仓库/货币/时装）均已验证。
+
+### 商店数据流
+
+- `shop.UpdateShopInfo`（S2C 推送，Ret=`TRetShopsInfo`）设置 `Data.shopData.m_shopInfo`，登录时推送。
+- `shop.BuyGoods`（C2S，单选）→ `TBuyGoodsArg{ShopId,GoodId,BuyNum,PriceIndex}` / `TBuyGoodsRet{Reward,GoodId,BuyNum}`。
+- `shop.QualityBuyGoods`（C2S，多选）→ `TQualityBuyGoodsArg{ShopId,GoodIdList}` / `TQualityBuyGoodsRet{Reward,GoodIdList}`。
+
+### 修复的报错清单（商店链路，共 8 个）
+
+| # | 报错位置 | 根因 | 修复 |
+|---|---------|------|------|
+| 1 | `shopdata.lua:60` m_shopInfo nil | shop.UpdateShopInfo 未推送 | 登录时推送所有商店（104 个） |
+| 2 | `shopdata.lua:34` table index nil | CondGoodList 空消息解码成空元素（Info.Type=nil） | CondGoodList/GoodList 不编码 |
+| 3 | `periodmanager.lua:97` compare nil | UserInfo.CreateTime 未编码 | 补 CreateTime(22) 字段 |
+| 4 | `custom_time.lua:153` os.date | SvrStartTime=0 | 推 `user.UpdateSvrTime` |
+| 5 | `rechargelogic.lua:295` call nil | recharge.Info 未推送 | 推 `recharge.RechargeInfo`（空 Info） |
+| 6 | `shopitemshow.lua:378` compare nil | UsedFRefreshNum/FRefreshNum/FRefreshTime 未编码 | 补字段并无条件编码 |
+| 7 | `shopitemshow.lua:759` arithmetic nil | ShopGoodsData.Num 未编码 | Num/Status 无条件编码 |
+| 8 | `custom_time.lua:207` arithmetic nil | BuyGoldTime/BuySupplyTime 未编码 | 补 BuyGoldNum(26)/BuyGoldTime(27)/BuySupplyNum(28)/BuySupplyTime(29) |
+
+### 资源存储与发放（GM 免费购买）
+
+| GoodsType | 存储位置 | 推送协议 |
+|-----------|---------|---------|
+| ITEM(1)/EQUIP_ENHANCE_ITEM(6) 道具 | 仓库 `PlayerBag` | `bag.UpdateBagData`（TBagInfoRet） |
+| CURRENCY(5) 货币 | UserInfo（Gold/Diamond/Supply/Bath 等） | `user.UpdateUserInfo` |
+| FASHION(18) 时装 | `PlayerFashion`（通用解锁，SfId→FashionTid） | `fashion.updateData`（TFashionList） |
+
+- 货币字段持久化：`PlayerCharacter` 新增 `Gold`/`Diamond`/`Supply`/`Bath`；`AddCurrency` 按 CurrencyType 映射（1=金币,2=钻石,5=体力,13=温泉币）。
+- 时装 SfId 映射：`FashionTid → SfId`（config_fashion 的 `belong_to_ship`），当前硬编码在配置里。
+- 购买后（单选/多选）经 `BuildPostBuyPushesAsync` 推送 user + bag + fashion 更新。
+
+### 数据驱动 GM 商品配置
+
+- 配置文件 `runtime/jp/gm-goods.json`（数据驱动，无需改代码）。
+- 每个商品：`goodId`（config_shop_goods 的 id，须 goods_visible=1）、`shopId`（分页）、`type`（GoodsType）、`itemId`、`num`。
+- `GmGoodsConfigLoader` 加载；`BuildShopInfoPush` 按 `shopId` 分组推送。
+- GM 商品按类型分页：常规商店(1)=货币+道具，装备商店(5)=装备强化道具，时装商店(23)=时装。
+
+### 关键知识点
+
+1. **商店分页 = config_shop 的 shopId**：客户端不校验商品的 shelf_id 与商店匹配，只校验 `goods_visible==1`，服务器可自由分页。
+2. **购买发放的资源类型分流**：道具→仓库、货币→UserInfo、时装→时装解锁，三种存储+推送协议各不相同。
+3. **客户端本地置灰**：商品因货币不足被客户端置灰（本地判断），服务器免费购买前需给足对应货币（或改商品 price）。
+4. **数据驱动 > 硬编码**：GM 商品列表、时装 SfId 映射都走 `gm-goods.json`，后续扩充 GM 商品只需改配置。

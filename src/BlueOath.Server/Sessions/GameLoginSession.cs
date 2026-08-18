@@ -54,6 +54,8 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
 
                     // 在 user.UserLogin 应答前先推送 user.UpdateUserInfo，确保
                     // Data.userData.m_TypeNumMap 在 LoginOk 事件触发前已初始化。
+                    // 同时推送 guide.GuideInfo，确保 GuideManager:init 读取到
+                    // GUIDE_DONE_STAGES，避免触发新手引导。
                     if (request.Method == "user.UserLogin")
                     {
                         var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -61,6 +63,11 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         await NetSocketFrameCodec.WriteAsync(stream, push, NetSocketFrameCodec.TypeData, ct);
                         _fileLogger.LogInformation(
                             "game-login[{ConnectionId}] push user.UpdateUserInfo (before LoginOk)",
+                            connectionId);
+                        var guidePush = _handler.BuildGuideInfoPush(now);
+                        await NetSocketFrameCodec.WriteAsync(stream, guidePush, NetSocketFrameCodec.TypeData, ct);
+                        _fileLogger.LogInformation(
+                            "game-login[{ConnectionId}] push guide.GuideInfo (before LoginOk)",
                             connectionId);
                     }
 
@@ -88,6 +95,19 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                             await NetSocketFrameCodec.WriteAsync(stream, extra, NetSocketFrameCodec.TypeData, ct);
                             _fileLogger.LogInformation(
                                 "game-login[{ConnectionId}] push sync bytes={Bytes} hex={Hex}",
+                                connectionId, extra.Length, Convert.ToHexString(extra));
+                        }
+                    }
+
+                    // 购买应答后，推送更新后的货币/仓库/时装数据。
+                    if (request.Method == "shop.BuyGoods" || request.Method == "shop.QualityBuyGoods")
+                    {
+                        var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                        foreach (var extra in await _handler.BuildPostBuyPushesAsync(profileId, now, ct))
+                        {
+                            await NetSocketFrameCodec.WriteAsync(stream, extra, NetSocketFrameCodec.TypeData, ct);
+                            _fileLogger.LogInformation(
+                                "game-login[{ConnectionId}] push post-buy bytes={Bytes} hex={Hex}",
                                 connectionId, extra.Length, Convert.ToHexString(extra));
                         }
                     }
