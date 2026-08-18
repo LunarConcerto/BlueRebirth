@@ -264,3 +264,62 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 | Mini Game | 7 | 含限时/无限/排行榜 |
 | 炼金 (Alchemy) | 1 | 莱莎联动 |
 | 其他活动 | 15+ | 圣诞节/万圣节/新年/情人节/校园/美食 等 |
+
+---
+
+## 会话记录：2026-08-18（第二轮）— 船坞 → 船娘详情链路打通
+
+### 核心成果
+
+**船坞（Dock）→ 船娘详情（GirlInfo）链路已基本打通，界面可正常显示。**
+
+- 船坞按钮出现并可点击打开船坞页面
+- 船坞页面打开无报错
+- 船娘详情页（GirlShowPage）可显示（仍有少量非致命报错）
+
+### 关键认知修正
+
+**船坞按钮「未出现」的真相**：不是协议未满足，而是船上坞按钮位于右侧面板（`config_home_page` hp_id="3"，function_id ["5","7","8"]），由 Unity prefab 控制显隐。`_CreateRight()` 对三个按钮无差别创建图标+点击事件，无任何 Lua 过滤。曾尝试在 `GetComponentsNeed` hook 里用 Lua C API 调 `btn_right1.gameObject:SetActive(true)` 激活，但**无效果**（已回滚）。最终通过清理其他报错、修复登录链路后按钮自然可见。
+
+### 修复的报错清单（共 8 个阻塞点）
+
+| # | 报错位置 | 根因 | 修复 |
+|---|---------|------|------|
+| 1 | `userdata.lua:108` m_TypeNumMap nil | `LoginOk` 事件触发时 `SetCurrency` 尚未执行 | 在 `user.UserLogin` 应答**前**先推送 `user.UpdateUserInfo` |
+| 2 | `activitylogic.lua:432` NewTaskStage nil | 字段 46 未编码 | 添加 `NewTaskStage=7`（先试 0 触发新手引导，改 7 跳过） |
+| 3 | `equipdata.lua:279` EquipsId nil | 空 Equip 消息 `0x12 0x00` 解码成单个空元素 | 去掉空 Equip 消息，只留 `type=0` |
+| 4 | `marrylogic.lua:206` mood nil | `Mood=0` 因 `if != 0` 守卫未编码 | Mood/MarryTime/MarryType 无条件编码 |
+| 5 | `custom_time.lua:153` os.date 失败 | loginTime/loginTimePre 为 0 | 新增 `user.UpdateLoginTime` 推送 |
+| 6 | 黑屏闪退（堆损坏 0xc0000374） | ForceMainStage 在后台线程调 StageMgr.Goto 与主线程竞争 | ForceMainStage 加 2 秒延迟 |
+| 7 | `girlshowpage.lua:300` Exp nil | HeroGrid 字段 5 未编码 | 无条件编码 `Exp=0` |
+| 8 | `shiplogic.lua:989` Replace nil | PSkill 的 Replace(字段4) 未编码，`nil ~= 0` 为真 | PSkill 编码 `Replace=0` |
+
+### 剩余非致命报错（不影响界面，待后续处理）
+
+| 报错 | 说明 |
+|------|------|
+| cjson `Expected ...` (top=1) | 服务端返回空/畸形 JSON，被 `pcall` 保护，属误报 |
+| `functions.lua:1569` Equals nil | `IsNil()` 用 `pcall` 捕获的试探性调用，属误报 |
+| `readonlymeta.lua:38` ipairs(nil) | 改造页 `RemouldLV`/`ArrRemouldEffect` 字段 nil |
+| `homeremouldstate.lua:65` index nil | 改造页 `config_ship_remould_show[nil]` 查询（因 RemouldLV 未编码） |
+
+### 方法论沉淀（重要）
+
+1. **Lua nil 比较陷阱**：`nil ~= 0` 在 Lua 中为**真**。服务端字段为 0 时若不编码，客户端读到 nil，会导致 `if v.Replace ~= 0` 这类判断走错分支（返回 nil 而非跳过）。**凡客户端会读取做比较/拼接/算术的整型字段，必须无条件编码（即使值为 0）**。
+
+2. **空消息编码陷阱**：protobuf 重复字段若编码 `length=0` 的空消息（如 `0x12 0x00`），会被解码成**单个空元素**而非空数组，导致 `element.field` 为 nil。要表示「无数据」应**不编码该字段**，而非编码空消息。
+
+3. **堆损坏排查**：`0xc0000374` 是堆损坏（`ntdll.dll`），非 Lua 逻辑错误。查 Windows 事件日志（`Get-WinEvent Application`）拿到异常码，可快速定位是原生内存问题。本项目的 `ForceMainStage` 从 payload 后台线程调 `StageMgr.Goto` 是根因，延迟只是缓解。
+
+4. **船娘详情的数据依赖**：GirlShowPage 需要 HeroGrid 的 `Exp`(5)、`Lvl`(4)、`CurHp`(9)、`TemplateId`(2)、PSkill 的 `PSkillId`(1)/`PSkillExp`(2)/`Level`(3)/`Replace`(4)。这些字段缺一则属性/技能/经验条显示崩溃。
+
+### 服务器端字段现状（`PlayerDataCodec.cs` HeroGrid）
+
+- 无条件编码：`Exp`(5)、`Mood`(18)、`MarryTime`(19)、`MarryType`(21)
+- 条件编码（非 0）：`HeroId`(1)、`TemplateId`(2)、`Lvl`(4)、`CreateTime`(8)、`CurHp`(9)、`Affection`(17)、`UpdateTime`(20)、`Fashioning`(22)
+- 硬编码字节：`Equips`(3) = type=0；`PSkill`(13) = PSkillId=41210/Exp=0/Level=0/Replace=0
+
+### 下一步方向
+
+- 剩余两个非致命报错集中在**改造（Remould）**模块，需补 `RemouldLV`(26)、`ArrRemouldEffect`(23) 字段
+- 第二梯队继续推进：装备（Equip）、背包（Bag）、学习（Study）

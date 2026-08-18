@@ -14,6 +14,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("client login wire envelope round-trips", ClientLoginWireTest),
     ("temporary game login frame round-trips", GameLoginFrameTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
+    ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
     ("mod manager filters target and orders mods", ModTest),
     ("kcp fragments reassemble across sticky and split buffers", KcpReassemblyTest),
@@ -176,6 +177,42 @@ static async Task GameTest()
     Directory.Delete(root, true);
 }
 
+static async Task AccountStorageTest()
+{
+    var root = Path.Combine(Path.GetTempPath(), "blueoath-tests-" + Guid.NewGuid().ToString("N"));
+    var repo = new SqliteGameRepository(root);
+
+    // 创建档案时应同时播种默认账号（角色 + 船坞）。
+    await repo.CreateAsync("hero", "Hero");
+    var account = await repo.LoadAccountAsync("hero");
+    Assert(account is not null, "account was not created with profile");
+    Assert(account!.Character.Uid == 1 && account.Character.Name == "hero", "character defaults mismatch");
+    Assert(account.Character.SecretaryId == 1, "secretary id mismatch");
+    Assert(account.Dock.Heroes.Count == 1, "dock should contain one hero");
+    Assert(account.Dock.Heroes[0].HeroId == account.Character.SecretaryId, "secretary hero not in dock");
+
+    // 修改并保存账号，验证往返持久化。
+    var updated = account with
+    {
+        Character = account.Character with { Level = 10 },
+        Dock = new HeroDock(
+            [new Hero(1, PlayerAccountFactory.DefaultHeroTemplateId, 5), new Hero(2, 10210512, 3)],
+            BagSize: 200)
+    };
+    await repo.SaveAccountAsync(updated);
+    var reloaded = await repo.LoadAccountAsync("hero");
+    Assert(reloaded is not null, "account was not reloaded");
+    Assert(reloaded!.Character.Level == 10, "character update not persisted");
+    Assert(reloaded.Dock.Heroes.Count == 2 && reloaded.Dock.BagSize == 200, "dock update not persisted");
+
+    // Reset 应同时清除档案与账号。
+    await repo.ResetAsync("hero");
+    Assert(await repo.LoadAsync("hero") is null, "reset did not remove profile");
+    Assert(await repo.LoadAccountAsync("hero") is null, "reset did not remove account");
+
+    Directory.Delete(root, true);
+}
+
 static Task ModTest()
 {
     var root = Path.Combine(Path.GetTempPath(), "blueoath-mod-tests-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
@@ -249,9 +286,15 @@ static async Task GameLoginIntegrationTest()
         {
             var request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
             await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
-            var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
-            Assert(frame is not null, $"empty response for {method}");
-            return TMessageCodec.DecodeResponse(frame!.Value.Payload);
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                var response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                // 服务器可能在应答前主动推送（IsResponse == 0），跳过直到拿到真正响应。
+                if (response.IsResponse == 1)
+                    return response;
+            }
         }
 
         var login = await RoundTrip("player.Login",

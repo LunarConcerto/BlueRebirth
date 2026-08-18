@@ -441,7 +441,7 @@ public sealed record GameLoginFrame(int Operation, byte[] Payload);
 
 public sealed record ClientGameMessage(byte Channel, byte Operation, long SessionId, byte State, byte[] Payload);
 
-public sealed record TUserInfo(ulong Uid = 0, string Uname = "", int Level = 0, int Class = 0);
+public sealed record TUserInfo(ulong Uid = 0, string Uname = "舰长", int Level = 0, int Class = 0);
 
 public static class UserInfoCodec
 {

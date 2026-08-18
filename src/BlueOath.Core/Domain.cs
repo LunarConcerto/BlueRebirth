@@ -16,6 +16,12 @@ public interface IGameRepository
     Task CreateAsync(string profileId, string name, CancellationToken ct = default);
     Task BackupAsync(string profileId, string destination, CancellationToken ct = default);
     Task ResetAsync(string profileId, CancellationToken ct = default);
+
+    /// <summary>加载玩家账号（角色 + 船坞）；不存在时返回 null。</summary>
+    Task<PlayerAccount?> LoadAccountAsync(string profileId, CancellationToken ct = default);
+
+    /// <summary>持久化玩家账号（角色 + 船坞）。</summary>
+    Task SaveAccountAsync(PlayerAccount account, CancellationToken ct = default);
 }
 
 public sealed class GameService(IGameRepository repository, ProtocolProfile profile)

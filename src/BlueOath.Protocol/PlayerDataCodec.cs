@@ -26,7 +26,7 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 
 /// <summary>One hero owned by the player (THeroGrid). Extend with Equips/PSkill/CurHp/etc. as needed.</summary>
 public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
-    int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
+    int Exp = 0, int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
     int CurHp = 0, int Mood = 0, int MarryType = 0);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
@@ -108,10 +108,15 @@ public static class PlayerDataCodec
         // RefreshHeroEquipData 里 equip.EquipsId(nil) > 0 会崩溃。
         output.Write(new byte[] { 0x1A, 0x02, 0x08, 0x00 });
         if (value.Lvl != 0) WriteVarintField(output, 4, unchecked((ulong)value.Lvl));
+        // Exp 必须无条件编码：girlinfo GirlShowPage._LoadPropertInfo 里
+        // math.tointeger(Exp) .. "/" .. needExp 拼接，Exp 为 nil 会崩。
+        WriteVarintField(output, 5, unchecked((ulong)value.Exp));
         if (value.CreateTime != 0) WriteVarintField(output, 8, unchecked((ulong)value.CreateTime));
         if (value.CurHp != 0) WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
-        // PSkill (field 13, repeated): 1 dummy with PSkillId=41210(valid config), Exp=0, Level=0
-        output.Write(new byte[] { 0x6A, 0x08, 0x08, 0xFA, 0xC1, 0x02, 0x10, 0x00, 0x18, 0x00 });
+        // PSkill (field 13, repeated): 1 dummy with PSkillId=41210(valid config),
+        // PSkillExp=0, Level=0, Replace=0. Replace 必须编码为 0，否则 nil ~= 0 为真，
+        // GetReplaceSkillId 会 return nil，导致 GetPSkillName 里 config 查询为 nil 崩溃。
+        output.Write(new byte[] { 0x6A, 0x0A, 0x08, 0xFA, 0xC1, 0x02, 0x10, 0x00, 0x18, 0x00, 0x20, 0x00 });
         if (value.Affection != 0) WriteVarintField(output, 17, unchecked((ulong)value.Affection));
         // Mood/MarryTime/MarryType 必须无条件编码：值为 0 时客户端读到 nil，
         // GetMoodNum/GetLoveInfo 里的算术/比较会崩溃。

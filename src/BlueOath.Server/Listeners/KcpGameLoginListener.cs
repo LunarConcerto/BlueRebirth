@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using BlueOath.Core;
 using BlueOath.Protocol;
 using BlueOath.Server.Hosting;
 using BlueOath.Server.Protocols;
@@ -120,7 +121,7 @@ internal sealed class KcpGameLoginListener : BackgroundService
                 touched = peer;
                 foreach (var message in peer.Connection.Input(packet, now))
                 {
-                    var response = await BuildLoginResponseAsync(message, ct);
+                    var response = await BuildLoginResponseAsync(message, peer, ct);
                     if (response.Length == 0)
                         continue;
                     peer.Connection.Send(response, now);
@@ -140,7 +141,7 @@ internal sealed class KcpGameLoginListener : BackgroundService
         }
     }
 
-    private async Task<byte[]> BuildLoginResponseAsync(byte[] message, CancellationToken ct)
+    private async Task<byte[]> BuildLoginResponseAsync(byte[] message, KcpPeer peer, CancellationToken ct)
     {
         var frame = ClientGameWireCodec.DecodeClientRequest(message);
         _logger.LogInformation(
@@ -148,14 +149,23 @@ internal sealed class KcpGameLoginListener : BackgroundService
             frame.Channel, frame.Operation, frame.SessionId, frame.State);
         if (frame.Channel != ClientGameWireCodec.DefaultChannel)
             return [];
-        // 按操作码路由：登录走 BuildLoginPayloadAsync，C2S 走 BuildC2SResponse。
+        // 按操作码路由：登录走 BuildLoginPayloadAsync（并记录 profileId），
+        // C2S 走 BuildC2SResponse（按该会话已登录的账号读取）。
         var (operation, payload) = frame.Operation switch
         {
-            GameOperationCodes.Login => await _handler.BuildLoginPayloadAsync(frame.Payload, ct),
-            GameOperationCodes.C2S => _handler.BuildC2SResponse(frame.Payload),
+            GameOperationCodes.Login => await HandleLoginAsync(frame.Payload, peer, ct),
+            GameOperationCodes.C2S => await _handler.BuildC2SResponseAsync(
+                TMessageCodec.DecodeRequest(frame.Payload), peer.ProfileId, ct),
             _ => (0, Array.Empty<byte>())
         };
         return operation == 0 ? [] : ClientGameWireCodec.EncodeServerResponse((byte)operation, payload);
+    }
+
+    private async Task<(int Operation, byte[] Payload)> HandleLoginAsync(byte[] payload, KcpPeer peer, CancellationToken ct)
+    {
+        var (operation, responsePayload, profileId) = await _handler.BuildLoginPayloadAsync(payload, ct);
+        peer.ProfileId = profileId;
+        return (operation, responsePayload);
     }
 
     private static uint NowMs() => (uint)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -164,5 +174,6 @@ internal sealed class KcpGameLoginListener : BackgroundService
     {
         public KcpConnection Connection { get; } = connection;
         public IPEndPoint Endpoint { get; set; } = endpoint;
+        public string ProfileId { get; set; } = PlayerAccountFactory.DefaultProfileId;
     }
 }
