@@ -219,7 +219,7 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 |---|------|--------|----------------|------|
 | 2.1 | **船坞 (Dock)** | 3 | `HeroGrid` 列表，退役/锁定 | HeroBag 已推送，可能可打开 |
 | 2.2 | **船娘详情 (GirlInfo)** | 15 | `HeroInfo`，装备/强化/突破/属性 | 装备数据、属性计算 |
-| 2.3 | **装备 (Equip)** | 5 | `EquipList`，`EquipInfo`，强化/突破 | 背包物品数据 |
+| 2.3 | **装备 (Equip)** | 5 | `EquipList`，`EquipInfo`，强化/突破 | 背包物品数据；**已打通**（仓库 + 商店购买 + 穿脱，见会话记录） |
 | 2.4 | **背包 (Bag)** | 12 | `BagInfo`，`GridInfo`，物品使用/出售 | 无 |
 | 2.5 | **学习 (Study)** | 9 | `StudyInfo`，技能学习/加速 | PSkill dummy 数据精度 |
 | 2.6 | **结婚 (Marry)** | 5 | HeroGrid 的 Affection/Marry 字段 | 已预填，可能部分可打开 |
@@ -498,3 +498,51 @@ user.UserLogin 响应 → LuaEvent.LoginOk → LoginStage:_LoginOk
 1. **邮件列表靠 C2S 拉取，不是推送**：邮件页面只在 `updataTog=true` 时才 `SendGetMailList`，`updataTog` 由 `payback.newPayback` 推送置位，缺这条推送 → 邮件页面永远空列表。
 2. **无限领取 = `IsGotReawrd` 恒 0**：客户端 `CanFetchItem` 判 `IsGotReawrd == 0` 才显示领取按钮，服务器不置位即可反复领取。
 3. **货币范围以 UserInfo 字段为准**：`userdata.lua GetCurrency` 映射的才是玩家持久货币，`user_pb.lua TGetUserInfoRet` 无字段的（GAS 等）是战斗/建筑临时值。
+
+---
+
+## 会话记录：2026-08-19 — 装备系统（仓库 + 商店购买 + 舰娘穿脱）打通
+
+### 核心成果
+
+**装备系统全链路打通**：装备仓库容量 2000，商店购买装备物品进入装备仓库，舰娘详情页可正常穿脱装备（到正确槽位）。
+
+### 装备仓库
+
+- 服务端 `PlayerEquip` 实体（`EquipBagSize=2000`，`EquipItem` 列表），登录时推送 `equip.UpdateEquipBagData`。
+- `EquipItem`：`EquipId`（自增唯一实例 ID）、`TemplateId`（config_equip id）、`HeroId`（0=未装备）/ `SlotIndex` 等。
+- 服务重启后 `_nextEquipId` 从存档最大 ID 恢复，避免 ID 冲突。
+
+### 商店购买装备
+
+- `ApplyGoods` 新增 `GoodsTypeEquip(2)` 分支，路由到 `AddEquipItem`（每次调用创建一件装备实例）。
+- 购买后通过 `BuildPostBuyPushesAsync` 推送 `equip.UpdateEquipBagData`。
+
+### 舰娘穿脱装备
+
+- `hero.ChangeEquip`（`THeroChangeEquipArgs{HeroId, Index, EquipId, Type}`）：`EquipId>0` 装备 / `EquipId=0` 卸下。
+- 更新 `Hero.EquipSlots`（6 槽位）和 `EquipItem.HeroId`。
+- 应答后推送 `hero.UpdateHeroBagData` + `equip.UpdateEquipBagData`。
+- HeroGrid Equips 编码对应 `FleetType.Normal=1`，6 个 `EquipsInfo{EquipsId, state}`，`EquipsId` 无条件编码。
+
+### 修复的报错
+
+| 报错 | 根因 | 修复 |
+|------|------|------|
+| `equipdata.lua:66` compare nil | `0 < v.HeroId` 比较，HeroId=0 未编码 → nil | HeroId 无条件编码 |
+| `equiplogic.lua:444` table index nil | `tabSortTool[Tid][Star][EnhanceLv]` 索引，Star/EnhanceLv=0 未编码 → nil | Star/EnhanceLv/EnhanceExp 无条件编码 |
+| 装备到错误槽位 | Lua 1-based 索引 vs C# 0-based 数组 | `index = luaIndex - 1` 转换 |
+
+### 改动文件
+
+- `src/BlueOath.Core/PlayerEntities.cs`：`EquipItem`/`PlayerEquip`/`Hero.EquipSlots`。
+- `src/BlueOath.Protocol/PlayerDataCodec.cs`：`EquipInfo`/`EquipList`/`EquipsInfo`/`EquipsInfoByType` record + `Encode`。
+- `src/BlueOath.Protocol/GameLoginProtocol.cs`：`DecodeHeroChangeEquipArgs`。
+- `src/BlueOath.Server/Protocols/GameLoginMessageHandler.cs`：`AddEquipItem`/`BuildEquipPush`/`BuildChangeEquipRetAsync`/`BuildPostEquipPushesAsync`。
+- `src/BlueOath.Server/Sessions/GameLoginSession.cs`：`hero.ChangeEquip` 后推送 hero + equip。
+
+### 关键知识点
+
+1. **装备字段必须无条件编码**：`EnhanceLv`/`Star`/`HeroId`/`EnhanceExp` 在 `EquipBagOverlay` 里做表索引和比较，值为 0 也必须编码（与 HeroGrid 的 `Exp`/`Mood` 同理）。
+2. **Lua 1-based vs C# 0-based**：客户端 `nIndex` 从 1 开始，服务端数组从 0 开始，`hero.ChangeEquip` 的 Index 参数需要 `-1` 转换。
+3. **装备仓库独立于道具仓库**：`EquipBagSize` 控制装备容量，`EquipInfo` 存储装备实例（含 `HeroId` 标记归属），`EquipNum` 按模板统计数量。

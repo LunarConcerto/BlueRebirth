@@ -236,6 +236,26 @@ public static class TMessageCodec
         return mid;
     }
 
+    // THeroChangeEquipArgs: HeroId(1, uint32), Index(2, int32), EquipId(3, uint32), Type(4, int32)。
+    public static (uint HeroId, int Index, uint EquipId, int Type) DecodeHeroChangeEquipArgs(ReadOnlySpan<byte> payload)
+    {
+        var reader = new PbReader(payload);
+        uint heroId = 0, equipId = 0;
+        int index = 0, type = 0;
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
+                case 2 when wire == 0: index = checked((int)reader.ReadVarint()); break;
+                case 3 when wire == 0: equipId = checked((uint)reader.ReadVarint()); break;
+                case 4 when wire == 0: type = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return (heroId, index, equipId, type);
+    }
+
     // TBuyGoodsRet: Reward(1, repeated TCommonReward)/GoodId(2)/BuyNum(3)。
     public static byte[] EncodeBuyGoodsRet(CommonReward reward, int goodId, int buyNum)
     {

@@ -80,6 +80,10 @@ internal sealed class GameLoginMessageHandler
         {
             ret = await BuildFetchMailRetAsync(request, profileId, now, ct);
         }
+        else if (request.Method == "hero.ChangeEquip")
+        {
+            ret = await BuildChangeEquipRetAsync(request, profileId, ct);
+        }
         else
         {
             ret = request.Method switch
@@ -221,6 +225,9 @@ internal sealed class GameLoginMessageHandler
             // 时装数据推送（已解锁时装）。
             BuildFashionPush(account, now),
 
+            // 装备仓库推送（EquipBagSize=2000，初始空）。
+            BuildEquipPush(account, now),
+
             // 邮件系统触发：payback.newPayback 推送会让 EmailService._TagUpdataMail
             // 置 updataTog=true，玩家打开邮件页面时才 SendGetMailList 拉取邮件列表。
             TMessageCodec.EncodeResponse(new TResponse(
@@ -234,7 +241,10 @@ internal sealed class GameLoginMessageHandler
     {
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is not null)
+        {
+            EnsureEquipIdFromAccount(account);
             return account;
+        }
         var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -265,7 +275,8 @@ internal sealed class GameLoginMessageHandler
 
     private static HeroGrid ToHeroGrid(Hero hero) =>
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
-            hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType);
+            hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType,
+            hero.EquipSlots);
 
     /// <summary>
     /// 由舰娘 TemplateId（config_ship_main 的 key）推导图鉴 IllustrateId
@@ -319,9 +330,22 @@ internal sealed class GameLoginMessageHandler
         return TMessageCodec.EncodeResponse(push);
     }
 
-    // GoodsType 常量（constants.lua）。ITEM=1, CURRENCY=5, EQUIP_ENHANCE_ITEM=6, FASHION=18。
+    // GoodsType 常量（constants.lua）。ITEM=1, EQUIP=2, CURRENCY=5, EQUIP_ENHANCE_ITEM=6, FASHION=18。
     private const int GoodsTypeCurrency = 5;
+    private const int GoodsTypeEquip = 2;
     private const int GoodsTypeFashion = 18;
+    private uint _nextEquipId = 1;
+
+    /// <summary>初始化 _nextEquipId 为账号中最大装备 ID + 1（避免服务重启后 ID 重复）。</summary>
+    private void EnsureEquipIdFromAccount(PlayerAccount account)
+    {
+        if (account.Equip is { Items.Count: > 0 } equip)
+        {
+            var maxId = equip.Items.Max(e => e.EquipId);
+            if (maxId >= _nextEquipId)
+                _nextEquipId = maxId + 1;
+        }
+    }
 
     /// <summary>
     /// 处理 shop.BuyGoods：免费发放商品内容到对应存储（GM 功能，不扣货币）。
@@ -392,6 +416,12 @@ internal sealed class GameLoginMessageHandler
         {
             account = AddFashion(account, goods.ConfigId);
         }
+        else if (goods.Type == GoodsTypeEquip)
+        {
+            // 装备：每个商品条目发放一件装备实例（EquipId 自增），存入装备仓库
+            for (var i = 0; i < totalNum; i++)
+                account = AddEquipItem(account, goods.ConfigId);
+        }
         else
         {
             account = AddBagItem(account, goods.ConfigId, totalNum);
@@ -450,6 +480,16 @@ internal sealed class GameLoginMessageHandler
         return account with { Bag = bag with { Items = items } };
     }
 
+    /// <summary>装备入库：创建一件装备实例（EquipId 自增），存入装备仓库。</summary>
+    private PlayerAccount AddEquipItem(PlayerAccount account, int templateId)
+    {
+        var equip = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
+        var items = equip.Items.ToList();
+        var id = _nextEquipId++;
+        items.Add(new EquipItem(EquipId: id, TemplateId: templateId));
+        return account with { Equip = equip with { Items = items } };
+    }
+
     private PlayerAccount AddFashion(PlayerAccount account, int fashionTid)
     {
         var fashion = account.Fashion ?? new PlayerFashion([]);
@@ -492,7 +532,19 @@ internal sealed class GameLoginMessageHandler
         return TMessageCodec.EncodeResponse(push);
     }
 
-    /// <summary>购买后的数据推送（货币 + 仓库 + 时装），供会话在 shop.BuyGoods 应答后发出。</summary>
+    /// <summary>装备仓库推送（equip.UpdateEquipBagData）。</summary>
+    public byte[] BuildEquipPush(PlayerAccount account, uint now)
+    {
+        var equip = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
+        var info = equip.Items.Select(e => new EquipInfo(e.EquipId, e.TemplateId, e.EnhanceLv,
+            e.Star, e.HeroId, e.EnhanceExp)).ToList();
+        var push = new TResponse(Method: "equip.UpdateEquipBagData",
+            Ret: PlayerDataCodec.Encode(new EquipList(EquipBagSize: equip.EquipBagSize, EquipInfo: info)),
+            Time: now);
+        return TMessageCodec.EncodeResponse(push);
+    }
+
+    /// <summary>购买后的数据推送（货币 + 仓库 + 时装 + 装备），供会话在 shop.BuyGoods 应答后发出。</summary>
     public async Task<IReadOnlyList<byte[]>> BuildPostBuyPushesAsync(string profileId, uint now, CancellationToken ct)
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
@@ -501,6 +553,7 @@ internal sealed class GameLoginMessageHandler
             await BuildUpdateUserInfoPushAsync(profileId, now, ct),
             BuildBagPush(account, now),
             BuildFashionPush(account, now),
+            BuildEquipPush(account, now),
         ];
     }
 
@@ -543,6 +596,81 @@ internal sealed class GameLoginMessageHandler
             await _repo.SaveAccountAsync(account, ct);
         var list = BuildMailEntities(now);
         return PlayerDataCodec.Encode(new MailListRet(MailNum: list.Count, List: list, Reward: rewards));
+    }
+
+    /// <summary>
+    /// 处理 hero.ChangeEquip：装备穿脱（EquipId&gt;0 = 装备，EquipId=0 = 卸下）。
+    /// 更新 Hero.EquipSlots 和 EquipItem.HeroId，落盘后返回空响应（客户端通过推送刷新）。
+    /// </summary>
+    private async Task<byte[]> BuildChangeEquipRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null)
+            return [];
+        var (heroId, luaIndex, equipId, _) = TMessageCodec.DecodeHeroChangeEquipArgs(request.Args);
+        // Lua 客户端发送 1-based 索引，C# 数组是 0-based，需要转换。
+        var index = luaIndex - 1;
+        if (index < 0 || index >= 6)
+            return [];
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+
+        var dock = account.Dock;
+        var heroList = dock.Heroes.ToList();
+        var heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0)
+            return [];
+        var hero = heroList[heroIdx];
+
+        // 获取当前装备槽数组
+        var slots = (hero.EquipSlots ?? new uint[] { 0, 0, 0, 0, 0, 0 }).ToArray();
+
+        // 如果旧槽有装备，先卸下
+        var oldEquipId = slots[index];
+        if (oldEquipId != 0)
+        {
+            account = SetEquipHeroId(account, oldEquipId, 0);
+            slots[index] = 0;
+        }
+
+        // 新装备上装
+        if (equipId != 0)
+        {
+            account = SetEquipHeroId(account, equipId, heroId);
+            slots[index] = equipId;
+        }
+
+        heroList[heroIdx] = hero with { EquipSlots = slots };
+        account = account with { Dock = dock with { Heroes = heroList } };
+        await _repo.SaveAccountAsync(account, ct);
+
+        return [];
+    }
+
+    /// <summary>设置装备的 HeroId（装备/卸下）。</summary>
+    private static PlayerAccount SetEquipHeroId(PlayerAccount account, uint equipId, uint heroId)
+    {
+        var equip = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
+        var items = equip.Items.ToList();
+        var idx = items.FindIndex(e => e.EquipId == equipId);
+        if (idx >= 0)
+            items[idx] = items[idx] with { HeroId = heroId };
+        return account with { Equip = equip with { Items = items } };
+    }
+
+    /// <summary>
+    /// 装备穿脱后的数据推送（英雄 + 装备），供会话在 hero.ChangeEquip 应答后发出。
+    /// </summary>
+    public async Task<IReadOnlyList<byte[]>> BuildPostEquipPushesAsync(string profileId, uint now, CancellationToken ct)
+    {
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
+        return
+        [
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "hero.UpdateHeroBagData",
+                Ret: PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize)),
+                Time: now)),
+            BuildEquipPush(account, now),
+        ];
     }
 }
 

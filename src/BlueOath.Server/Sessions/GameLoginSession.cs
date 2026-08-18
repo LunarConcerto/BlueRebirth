@@ -122,6 +122,19 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                             "game-login[{ConnectionId}] push post-mail user info bytes={Bytes} hex={Hex}",
                             connectionId, push.Length, Convert.ToHexString(push));
                     }
+
+                    // 装备穿脱应答后，推送更新后的英雄 + 装备数据。
+                    if (request.Method == "hero.ChangeEquip")
+                    {
+                        var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                        foreach (var extra in await _handler.BuildPostEquipPushesAsync(profileId, now, ct))
+                        {
+                            await NetSocketFrameCodec.WriteAsync(stream, extra, NetSocketFrameCodec.TypeData, ct);
+                            _fileLogger.LogInformation(
+                                "game-login[{ConnectionId}] push post-equip bytes={Bytes} hex={Hex}",
+                                connectionId, extra.Length, Convert.ToHexString(extra));
+                        }
+                    }
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

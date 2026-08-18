@@ -29,7 +29,7 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 /// <summary>One hero owned by the player (THeroGrid). Extend with Equips/PSkill/CurHp/etc. as needed.</summary>
 public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
     int Exp = 0, int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
-    int CurHp = 0, int Mood = 0, int MarryType = 0);
+    int CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -85,6 +85,24 @@ public sealed record FashionInfo(int SfId = 0, IReadOnlyList<int>? FashionTid = 
 
 /// <summary>时装列表（TFashionList）。</summary>
 public sealed record FashionList(IReadOnlyList<FashionInfo>? FashionInfo = null);
+
+/// <summary>单个装备实例（TEquipInfo）。字段号取自 equip_pb.lua。</summary>
+public sealed record EquipInfo(uint EquipId = 0, int TemplateId = 0, int EnhanceLv = 0,
+    int Star = 0, uint HeroId = 0, int EnhanceExp = 0);
+
+/// <summary>装备仓库推送（TEquipList）。EquipNum 可选，客户端补零。</summary>
+public sealed record EquipList(int EquipBagSize = 0,
+    IReadOnlyList<EquipInfo>? EquipInfo = null,
+    IReadOnlyList<EquipNum>? EquipNum = null);
+
+/// <summary>装备数量统计（TEquipNum）。</summary>
+public sealed record EquipNum(int TemplateId = 0, int Num = 0);
+
+/// <summary>HeroGrid 装备槽信息（EquipsInfo）。EquipsId=0 表示空槽。</summary>
+public sealed record EquipsInfo(uint EquipsId = 0, int State = 0);
+
+/// <summary>HeroGrid 按舰队类型分组的装备列表（EquipsInfoByType）。</summary>
+public sealed record EquipsInfoByType(int Type = 1, IReadOnlyList<EquipsInfo>? Equip = null);
 
 /// <summary>邮件附件条目（TMailItem）。Type 对应 GoodsType，Id 对应货币/物品 id。</summary>
 public sealed record MailItem(int Type = 0, int Id = 0, int Num = 0);
@@ -169,10 +187,16 @@ public static class PlayerDataCodec
         using var output = new MemoryStream();
         if (value.HeroId != 0) WriteVarintField(output, 1, value.HeroId);
         if (value.TemplateId != 0) WriteVarintField(output, 2, unchecked((ulong)value.TemplateId));
-        // Equips (field 3, repeated): 1 dummy with type=0, no Equip field.
-        // 不要编码空 Equip 消息(0x12 0x00)，否则被解码成一个空 EquipsInfo，
-        // RefreshHeroEquipData 里 equip.EquipsId(nil) > 0 会崩溃。
-        output.Write(new byte[] { 0x1A, 0x02, 0x08, 0x00 });
+        // Equips (field 3, repeated)：每个 FleetType 编码一个 EquipsInfoByType。
+        // EquipsId 无条件编码 0：RefreshHeroEquipData 里 `equip.EquipsId > 0` 判断，nil 会崩。
+        var slots = value.EquipSlots;
+        var equipInfos = new List<EquipsInfo>(6);
+        for (var i = 0; i < 6; i++)
+        {
+            var slotId = slots != null && i < slots.Count ? slots[i] : 0u;
+            equipInfos.Add(new EquipsInfo(slotId));
+        }
+        WriteMessage(output, 3, Encode(new EquipsInfoByType(1, equipInfos)));
         if (value.Lvl != 0) WriteVarintField(output, 4, unchecked((ulong)value.Lvl));
         // Exp 必须无条件编码：girlinfo GirlShowPage._LoadPropertInfo 里
         // math.tointeger(Exp) .. "/" .. needExp 拼接，Exp 为 nil 会崩。
@@ -393,6 +417,61 @@ public static class PlayerDataCodec
         if (value.Type != 0) WriteVarintField(output, 1, unchecked((ulong)value.Type));
         if (value.Id != 0) WriteVarintField(output, 2, unchecked((ulong)value.Id));
         if (value.Num != 0) WriteVarintField(output, 3, unchecked((ulong)value.Num));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(EquipList value)
+    {
+        using var output = new MemoryStream();
+        // EquipBagSize 无条件编码：equipdata.EquipBagSize 初始为 0（nil），客户端读为 0
+        // 会导致装备仓库容量为 0、无法存放装备。
+        WriteVarintField(output, 1, unchecked((ulong)value.EquipBagSize));
+        if (value.EquipInfo is not null)
+            foreach (var item in value.EquipInfo) WriteMessage(output, 2, Encode(item));
+        if (value.EquipNum is not null)
+            foreach (var item in value.EquipNum) WriteMessage(output, 3, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(EquipInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.EquipId != 0) WriteVarintField(output, 1, value.EquipId);
+        if (value.TemplateId != 0) WriteVarintField(output, 2, unchecked((ulong)value.TemplateId));
+        // EnhanceLv/Star/HeroId/EnhanceExp 无条件编码：EquipBagOverlay 里
+        // tabSortTool[Tid][Star][EnhanceLv] 索引 + `0 < HeroId` 比较 + EnhanceExp 算术，
+        // nil 都会崩溃。
+        WriteVarintField(output, 3, unchecked((ulong)value.EnhanceLv));
+        WriteVarintField(output, 4, unchecked((ulong)value.Star));
+        WriteVarintField(output, 5, value.HeroId);
+        WriteVarintField(output, 6, unchecked((ulong)value.EnhanceExp));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(EquipNum value)
+    {
+        using var output = new MemoryStream();
+        if (value.TemplateId != 0) WriteVarintField(output, 1, unchecked((ulong)value.TemplateId));
+        if (value.Num != 0) WriteVarintField(output, 2, unchecked((ulong)value.Num));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(EquipsInfoByType value)
+    {
+        using var output = new MemoryStream();
+        if (value.Type != 0) WriteVarintField(output, 1, unchecked((ulong)value.Type));
+        if (value.Equip is not null)
+            foreach (var item in value.Equip) WriteMessage(output, 2, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(EquipsInfo value)
+    {
+        using var output = new MemoryStream();
+        // EquipsId 无条件编码：EquipData.RefreshHeroEquipData 里
+        // `equip.EquipsId > 0` 判断，nil 会崩。
+        WriteVarintField(output, 1, value.EquipsId);
+        if (value.State != 0) WriteVarintField(output, 2, unchecked((ulong)value.State));
         return output.ToArray();
     }
 

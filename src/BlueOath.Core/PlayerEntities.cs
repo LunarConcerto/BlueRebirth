@@ -54,7 +54,8 @@ public sealed record Hero(
     int MarryTime = 0,
     int CurHp = 0,
     int Mood = 0,
-    int MarryType = 0);
+    int MarryType = 0,
+    IReadOnlyList<uint>? EquipSlots = null);
 
 /// <summary>
 /// 船坞（玩家拥有的全部舰娘）。对应 <c>hero.UpdateHeroBagData</c> 的 HeroBag
@@ -76,6 +77,20 @@ public sealed record FashionEntry(int SfId, IReadOnlyList<int> FashionTids);
 /// <summary>玩家已解锁时装（通用解锁状态，对船坞里同 SfId 的所有角色生效）。</summary>
 public sealed record PlayerFashion(IReadOnlyList<FashionEntry> Entries);
 
+/// <summary>单个装备实例（TEquipInfo）。EquipId 是服务端分配的唯一实例 ID。</summary>
+public sealed record EquipItem(
+    uint EquipId,
+    int TemplateId,
+    int EnhanceLv = 0,
+    int Star = 0,
+    uint HeroId = 0,
+    int EnhanceExp = 0);
+
+/// <summary>装备仓库（TEquipList）。EquipBagSize 为装备仓库容量上限。</summary>
+public sealed record PlayerEquip(
+    IReadOnlyList<EquipItem> Items,
+    int EquipBagSize = 2000);
+
 /// <summary>
 /// 玩家账号聚合（角色 + 船坞 + 仓库 + 时装）。存档数据库中实际存在的实体根，
 /// 后续如需加入建造/浴室/建筑等玩家域数据，可在此扩展新的成员（保持向后兼容：
@@ -86,7 +101,8 @@ public sealed record PlayerAccount(
     PlayerCharacter Character,
     HeroDock Dock,
     PlayerBag? Bag = null,
-    PlayerFashion? Fashion = null);
+    PlayerFashion? Fashion = null,
+    PlayerEquip? Equip = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
@@ -133,7 +149,8 @@ public static class PlayerAccountFactory
         var dock = new HeroDock([hero], BagSize: 100);
         var bag = new PlayerBag([], BagSize: 100);
         var fashion = new PlayerFashion([]);
-        return new PlayerAccount(profileId, character, dock, bag, fashion);
+        var equip = new PlayerEquip([], EquipBagSize: 2000);
+        return new PlayerAccount(profileId, character, dock, bag, fashion, equip);
     }
 }
 
