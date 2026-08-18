@@ -31,6 +31,22 @@ New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $tlsRoot -Force | Out-Null
 if (-not $KeepLog -and (Test-Path -LiteralPath $payloadLog)) { Remove-Item -LiteralPath $payloadLog -Force }
 
+# --------------------------------------- cleanup leftover processes ----
+# Kill leftover server/game processes from a previous abnormal exit so they
+# don't keep holding port 7201/7080 and block the next startup.
+Write-Host '[cleanup] killing leftover server/game processes...' -ForegroundColor Cyan
+Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -match 'BlueOath\.Server\.dll' } |
+  ForEach-Object {
+    Write-Host ('  killing leftover server PID ' + $_.ProcessId) -ForegroundColor DarkGray
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+Get-Process -Name 'blueoath', 'clsy' -ErrorAction SilentlyContinue |
+  ForEach-Object {
+    Write-Host ('  killing leftover game PID ' + $_.Id) -ForegroundColor DarkGray
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+  }
+
 $serverDll = Join-Path $root 'src\BlueOath.Server\bin\Debug\net8.0\BlueOath.Server.dll'
 if (-not (Test-Path -LiteralPath $serverDll)) { throw "Server assembly missing: $serverDll" }
 

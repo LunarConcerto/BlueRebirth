@@ -377,6 +377,7 @@ void CloseSdkWebView() {
 bool sdkLoginHookApplied = false;
 
 bool getUserExtraSeen = false;
+uint64_t getUserExtraSeenAt = 0;
 
 void __cdecl HookSdkLogin() {
     Log("sdk login intercepted (new_sdk.login)");
@@ -542,6 +543,7 @@ int __cdecl HookCallUniversalWebFunction(const char* a, const char* b, const cha
         " c=" + SafeStr(c));
     if (b && strstr(b, "getuserextra") != nullptr) {
         getUserExtraSeen = true;
+        getUserExtraSeenAt = GetTickCount64();
     }
     const auto result = originalCallUniversalWebFunction(a, b, c);
     Log("sdk callUniversalWebFunction result=" + std::to_string(result));
@@ -642,6 +644,13 @@ void* logError2Stolen = nullptr;
 bool logError2HookApplied = false;
 void* logException2Stolen = nullptr;
 bool logException2HookApplied = false;
+void* getComponentsNeedStolen = nullptr;
+bool getComponentsNeedHookApplied = false;
+uintptr_t getComponentsNeedResult = 0;
+void* luaPcallKStolen = nullptr;
+bool luaPcallKHookApplied = false;
+int luaPcallKResult = 0;
+uintptr_t luaPcallKLState = 0;
 
 void LogIl2CppString(const char* label, void* str) {
     std::string name;
@@ -815,6 +824,135 @@ void LogLogException2(void* exception) {
     const auto msg = ReadPtrSafe(reinterpret_cast<uintptr_t>(exception) + 0x8);
     Log("Debug.LogException(2arg) called exception=" + std::to_string(reinterpret_cast<uintptr_t>(exception)) +
         " msg=" + ReadIl2CppString(reinterpret_cast<void*>(msg)));
+}
+
+// xLua Lua 5.3 native layer (xlua.dll), used to inject shop_reddot into the
+// widget LuaTable returned by GetComponentsNeed.
+typedef void* LuaStateRaw;
+typedef int(__cdecl* lua_rawgeti_t)(LuaStateRaw, int, long long);
+typedef int(__cdecl* lua_getfield_t)(LuaStateRaw, int, const char*);
+typedef void(__cdecl* lua_setfield_t)(LuaStateRaw, int, const char*);
+typedef void(__cdecl* lua_settop_t)(LuaStateRaw, int);
+typedef int(__cdecl* lua_type_t)(LuaStateRaw, int);
+typedef int(__cdecl* lua_gettop_t)(LuaStateRaw);
+typedef int(__cdecl* lua_next_t)(LuaStateRaw, int);
+typedef void(__cdecl* lua_pushnil_t)(LuaStateRaw);
+typedef const char*(__cdecl* lua_tolstring_t)(LuaStateRaw, int, size_t*);
+typedef void(__cdecl* lua_createtable_t)(LuaStateRaw, int, int);
+typedef void(__cdecl* lua_pushcclosure_t)(LuaStateRaw, int(__cdecl*)(LuaStateRaw), int);
+typedef void(__cdecl* lua_pushinteger_t)(LuaStateRaw, long long);
+
+lua_pushinteger_t g_pushInteger = nullptr;
+lua_createtable_t g_createTable = nullptr;
+lua_setfield_t g_setField = nullptr;
+
+void LogLuaPcallError(void* L, int status) {
+    if (status == 0) return;
+    auto xlua = GetModuleHandleW(L"xlua.dll");
+    if (!xlua) return;
+    const auto tolstring = reinterpret_cast<lua_tolstring_t>(GetProcAddress(xlua, "lua_tolstring"));
+    const auto gettop = reinterpret_cast<lua_gettop_t>(GetProcAddress(xlua, "lua_gettop"));
+    size_t len = 0;
+    const char* msg = tolstring ? tolstring(L, -1, &len) : nullptr;
+    const int top = gettop ? gettop(L) : -1;
+    if (msg && len > 0 && len < 65536) {
+        Log("LuaPcallError status=" + std::to_string(status) + " top=" + std::to_string(top) +
+            " msg=" + std::string(msg, len));
+    } else {
+        Log("LuaPcallError status=" + std::to_string(status) + " top=" + std::to_string(top) +
+            " msg=<unreadable>");
+    }
+}
+
+static int RedDotNoop(LuaStateRaw) { return 0; }
+
+static int RedDotReturn0(LuaStateRaw L) {
+    if (g_pushInteger) g_pushInteger(L, 0LL);
+    return 1;
+}
+
+static int RedDotReturn2(LuaStateRaw L) {
+    if (g_pushInteger) g_pushInteger(L, 2LL);
+    return 1;
+}
+
+static int RedDotReturnEmptyTable(LuaStateRaw L) {
+    if (g_createTable) g_createTable(L, 0, 0);
+    return 1;
+}
+
+static int RedDotReturnImageTable(LuaStateRaw L) {
+    if (g_createTable && g_setField) {
+        g_createTable(L, 0, 0);  // outer {image = ...}
+        g_createTable(L, 0, 0);  // inner image table
+        g_setField(L, -2, "image");
+    }
+    return 1;
+}
+
+void InjectShopRedDot(void* table) {
+    const auto luaEnv = ReadPtrSafe(reinterpret_cast<uintptr_t>(table) + 0x10);
+    const auto L = reinterpret_cast<LuaStateRaw>(luaEnv ? ReadPtrSafe(luaEnv + 0x8) : 0);
+    const auto luaRef = *reinterpret_cast<const int*>(reinterpret_cast<const char*>(table) + 0xC);
+    if (!L || !luaRef) return;
+    const auto xlua = GetModuleHandleW(L"xlua.dll");
+    if (!xlua) return;
+    const auto resolve = [&](const char* n) { return reinterpret_cast<void*>(GetProcAddress(xlua, n)); };
+    const auto rawgeti = reinterpret_cast<lua_rawgeti_t>(resolve("lua_rawgeti"));
+    const auto setfield = reinterpret_cast<lua_setfield_t>(resolve("lua_setfield"));
+    const auto settop = reinterpret_cast<lua_settop_t>(resolve("lua_settop"));
+    const auto gettop = reinterpret_cast<lua_gettop_t>(resolve("lua_gettop"));
+    const auto createTable = reinterpret_cast<lua_createtable_t>(resolve("lua_createtable"));
+    const auto pushcclosure = reinterpret_cast<lua_pushcclosure_t>(resolve("lua_pushcclosure"));
+    const auto pushInteger = reinterpret_cast<lua_pushinteger_t>(resolve("lua_pushinteger"));
+    if (!rawgeti || !setfield || !settop || !gettop || !createTable || !pushcclosure || !pushInteger) {
+        Log("InjectShopRedDot: Lua API unresolved");
+        return;
+    }
+    g_pushInteger = pushInteger;
+    g_createTable = createTable;
+    g_setField = setfield;
+    constexpr int LUA_REGISTRYINDEX = -1001000;
+    const int top = gettop(L);
+    rawgeti(L, LUA_REGISTRYINDEX, static_cast<long long>(luaRef));  // push widget table
+
+    const auto nextFn = reinterpret_cast<lua_next_t>(resolve("lua_next"));
+    const auto pushnil = reinterpret_cast<lua_pushnil_t>(resolve("lua_pushnil"));
+    const auto tolstring = reinterpret_cast<lua_tolstring_t>(resolve("lua_tolstring"));
+    if (nextFn && pushnil && tolstring) {
+        std::string keys;
+        pushnil(L);
+        while (nextFn(L, -2) != 0) {
+            size_t len = 0;
+            const char* k = tolstring(L, -2, &len);
+            if (k && len > 0 && len < 256) {
+                if (!keys.empty()) keys += ",";
+                keys += std::string(k, len);
+            }
+            settop(L, -2);
+        }
+        Log("WidgetKeys: " + keys);
+    }
+
+    // Build a dummy red-dot Lua table with no-op methods so RegisterRedDotById
+    // doesn't throw on the missing shop_reddot prefab widget.
+    createTable(L, 0, 0);  // dummy
+    pushcclosure(L, &RedDotNoop, 0); setfield(L, -2, "SetKeys");
+    createTable(L, 0, 0);  // dummy.gameObject
+    pushcclosure(L, &RedDotNoop, 0); setfield(L, -2, "SetActive");
+    setfield(L, -2, "gameObject");
+    pushcclosure(L, &RedDotReturn0, 0); setfield(L, -2, "GetId");
+    pushcclosure(L, &RedDotNoop, 0); setfield(L, -2, "SetLuaFunction");
+    pushcclosure(L, &RedDotReturnEmptyTable, 0); setfield(L, -2, "GetKeys");
+    pushcclosure(L, &RedDotReturnEmptyTable, 0); setfield(L, -2, "GetImage");
+    pushcclosure(L, &RedDotReturn2, 0); setfield(L, -2, "GetRedDotType");
+    pushcclosure(L, &RedDotNoop, 0); setfield(L, -2, "GetToggle");
+    pushcclosure(L, &RedDotNoop, 0); setfield(L, -2, "SetComment");
+    pushcclosure(L, &RedDotNoop, 0); setfield(L, -2, "SetTextByNumber");
+
+    setfield(L, -2, "shop_reddot");  // widgetTable["shop_reddot"] = dummy
+    settop(L, top);
+    Log("InjectShopRedDot: injected dummy shop_reddot");
 }
 
 typedef void(__cdecl* StageGotoFn)(void* self, int nextStateType, void* enterParam, int allowSameState);
@@ -1353,6 +1491,62 @@ __declspec(naked) void LogException2Trampoline() {
     }
 }
 
+// POST-CALL hook: after the original GetComponentsNeed returns, inject shop_reddot.
+__declspec(naked) void GetComponentsNeedTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 44]
+        mov ecx, dword ptr [esp + 40]
+        mov edx, dword ptr [esp + 36]
+        push eax
+        push ecx
+        push edx
+        call dword ptr [getComponentsNeedStolen]
+        add esp, 12
+        mov dword ptr [getComponentsNeedResult], eax
+        push eax
+        call InjectShopRedDot
+        add esp, 4
+        popad
+        mov eax, dword ptr [getComponentsNeedResult]
+        ret
+    }
+}
+
+// POST-CALL hook on xlua.dll lua_pcallk (L, nargs, nresults, errfunc, ctx, k).
+// Captures the error message left on the Lua stack when the protected call fails.
+__declspec(naked) void LuaPcallKTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]   ; L
+        mov dword ptr [luaPcallKLState], eax
+        mov ecx, dword ptr [esp + 40]   ; nargs
+        mov edx, dword ptr [esp + 44]   ; nresults
+        mov ebx, dword ptr [esp + 48]   ; errfunc
+        mov esi, dword ptr [esp + 52]   ; ctx
+        mov edi, dword ptr [esp + 56]   ; k
+        push edi
+        push esi
+        push ebx
+        push edx
+        push ecx
+        push eax
+        call dword ptr [luaPcallKStolen]
+        add esp, 24
+        mov dword ptr [luaPcallKResult], eax
+        test eax, eax
+        je no_err
+        push eax
+        push dword ptr [luaPcallKLState]
+        call LogLuaPcallError
+        add esp, 8
+    no_err:
+        popad
+        mov eax, dword ptr [luaPcallKResult]
+        ret
+    }
+}
+
 bool InstallStrArgHook(uintptr_t rva, void* trampoline, void** stolenOut, size_t stolenLen, const char* name) {
     auto ga = GetModuleHandleW(L"GameAssembly.dll");
     if (!ga) return false;
@@ -1394,6 +1588,52 @@ bool InstallStrArgHook(uintptr_t rva, void* trampoline, void** stolenOut, size_t
     FlushInstructionCache(GetCurrentProcess(), address, stolenLen);
     Log(std::string(name) + " hook applied");
     return true;
+}
+
+bool InstallXluaExportHook(const char* exportName, void* trampoline, void** stolenOut, size_t stolenLen, const char* name) {
+    auto xlua = GetModuleHandleW(L"xlua.dll");
+    if (!xlua) return false;
+    const auto proc = GetProcAddress(xlua, exportName);
+    if (!proc) return false;
+    auto address = reinterpret_cast<unsigned char*>(proc);
+    const unsigned char expected[] = { 0x55, 0x8B, 0xEC };
+    if (memcmp(address, expected, sizeof(expected)) != 0) {
+        char actual[16]{};
+        for (int i = 0; i < 6; ++i) { char b[4]{}; sprintf_s(b, "%02X ", address[i]); strcat_s(actual, b); }
+        Log(std::string(name) + " hook refused: prologue mismatch actual=" + actual);
+        return false;
+    }
+    auto stolen = VirtualAlloc(nullptr, stolenLen + 7, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!stolen) return false;
+    auto s = reinterpret_cast<unsigned char*>(stolen);
+    memcpy(s, address, stolenLen);
+    int pos = static_cast<int>(stolenLen);
+    auto backTarget = reinterpret_cast<uintptr_t>(address) + stolenLen;
+    s[pos++] = 0xE9;
+    int32_t backRel = static_cast<int32_t>(backTarget - (reinterpret_cast<uintptr_t>(stolen) + pos + 4));
+    memcpy(s + pos, &backRel, 4);
+    pos += 4;
+    *stolenOut = stolen;
+    const auto tramp = reinterpret_cast<uintptr_t>(trampoline);
+    const auto rel = static_cast<int32_t>(tramp - (reinterpret_cast<uintptr_t>(address) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(address, stolenLen, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+    memcpy(address, jump, 5);
+    for (size_t i = 5; i < stolenLen; ++i) address[i] = 0x90;
+    VirtualProtect(address, stolenLen, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), address, stolenLen);
+    Log(std::string(name) + " hook applied");
+    return true;
+}
+
+void TryApplyLuaPcallKHook() {
+    if (luaPcallKHookApplied) return;
+    if (InstallXluaExportHook("lua_pcallk", &LuaPcallKTrampoline, &luaPcallKStolen, 14, "lua_pcallk")) {
+        luaPcallKHookApplied = true;
+    }
 }
 
 void TryApplyPageOpenHook() {
@@ -1550,6 +1790,12 @@ void TryApplyLogException2Hook() {
     if (logException2HookApplied) return;
     logException2HookApplied = true;
     InstallStrArgHook(0xE51750, &LogException2Trampoline, &logException2Stolen, 10, "Debug.LogException(2arg)");
+}
+
+void TryApplyGetComponentsNeedHook() {
+    if (getComponentsNeedHookApplied) return;
+    getComponentsNeedHookApplied = true;
+    InstallStrArgHook(0x279EB0, &GetComponentsNeedTrampoline, &getComponentsNeedStolen, 11, "UILuaPage.GetComponentsNeed");
 }
 
 void TryApplyUnityTlsPatch() {
@@ -1926,6 +2172,8 @@ void InitializeHooks(HMODULE module) {
         TryApplyLogExceptionHook();
         TryApplyLogError2Hook();
         TryApplyLogException2Hook();
+        TryApplyGetComponentsNeedHook();
+        TryApplyLuaPcallKHook();
         TryApplySdkLoginHook();
         TryApplyLoginMethodHook();
         TrySetSimulationMode();
@@ -1937,7 +2185,7 @@ void InitializeHooks(HMODULE module) {
         HideCefWebView();
         LogHotPatchState();
         LogNetLogicState();
-        if (getUserExtraSeen) {
+        if (getUserExtraSeen && GetTickCount64() - getUserExtraSeenAt >= 2000) {
             ForceMainStage();
         }
         Sleep(500);

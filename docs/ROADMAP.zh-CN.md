@@ -136,3 +136,131 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 - 用同一套测试 fixture 验证国服对应流程。
 
 完成标准：新增客户端版本主要通过生成适配器和补充证据完成，而非复制业务代码。
+
+---
+
+## 会话记录：2026-08-18 — JP 1.4.0 看板船娘加载攻关
+
+### 核心成果
+
+**3D 看板船娘（UIShipProxy）成功加载。** `UIShipProxy.ctor called` / `LoadModel called` 出现在日志中。
+
+### 攻关方法论
+
+**关键转折：安装 `lua_pcallk` 错误探针。** xLua 框架在页面 `DoOnOpen` 中抛出的 Lua 运行时错误（nil 索引等）会被静默吞掉，既不进 `Debug.LogError` 也不进 `Debug.LogException`。此前一直在"盲修"——猜一个缺失字段，补上，下一个 nil 再猜。装了探针（hook `xlua.dll` 的 `lua_pcallk`）后，每次运行时错误都会被完整打印到日志，包含 `homepage.lua:行号` 和具体字段名。
+
+### 修复的阻塞点（共 8 个）
+
+| # | 阻塞点 | 缺失数据 | 错误 |
+|---|--------|---------|------|
+| 1 | `RegisterAllEvent` → `shop_reddot` nil | JP prefab 缺 widget | `GetComponentsNeed` POST-CALL 注入 Lua dummy table |
+| 2 | `_PlayerData` → `ServerId` nil | UserInfo 字段 56 | `ServerId=1` |
+| 3 | `_PlayerData` → `Exp` nil | UserInfo 字段 11 | `Exp=0` |
+| 4 | `DoOnOpen` → `TopShowPvePt` → `SetText(nil)` | UserInfo 字段 62 `PvePt` | `PvePt=100` |
+| 5 | `homefunitem` → `GetSpecialPlots` → `pairs(nil)` | BuildingInfo 缺 `SpecialPlotDatas` | `building.UpdateBuildingInfo` 推送 dummy 数据 |
+| 6 | `_PlayerData` → `GetLoveNum` → `startTime` nil | HeroGrid 字段 20 `UpdateTime` | `UpdateTime=now` |
+| 7 | `_PlayerData` → `GetLoveInfo` → `loveInfo` nil | HeroGrid 字段 17 `Affection` | `Affection=1000` |
+| 8 | `_PlayerData` → `GetHeroHp` → `CurHp` nil | HeroGrid 字段 9 `CurHp` | `CurHp=1000` |
+
+### 预填的字段（主动分析，非崩溃驱动）
+
+| # | 数据结构 | 字段 | 值 | 原因 |
+|---|---------|------|-----|------|
+| 9 | HeroGrid | `Equips` (3) | dummy 元素 | `_SetExtraInfo` 中 `ipairs(nil)` 崩溃 |
+| 10 | HeroGrid | `PSkill` (13) | dummy 元素 (PSkillId=41210) | 同上 |
+| 11 | HeroGrid | `Mood` (18) | 0 | `GetMoodNum` 算术运算 |
+| 12 | HeroGrid | `MarryType` (21) | 0 | `GetLoveInfo` 分支判断 |
+| 13 | UserInfo | `Medal` (39) | 0 | `_ShowMedal` → `GetCurrency(MEDAL)` |
+| 14 | UserInfo | `HeadShow` (44) | 0 | `_ReverseMask` / `_SetSecretary` 检查 |
+| 15 | HeroGrid | `CreateTime` (8) | now | `_SetExtraInfo` 使用 |
+
+### 关键基础设施变更
+
+1. **`lua_pcallk` 错误探针** (`hooks.cpp`): POST-CALL hook 在 `xlua.dll` 的 `lua_pcallk` 上，捕获所有被 pcall 保护的 Lua 错误，打印完整 stack traceback 到日志。安装方式：
+   - 使用 `InstallXluaExportHook` 对 `xlua.dll` 导出函数做 detour（不同于 `InstallStrArgHook` 的 GameAssembly SHA 门控）
+   - 6 参数 cdecl POST-CALL 裸函数 trampoline，保存 `L` 状态指针，读取错误栈顶字符串
+
+2. **Widget 表 dump**: `InjectShopRedDot` 中增加 `lua_next` 遍历，dump HomePage widget 表所有 key 到日志（`WidgetKeys: ...`），用于确认 JP prefab 缺失哪些 widget。
+
+3. **`debug-game.ps1` 清理**: 启动前清理残留 server/game 进程。
+
+### 服务器端 proto 补全
+
+`src/BlueOath.Protocol/GameLoginProtocol.cs` — `EncodeRetGetUserInfo`:
+- 字段 11 `Exp=0`, 39 `Medal=0`, 44 `HeadShow=0`, 56 `ServerId=1`, 62 `PvePt=100`
+
+`src/BlueOath.Protocol/PlayerDataCodec.cs` — `HeroGrid`:
+- 字段 8 `CreateTime`, 9 `CurHp`, 17 `Affection`, 18 `Mood`, 19 `MarryTime`, 20 `UpdateTime`, 21 `MarryType`
+- 字段 3 `Equips`（dummy 元素）, 13 `PSkill`（dummy 元素 PSkillId=41210）
+
+`src/BlueOath.Server/Protocols/GameLoginMessageHandler.cs`:
+- `building.UpdateBuildingInfo` 推送（含 `SpecialPlotDatas`/`NormalPlotDatas` dummy 数据）
+
+### 当前状态
+
+- ✅ 登录 → 建号 → 用户信息 → 英雄数据 → 主场景 → HomePage 全链路
+- ✅ 3D 看板船娘加载（`UIShipProxy.ctor` + `LoadModel`）
+- ✅ 建造队列 (BuildsInfo) / 浴室 (BathroomInfo) / 后宅 (BuildingInfo) dummy 推送
+- ⚠️ 红点系统仍有非致命 logError（`getStateByRedDot` 收到 nil redDot，被 logError 吞掉，不阻塞）
+- ⚠️ HeroGrid 的 `Equips`/`PSkill` 使用 dummy 数据，可能影响属性计算精度
+- ⚠️ 大量 `Expected the end but found invalid token` 错误（cjson 解析空/损坏数据），非致命
+
+---
+
+## M7 系统模块逐项打通
+
+客户端共 64 个 UI 模块、125 个 logic 模块、139 个 pb 协议组。当前仅打通登录到主页链路，其余全部未实现。
+
+**依赖关系：第二梯队（船娘养成/装备/背包）是第一梯队（编队/出击/战斗）的前置条件**——必须先有可管理的船娘、装备、物品，才能编队出击。
+
+### 第二梯队：船娘养成与资源管理（出击前置）
+
+| # | 模块 | 文件数 | 关键 proto 消息 | 依赖 |
+|---|------|--------|----------------|------|
+| 2.1 | **船坞 (Dock)** | 3 | `HeroGrid` 列表，退役/锁定 | HeroBag 已推送，可能可打开 |
+| 2.2 | **船娘详情 (GirlInfo)** | 15 | `HeroInfo`，装备/强化/突破/属性 | 装备数据、属性计算 |
+| 2.3 | **装备 (Equip)** | 5 | `EquipList`，`EquipInfo`，强化/突破 | 背包物品数据 |
+| 2.4 | **背包 (Bag)** | 12 | `BagInfo`，`GridInfo`，物品使用/出售 | 无 |
+| 2.5 | **学习 (Study)** | 9 | `StudyInfo`，技能学习/加速 | PSkill dummy 数据精度 |
+| 2.6 | **结婚 (Marry)** | 5 | HeroGrid 的 Affection/Marry 字段 | 已预填，可能部分可打开 |
+| 2.7 | **强化/突破 (Strengthen/Break)** | 跟 GirlInfo 绑定 | `intensify`，`remould`，`advance` | 消耗材料数据 |
+
+### 第一梯队：核心战斗循环
+
+| # | 模块 | 文件数 | 关键 proto 消息 | 依赖 |
+|---|------|--------|----------------|------|
+| 1.1 | **编队 (Fleet)** | 9 | `FleetInfo` 推送 | 第二梯队完成 |
+| 1.2 | **关卡 (Copy)** | 29 | `CopyInfo`，`CopyRecord`，敌方数据 | 编队完成 |
+| 1.3 | **战斗 (Battle)** | 4 (工具) | `BattleParams`，`InitActorInfo`，`InitSkillInfo` | 编队+关卡完成 |
+
+### 第三梯队：经济 / 社交 / 经营
+
+| 模块 | 文件数 | 说明 |
+|------|--------|------|
+| 建造 (BuildShip) | 10 | 抽卡，含建造队列/UP池/UR池 |
+| 商店 (Shop) | 6 | 含快速购买/物品详情 |
+| 任务 (Task) | 4 | 含成就/日常/周常/教学任务 |
+| 后宅 3D (Building) | 11 | 含 2D 列表/3D 场景/生产/配方 |
+| 浴室 (Bathroom) | 7 | 含舰队修理/礼物/加速 |
+| 公会 (Guild) | 22 | 最大模块，含捐献/任务/公会战/公会商店 |
+| 好友 (Friend) | 1 | 好友列表/申请/搜索 |
+| 聊天 (Chat) | 6 | 含公会频道/弹幕 |
+| 邮件 (Mail) | 2 | 含附件领取 |
+| 排行 (Rank) | 4 | 含活动 Boss 排行/小游戏排行 |
+| 竞技场 (Sport) | 6 | 含挑战/排行/积分奖励 |
+| 教学 (Teaching) | 13 | 师徒系统 |
+
+### 第四梯队：活动 / 特殊玩法（60+ 文件）
+
+| 模块 | 文件数 | 说明 |
+|------|--------|------|
+| 活动大厅 (Activity) | 60+ | 含 20 个子模块（签到、累计消费、限时建造、抽奖、纸人、情人节...） |
+| 爬塔 (Tower) | 17 | 含地图/装备/主题/奖励/重置 |
+| Battle Pass | 10 | 含进阶/购买等级/奖励预览 |
+| 远征 (Adventure) | 4 | 含敌人/角色/攻击结算 |
+| 收藏/许愿 (Illustrate) | 14 | 含图鉴/许愿/加速 |
+| 杂志 (Magazine) | 3 | 含派遣/解锁 |
+| AR Kit | 5 | 含创建/加入/投影 |
+| Mini Game | 7 | 含限时/无限/排行榜 |
+| 炼金 (Alchemy) | 1 | 莱莎联动 |
+| 其他活动 | 15+ | 圣诞节/万圣节/新年/情人节/校园/美食 等 |

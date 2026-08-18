@@ -79,6 +79,14 @@ internal sealed class GameLoginMessageHandler
     /// </summary>
     public IEnumerable<byte[]> BuildSyncPushes(uint now)
     {
+        // 登录时间推送，填充 userdata.loginTime/loginTimePre，防止
+        // IsFirstLoginToday 用 os.date("*t", 0) 报 "time result cannot be represented"。
+        // loginTimePre 取一小时前（同一天），使 IsFirstLoginToday 返回 false（非首登）。
+        yield return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "user.UpdateLoginTime",
+            Ret: TMessageCodec.EncodeRetUpdateLoginTime(checked((int)now), checked((int)now - 3600)),
+            Time: now));
+
         yield return TMessageCodec.EncodeResponse(new TResponse(
             Method: "build.BuildsInfo",
             Ret: PlayerDataCodec.Encode(new BuildsInfoRet(
@@ -97,8 +105,22 @@ internal sealed class GameLoginMessageHandler
         yield return TMessageCodec.EncodeResponse(new TResponse(
             Method: "hero.UpdateHeroBagData",
             Ret: PlayerDataCodec.Encode(new HeroBag(
-                HeroInfo: [new HeroGrid(HeroId: 1, TemplateId: 10210511, Lvl: 1, Fashioning: 1021051)],
+                HeroInfo: [new HeroGrid(HeroId: 1, TemplateId: 10210511, Lvl: 1, Fashioning: 1021051, CreateTime: (int)now, UpdateTime: (int)now, Affection: 1000, MarryTime: 0, CurHp: 1000, Mood: 0, MarryType: 0)],
                 HeroBagSize: 100)),
+            Time: now));
+
+        // 建筑数据推送，填充空的 SpecialPlotDatas/NormalPlotDatas 防止
+        // BuildingData:GetSpecialPlots 里 pairs(nil) 崩溃（readonlymeta.lua
+        // 重写的 pairs 对 nil 返回 nil 导致 generic for 调用 nil 迭代器）。
+        // TUserBuildingInfo: field 11=NormalPlotDatas, field 12=SpecialPlotDatas
+        // 各含一个全零 THeroPlotData（HeroId=0,PlotId=0,BuildingId=0），
+        // 使 SetData 把 self.datas.SpecialPlotDatas 初始化为非空表。
+        yield return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "building.UpdateBuildingInfo",
+            Ret: new byte[] {
+                0x62, 0x06, 0x08, 0x01, 0x10, 0x00, 0x18, 0x00,  // SpecialPlotDatas[0]: HeroId=1
+                0x5A, 0x06, 0x08, 0x01, 0x10, 0x00, 0x18, 0x00,  // NormalPlotDatas[0]: HeroId=1
+            },
             Time: now));
     }
 }

@@ -43,6 +43,17 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                     }
                     if (payload.Length == 0)
                         continue;
+                    // 在 user.UserLogin 应答前先推送 user.UpdateUserInfo，确保
+                    // Data.userData.m_TypeNumMap 在 LoginOk 事件触发前已初始化。
+                    if (TMessageCodec.DecodeRequest(payload).Method == "user.UserLogin")
+                    {
+                        var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                        var push = _handler.BuildUpdateUserInfoPush(now);
+                        await NetSocketFrameCodec.WriteAsync(stream, push, NetSocketFrameCodec.TypeData, ct);
+                        _fileLogger.LogInformation(
+                            "game-login[{ConnectionId}] push user.UpdateUserInfo (before LoginOk)",
+                            connectionId);
+                    }
                     var (_, responsePayload) = _handler.BuildC2SResponse(payload);
                     if (responsePayload.Length == 0)
                         continue;

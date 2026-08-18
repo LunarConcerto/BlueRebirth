@@ -123,6 +123,17 @@ public static class TMessageCodec
         return output.ToArray();
     }
 
+    // TUserLoginTime: LoginTime(field 1) / LoginTimePre(field 2)。用于
+    // user.UpdateLoginTime 推送，填充 userdata.loginTime/loginTimePre，
+    // 避免 IsFirstLoginToday 里 os.date("*t", 0) 报 "time result cannot be represented"。
+    public static byte[] EncodeRetUpdateLoginTime(int loginTime, int loginTimePre)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((uint)loginTime));
+        WriteVarintField(output, 2, unchecked((uint)loginTimePre));
+        return output.ToArray();
+    }
+
     public static byte[] EncodeRetGetUserInfo(ulong uid, string uname, int level, int cls, uint secretaryId = 1)
     {
         using var output = new MemoryStream();
@@ -130,10 +141,16 @@ public static class TMessageCodec
         if (!string.IsNullOrEmpty(uname)) WriteBytes(output, 2, Encoding.UTF8.GetBytes(uname));
         if (cls != 0) WriteVarintField(output, 7, unchecked((uint)cls));
         if (level != 0) WriteVarintField(output, 10, unchecked((uint)level));
-        WriteVarintField(output, 12, unchecked((uint)1000));    // Diamond
-        WriteVarintField(output, 13, unchecked((uint)100000));  // Gold
-        WriteVarintField(output, 14, unchecked((uint)100));     // Supply (vigour)
-        WriteVarintField(output, 23, secretaryId);              // SecretaryId (hero instance id)
+        WriteVarintField(output, 11, unchecked((uint)0));        // Exp (HomePage:_PlayerData 读，缺则 nil 崩)
+        WriteVarintField(output, 12, unchecked((uint)1000));     // Diamond
+        WriteVarintField(output, 13, unchecked((uint)100000));   // Gold
+        WriteVarintField(output, 14, unchecked((uint)100));      // Supply (vigour)
+        WriteVarintField(output, 23, secretaryId);               // SecretaryId (hero instance id)
+        WriteVarintField(output, 39, unchecked((uint)0));        // Medal (_ShowMedal:GetCurrency(MEDAL) 需要)
+        WriteVarintField(output, 44, unchecked((uint)0));        // HeadShow (_ReverseMask,_SetSecretary 检查)
+        WriteVarintField(output, 56, unchecked((uint)1));        // ServerId (HomePage:_PlayerData 读，缺则 nil 崩)
+        WriteVarintField(output, 62, unchecked((uint)100));      // PvePt (TopPage:_ShowPvePt 读，缺则 SetText(nil) 崩)
+        WriteVarintField(output, 46, unchecked((uint)7));        // NewTaskStage (ActivityLogic:IsCanShowRedDot 读，缺则 nil 崩；0 触发新手引导)
         return output.ToArray();
     }
 

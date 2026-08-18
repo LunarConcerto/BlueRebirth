@@ -25,7 +25,9 @@ public sealed record BathHeroInfo(
 public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, int IsAllAuto = 0);
 
 /// <summary>One hero owned by the player (THeroGrid). Extend with Equips/PSkill/CurHp/etc. as needed.</summary>
-public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0);
+public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
+    int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
+    int CurHp = 0, int Mood = 0, int MarryType = 0);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -101,7 +103,22 @@ public static class PlayerDataCodec
         using var output = new MemoryStream();
         if (value.HeroId != 0) WriteVarintField(output, 1, value.HeroId);
         if (value.TemplateId != 0) WriteVarintField(output, 2, unchecked((ulong)value.TemplateId));
+        // Equips (field 3, repeated): 1 dummy with type=0, no Equip field.
+        // 不要编码空 Equip 消息(0x12 0x00)，否则被解码成一个空 EquipsInfo，
+        // RefreshHeroEquipData 里 equip.EquipsId(nil) > 0 会崩溃。
+        output.Write(new byte[] { 0x1A, 0x02, 0x08, 0x00 });
         if (value.Lvl != 0) WriteVarintField(output, 4, unchecked((ulong)value.Lvl));
+        if (value.CreateTime != 0) WriteVarintField(output, 8, unchecked((ulong)value.CreateTime));
+        if (value.CurHp != 0) WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
+        // PSkill (field 13, repeated): 1 dummy with PSkillId=41210(valid config), Exp=0, Level=0
+        output.Write(new byte[] { 0x6A, 0x08, 0x08, 0xFA, 0xC1, 0x02, 0x10, 0x00, 0x18, 0x00 });
+        if (value.Affection != 0) WriteVarintField(output, 17, unchecked((ulong)value.Affection));
+        // Mood/MarryTime/MarryType 必须无条件编码：值为 0 时客户端读到 nil，
+        // GetMoodNum/GetLoveInfo 里的算术/比较会崩溃。
+        WriteVarintField(output, 18, unchecked((ulong)value.Mood));
+        WriteVarintField(output, 19, unchecked((ulong)value.MarryTime));
+        if (value.UpdateTime != 0) WriteVarintField(output, 20, unchecked((ulong)value.UpdateTime));
+        WriteVarintField(output, 21, unchecked((ulong)value.MarryType));
         if (value.Fashioning != 0) WriteVarintField(output, 22, unchecked((ulong)value.Fashioning));
         return output.ToArray();
     }
