@@ -86,6 +86,18 @@ public sealed record FashionInfo(int SfId = 0, IReadOnlyList<int>? FashionTid = 
 /// <summary>时装列表（TFashionList）。</summary>
 public sealed record FashionList(IReadOnlyList<FashionInfo>? FashionInfo = null);
 
+/// <summary>邮件附件条目（TMailItem）。Type 对应 GoodsType，Id 对应货币/物品 id。</summary>
+public sealed record MailItem(int Type = 0, int Id = 0, int Num = 0);
+
+/// <summary>单封邮件（MailList）。TempLateId=0 时直接显示 Subject/Content。</summary>
+public sealed record MailList(ulong Mid = 0, int TempLateId = 0, string Subject = "", string Content = "",
+    long ReceiveTime = 0, long ReadTime = 0, int IsGotReawrd = 0,
+    IReadOnlyList<MailItem>? Items = null, int DeleteTime = 0);
+
+/// <summary>邮件列表响应（TMailListRet）。Reward 为领取后发放的奖励。</summary>
+public sealed record MailListRet(int MailNum = 0, int ExpireNum = 0,
+    IReadOnlyList<MailList>? List = null, IReadOnlyList<CommonReward>? Reward = null);
+
 /// <summary>
 /// Encodes the player-scope data pushed to the client after login (build queue, bathroom, ...).
 /// Field numbers are taken from build_pb.lua / bathroom_pb.lua.
@@ -340,6 +352,47 @@ public static class PlayerDataCodec
         if (value.SfId != 0) WriteVarintField(output, 1, unchecked((ulong)value.SfId));
         if (value.FashionTid is not null)
             foreach (var tid in value.FashionTid) WriteVarintField(output, 2, unchecked((ulong)tid));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(MailListRet value)
+    {
+        using var output = new MemoryStream();
+        if (value.MailNum != 0) WriteVarintField(output, 1, unchecked((ulong)value.MailNum));
+        if (value.ExpireNum != 0) WriteVarintField(output, 2, unchecked((ulong)value.ExpireNum));
+        if (value.List is not null)
+            foreach (var item in value.List) WriteMessage(output, 3, Encode(item));
+        if (value.Reward is not null)
+            foreach (var item in value.Reward) WriteMessage(output, 4, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(MailList value)
+    {
+        using var output = new MemoryStream();
+        if (value.Mid != 0) WriteVarintField(output, 1, value.Mid);
+        // TempLateId 无条件编码：emaillogic.ParseEmail 里 `mail.TempLateId > 0` 比较，nil 会崩。
+        WriteVarintField(output, 2, unchecked((ulong)value.TempLateId));
+        if (!string.IsNullOrEmpty(value.Subject)) WriteMessage(output, 9, Encoding.UTF8.GetBytes(value.Subject));
+        if (!string.IsNullOrEmpty(value.Content)) WriteMessage(output, 10, Encoding.UTF8.GetBytes(value.Content));
+        // ReceiveTime/ReadTime/IsGotReawrd/DeleteTime 无条件编码：客户端对这些字段做 == 比较
+        // （ReadTime==0 判新邮件、IsGotReawrd==0 判可领取、DeleteTime==0 判不过期），nil 会误判。
+        WriteVarintField(output, 7, unchecked((ulong)value.ReceiveTime));
+        WriteVarintField(output, 8, unchecked((ulong)value.ReadTime));
+        WriteVarintField(output, 11, unchecked((ulong)value.IsGotReawrd));
+        // Items 必须非 nil：emaildata.lua SetMailList 里 #v.Items 计数，nil 会崩。
+        if (value.Items is not null)
+            foreach (var item in value.Items) WriteMessage(output, 13, Encode(item));
+        WriteVarintField(output, 14, unchecked((ulong)value.DeleteTime));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(MailItem value)
+    {
+        using var output = new MemoryStream();
+        if (value.Type != 0) WriteVarintField(output, 1, unchecked((ulong)value.Type));
+        if (value.Id != 0) WriteVarintField(output, 2, unchecked((ulong)value.Id));
+        if (value.Num != 0) WriteVarintField(output, 3, unchecked((ulong)value.Num));
         return output.ToArray();
     }
 

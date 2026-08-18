@@ -20,6 +20,7 @@ internal sealed class GameLoginMessageHandler
     private readonly GmGoodsConfig _gmGoods;
     private readonly Dictionary<int, (int Type, int ConfigId, int Num)> _gmGoodsMap;
     private readonly Dictionary<int, int> _fashionSfIdMap;
+    private readonly IReadOnlyList<GmMailConfig> _gmMails;
 
     public GameLoginMessageHandler(SqliteGameRepository repo, ServerOptions options, ILoggerFactory loggerFactory)
     {
@@ -29,6 +30,7 @@ internal sealed class GameLoginMessageHandler
         _gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId, g => (g.Type, g.ItemId, g.Num));
         _fashionSfIdMap = _gmGoods.FashionSfId.ToDictionary(kv => kv.Key, kv => kv.Value);
+        _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
     }
 
     /// <summary>
@@ -74,6 +76,10 @@ internal sealed class GameLoginMessageHandler
         {
             ret = await BuildQualityBuyGoodsRetAsync(request, profileId, ct);
         }
+        else if (request.Method == "mail.FetchItem" || request.Method == "mail.FetchAllItems")
+        {
+            ret = await BuildFetchMailRetAsync(request, profileId, now, ct);
+        }
         else
         {
             ret = request.Method switch
@@ -84,6 +90,11 @@ internal sealed class GameLoginMessageHandler
                 "user.UserLogin" => TMessageCodec.EncodeRetUserLogin("ok", "", 0),
                 "user.GetUserInfo" => EncodeGetUserInfo(await GetOrCreateAccountAsync(profileId, ct)),
                 "GetSvrTime" => TMessageCodec.EncodeRetGetSvrTime(now, now),
+                "mail.GetMailList" => BuildMailListRet(now),
+                "mail.OpenMail" => BuildMailListRet(now),
+                "mail.DeleteMail" => BuildMailListRet(now),
+                "mail.DeleteAllMail" => BuildMailListRet(now),
+                "mail.ReceiveNewMail" => BuildMailListRet(now),
                 _ => []
             };
         }
@@ -209,6 +220,12 @@ internal sealed class GameLoginMessageHandler
 
             // 时装数据推送（已解锁时装）。
             BuildFashionPush(account, now),
+
+            // 邮件系统触发：payback.newPayback 推送会让 EmailService._TagUpdataMail
+            // 置 updataTog=true，玩家打开邮件页面时才 SendGetMailList 拉取邮件列表。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "payback.newPayback",
+                Time: now)),
         ];
     }
 
@@ -235,8 +252,15 @@ internal sealed class GameLoginMessageHandler
         // 旧存档（无 CreateTime 字段）加载后 CreateTime=0，会导致 PeriodManager 里
         // os.date("*t", 0) 报 "time result cannot be represented"，这里兜底为当前时间。
         var createTime = c.CreateTime != 0 ? c.CreateTime : checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        return TMessageCodec.EncodeRetGetUserInfo(c.Uid, c.Name, c.Level, c.Class, c.SecretaryId,
-            createTime, c.Bath, c.Gold, c.Diamond, c.Supply);
+        return TMessageCodec.EncodeRetGetUserInfo(new UserInfoFields(
+            Uid: c.Uid, Uname: c.Name, Level: c.Level, Class: c.Class, SecretaryId: c.SecretaryId,
+            CreateTime: createTime, Gold: c.Gold, Diamond: c.Diamond, Supply: c.Supply, Bath: c.Bath,
+            MainGun: c.MainGun, Torpedo: c.Torpedo, Plane: c.Plane, Other: c.Other,
+            Retire: c.Retire, Strategy: c.Strategy, Medal: c.Medal, Tower: c.Tower,
+            CopyTrainPoint: c.CopyTrainPoint, FashionPoint: c.FashionPoint, GuildContri: c.GuildContri,
+            Lucky: c.Lucky, TeacherMedal: c.TeacherMedal, TeacherPrestige: c.TeacherPrestige,
+            BattlePassExp: c.BattlePassExp, BattlePassGold: c.BattlePassGold, PvePt: c.PvePt,
+            GuildCoinII: c.GuildCoinII, UrEquipCoin: c.UrEquipCoin, ActivityBattlePassExp: c.ActivityBattlePassExp));
     }
 
     private static HeroGrid ToHeroGrid(Hero hero) =>
@@ -375,7 +399,11 @@ internal sealed class GameLoginMessageHandler
         return (account, new CommonReward(goods.Type, goods.ConfigId, totalNum));
     }
 
-    /// <summary>货币发放（CurrencyType → UserInfo 字段）。1=金币,2=钻石,5=体力,13=温泉币。</summary>
+    /// <summary>
+    /// 货币发放（CurrencyType → UserInfo 字段）。覆盖客户端 UserInfo 里全部 24 种持久货币
+    /// （constants.lua CurrencyType 与 user_pb.lua TGetUserInfoRet 字段的并集，排除非 UserInfo
+    /// 的战斗/建筑临时值如 BULLET/GAS/ELECTRIC 等）。
+    /// </summary>
     private static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)
     {
         var c = account.Character;
@@ -384,7 +412,27 @@ internal sealed class GameLoginMessageHandler
             1 => c with { Gold = c.Gold + num },
             2 => c with { Diamond = c.Diamond + num },
             5 => c with { Supply = c.Supply + num },
+            8 => c with { MainGun = c.MainGun + num },
+            9 => c with { Torpedo = c.Torpedo + num },
+            10 => c with { Plane = c.Plane + num },
+            11 => c with { Other = c.Other + num },
+            12 => c with { Retire = c.Retire + num },
             13 => c with { Bath = c.Bath + num },
+            14 => c with { Strategy = c.Strategy + num },
+            15 => c with { Medal = c.Medal + num },
+            18 => c with { Tower = c.Tower + num },
+            22 => c with { CopyTrainPoint = c.CopyTrainPoint + num },
+            23 => c with { FashionPoint = c.FashionPoint + num },
+            24 => c with { GuildContri = c.GuildContri + num },
+            25 => c with { Lucky = c.Lucky + num },
+            26 => c with { TeacherMedal = c.TeacherMedal + num },
+            27 => c with { TeacherPrestige = c.TeacherPrestige + num },
+            28 => c with { BattlePassExp = c.BattlePassExp + num },
+            29 => c with { BattlePassGold = c.BattlePassGold + num },
+            30 => c with { PvePt = c.PvePt + num },
+            31 => c with { GuildCoinII = c.GuildCoinII + num },
+            32 => c with { UrEquipCoin = c.UrEquipCoin + num },
+            33 => c with { ActivityBattlePassExp = c.ActivityBattlePassExp + num },
             _ => c with { Gold = c.Gold + num },
         };
         return account with { Character = c };
@@ -455,6 +503,47 @@ internal sealed class GameLoginMessageHandler
             BuildFashionPush(account, now),
         ];
     }
+
+    /// <summary>把 GM 邮件配置转换为 MailList 实体列表（IsGotReawrd=0，可反复领取）。</summary>
+    private IReadOnlyList<MailList> BuildMailEntities(int now) =>
+        _gmMails.Select(m => new MailList(
+            Mid: m.Mid,
+            Subject: m.Subject,
+            Content: m.Content,
+            ReceiveTime: now,
+            ReadTime: 0,
+            IsGotReawrd: 0,
+            Items: [new MailItem(GoodsTypeCurrency, m.CurrencyType, m.Num)],
+            DeleteTime: 0)).ToList();
+
+    /// <summary>邮件列表响应（mail.GetMailList/OpenMail/DeleteMail/DeleteAllMail/ReceiveNewMail 共用）。</summary>
+    private byte[] BuildMailListRet(int now)
+    {
+        var list = BuildMailEntities(now);
+        return PlayerDataCodec.Encode(new MailListRet(MailNum: list.Count, List: list));
+    }
+
+    /// <summary>
+    /// 邮件领取（mail.FetchItem / mail.FetchAllItems）：发放对应邮件的货币并落盘，邮件不删除
+    /// （IsGotReawrd 保持 0，客户端仍显示"领取"按钮，实现无限领取）。返回 TMailListRet{list, Reward}。
+    /// </summary>
+    private async Task<byte[]> BuildFetchMailRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
+    {
+        var mid = request.Args is null ? 0UL : TMessageCodec.DecodeMailMid(request.Args);
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var rewards = new List<CommonReward>();
+        foreach (var mail in _gmMails)
+        {
+            if (request.Method == "mail.FetchItem" && mail.Mid != mid)
+                continue;
+            account = AddCurrency(account, mail.CurrencyType, mail.Num);
+            rewards.Add(new CommonReward(GoodsTypeCurrency, mail.CurrencyType, mail.Num));
+        }
+        if (rewards.Count > 0)
+            await _repo.SaveAccountAsync(account, ct);
+        var list = BuildMailEntities(now);
+        return PlayerDataCodec.Encode(new MailListRet(MailNum: list.Count, List: list, Reward: rewards));
+    }
 }
 
 /// <summary>从数据目录下的 gm-goods.json 加载 GM 商品配置（数据驱动，避免硬编码）。</summary>
@@ -476,6 +565,29 @@ internal static class GmGoodsConfigLoader
         {
             Console.Error.WriteLine($"[gm-goods] failed to parse {path}: {ex.Message}");
             return new GmGoodsConfig([], new Dictionary<int, int>());
+        }
+    }
+}
+
+/// <summary>从数据目录下的 gm-mails.json 加载 GM 邮件配置（数据驱动，避免硬编码）。</summary>
+internal static class GmMailsConfigLoader
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public static GmMailsConfig Load(string dataRoot)
+    {
+        var path = Path.Combine(dataRoot, "gm-mails.json");
+        if (!File.Exists(path))
+            return new GmMailsConfig([]);
+        try
+        {
+            return JsonSerializer.Deserialize<GmMailsConfig>(File.ReadAllText(path), JsonOptions)
+                ?? new GmMailsConfig([]);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[gm-mails] failed to parse {path}: {ex.Message}");
+            return new GmMailsConfig([]);
         }
     }
 }

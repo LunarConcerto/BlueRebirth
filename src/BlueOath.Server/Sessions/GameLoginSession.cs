@@ -111,6 +111,17 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                                 connectionId, extra.Length, Convert.ToHexString(extra));
                         }
                     }
+
+                    // 邮件领取应答后，推送更新后的货币数据。
+                    if (request.Method == "mail.FetchItem" || request.Method == "mail.FetchAllItems")
+                    {
+                        var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                        var push = await _handler.BuildUpdateUserInfoPushAsync(profileId, now, ct);
+                        await NetSocketFrameCodec.WriteAsync(stream, push, NetSocketFrameCodec.TypeData, ct);
+                        _fileLogger.LogInformation(
+                            "game-login[{ConnectionId}] push post-mail user info bytes={Bytes} hex={Hex}",
+                            connectionId, push.Length, Convert.ToHexString(push));
+                    }
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

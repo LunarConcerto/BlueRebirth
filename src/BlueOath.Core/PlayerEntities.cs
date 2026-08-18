@@ -15,7 +15,27 @@ public sealed record PlayerCharacter(
     int Bath = 0,
     int Gold = 0,
     int Diamond = 0,
-    int Supply = 0);
+    int Supply = 0,
+    int MainGun = 0,
+    int Torpedo = 0,
+    int Plane = 0,
+    int Other = 0,
+    int Retire = 0,
+    int Strategy = 0,
+    int Medal = 0,
+    int Tower = 0,
+    int CopyTrainPoint = 0,
+    int FashionPoint = 0,
+    int GuildContri = 0,
+    int Lucky = 0,
+    int TeacherMedal = 0,
+    int TeacherPrestige = 0,
+    int BattlePassExp = 0,
+    int BattlePassGold = 0,
+    int PvePt = 0,
+    int GuildCoinII = 0,
+    int UrEquipCoin = 0,
+    int ActivityBattlePassExp = 0);
 
 /// <summary>
 /// 船坞中的单个舰娘实例。对应 <c>hero.UpdateHeroBagData</c> 的 THeroGrid 字段。
@@ -95,7 +115,8 @@ public static class PlayerAccountFactory
     public static PlayerAccount CreateDefault(string profileId, int nowSeconds)
     {
         var character = new PlayerCharacter(Uid: 1, Name: profileId, Level: 1, Class: 1, SecretaryId: 1,
-            CreateTime: nowSeconds, Gold: DefaultGold, Diamond: DefaultDiamond, Supply: DefaultSupply);
+            CreateTime: nowSeconds, Gold: DefaultGold, Diamond: DefaultDiamond, Supply: DefaultSupply,
+            PvePt: 100);
         var hero = new Hero(
             HeroId: 1,
             TemplateId: DefaultHeroTemplateId,
@@ -123,3 +144,9 @@ public sealed record GmGoodConfig(int GoodId, int ShopId, int Type, int ItemId, 
 public sealed record GmGoodsConfig(
     IReadOnlyList<GmGoodConfig> Goods,
     IReadOnlyDictionary<int, int> FashionSfId);
+
+/// <summary>单封 GM 邮件配置（数据驱动，来自 gm-mails.json）。</summary>
+public sealed record GmMailConfig(ulong Mid, int CurrencyType, int Num, string Subject, string Content);
+
+/// <summary>GM 邮件配置集合。</summary>
+public sealed record GmMailsConfig(IReadOnlyList<GmMailConfig> Mails);

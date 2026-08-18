@@ -15,6 +15,20 @@ public sealed record TRequest(string Method = "", byte[]? Args = null, uint Call
 public sealed record TResponse(int Err = 0, string ErrMsg = "", string Method = "", byte[]? Ret = null,
     uint CallbackHandler = 0, uint Time = 0, string Token = "", uint Seq = 0, int IsResponse = 0);
 
+/// <summary>
+/// user.GetUserInfo / user.UpdateUserInfo 的完整用户信息字段（TGetUserInfoRet）。
+/// 包含全部持久货币字段（CurrencyType → UserInfo 字段号映射见 EncodeRetGetUserInfo）。
+/// </summary>
+public sealed record UserInfoFields(
+    ulong Uid = 0, string Uname = "", int Level = 0, int Class = 0, uint SecretaryId = 1,
+    int CreateTime = 0, int Gold = 0, int Diamond = 0, int Supply = 0, int Bath = 0,
+    int MainGun = 0, int Torpedo = 0, int Plane = 0, int Other = 0,
+    int Retire = 0, int Strategy = 0, int Medal = 0, int Tower = 0,
+    int CopyTrainPoint = 0, int FashionPoint = 0, int GuildContri = 0,
+    int Lucky = 0, int TeacherMedal = 0, int TeacherPrestige = 0,
+    int BattlePassExp = 0, int BattlePassGold = 0, int PvePt = 0,
+    int GuildCoinII = 0, int UrEquipCoin = 0, int ActivityBattlePassExp = 0);
+
 public static class TMessageCodec
 {
     public static byte[] EncodeRequest(TRequest value)
@@ -135,31 +149,58 @@ public static class TMessageCodec
     }
 
     public static byte[] EncodeRetGetUserInfo(ulong uid, string uname, int level, int cls, uint secretaryId = 1,
-        int createTime = 0, int bath = 0, int gold = 99999999, int diamond = 999999, int supply = 9999)
+        int createTime = 0, int bath = 0, int gold = 99999999, int diamond = 999999, int supply = 9999) =>
+        EncodeRetGetUserInfo(new UserInfoFields(Uid: uid, Uname: uname, Level: level, Class: cls,
+            SecretaryId: secretaryId, CreateTime: createTime, Gold: gold, Diamond: diamond,
+            Supply: supply, Bath: bath, PvePt: 100));
+
+    /// <summary>
+    /// 编码 TGetUserInfoRet。货币字段无条件编码（值为 0 也写），客户端 GetCurrency 读到
+    /// 0 而不是 nil，避免特定页面做算术/比较时崩溃。字段号取自 user_pb.lua TGetUserInfoRet。
+    /// </summary>
+    public static byte[] EncodeRetGetUserInfo(UserInfoFields v)
     {
         using var output = new MemoryStream();
-        if (uid != 0) WriteVarintField(output, 1, uid);
-        if (!string.IsNullOrEmpty(uname)) WriteBytes(output, 2, Encoding.UTF8.GetBytes(uname));
-        if (cls != 0) WriteVarintField(output, 7, unchecked((uint)cls));
-        if (level != 0) WriteVarintField(output, 10, unchecked((uint)level));
+        if (v.Uid != 0) WriteVarintField(output, 1, v.Uid);
+        if (!string.IsNullOrEmpty(v.Uname)) WriteBytes(output, 2, Encoding.UTF8.GetBytes(v.Uname));
+        if (v.Class != 0) WriteVarintField(output, 7, unchecked((uint)v.Class));
+        if (v.Level != 0) WriteVarintField(output, 10, unchecked((uint)v.Level));
         WriteVarintField(output, 11, unchecked((uint)0));        // Exp (HomePage:_PlayerData 读，缺则 nil 崩)
-        WriteVarintField(output, 12, unchecked((uint)diamond));  // Diamond
-        WriteVarintField(output, 13, unchecked((uint)gold));     // Gold（GM 给足量，避免时装等高金币商品置灰）
-        WriteVarintField(output, 14, unchecked((uint)supply));   // Supply (vigour)
+        WriteVarintField(output, 12, unchecked((uint)v.Diamond));    // Diamond
+        WriteVarintField(output, 13, unchecked((uint)v.Gold));       // Gold
+        WriteVarintField(output, 14, unchecked((uint)v.Supply));     // Supply (vigour)
+        WriteVarintField(output, 15, unchecked((uint)v.MainGun));    // MainGun (CurrencyType.MAINGUN)
+        WriteVarintField(output, 16, unchecked((uint)v.Torpedo));    // Torpedo (CurrencyType.TORPEDO)
+        WriteVarintField(output, 17, unchecked((uint)v.Plane));      // Plane (CurrencyType.PLANE)
+        WriteVarintField(output, 18, unchecked((uint)v.Other));      // Other (CurrencyType.OTHER)
         // CreateTime（field 22）无条件编码：PeriodManager calTime 里 type=CREATE 的 period
         // 需要 GetCreateTime，缺则 os.date(nil) 报 "attempt to compare nil with number"。
-        WriteVarintField(output, 22, unchecked((uint)createTime));
-        WriteVarintField(output, 23, secretaryId);               // SecretaryId (hero instance id)
-        WriteVarintField(output, 26, unchecked((uint)0));        // BuyGoldNum (BuyResourcePage 读)
-        WriteVarintField(output, 27, unchecked((uint)0));        // BuyGoldTime (isSameDay 算术，缺则 nil 崩)
-        WriteVarintField(output, 28, unchecked((uint)0));        // BuySupplyNum
-        WriteVarintField(output, 29, unchecked((uint)0));        // BuySupplyTime (isSameDay 算术，缺则 nil 崩)
-        WriteVarintField(output, 35, unchecked((uint)bath));     // Bath (SPA 温泉币，CurrencyType.SPA)
-        WriteVarintField(output, 39, unchecked((uint)0));        // Medal (_ShowMedal:GetCurrency(MEDAL) 需要)
-        WriteVarintField(output, 44, unchecked((uint)0));        // HeadShow (_ReverseMask,_SetSecretary 检查)
-        WriteVarintField(output, 56, unchecked((uint)1));        // ServerId (HomePage:_PlayerData 读，缺则 nil 崩)
-        WriteVarintField(output, 62, unchecked((uint)100));      // PvePt (TopPage:_ShowPvePt 读，缺则 SetText(nil) 崩)
-        WriteVarintField(output, 46, unchecked((uint)7));        // NewTaskStage (ActivityLogic:IsCanShowRedDot 读，缺则 nil 崩；0 触发新手引导)
+        WriteVarintField(output, 22, unchecked((uint)v.CreateTime));
+        WriteVarintField(output, 23, v.SecretaryId);                 // SecretaryId (hero instance id)
+        WriteVarintField(output, 26, unchecked((uint)0));            // BuyGoldNum (BuyResourcePage 读)
+        WriteVarintField(output, 27, unchecked((uint)0));            // BuyGoldTime (isSameDay 算术，缺则 nil 崩)
+        WriteVarintField(output, 28, unchecked((uint)0));            // BuySupplyNum
+        WriteVarintField(output, 29, unchecked((uint)0));            // BuySupplyTime (isSameDay 算术，缺则 nil 崩)
+        WriteVarintField(output, 30, unchecked((uint)v.Retire));     // Retire (CurrencyType.RETIRE)
+        WriteVarintField(output, 35, unchecked((uint)v.Bath));       // Bath (SPA 温泉币，CurrencyType.SPA)
+        WriteVarintField(output, 37, unchecked((uint)v.Strategy));   // Strategy (CurrencyType.STRATEGY)
+        WriteVarintField(output, 39, unchecked((uint)v.Medal));      // Medal (CurrencyType.MEDAL)
+        WriteVarintField(output, 44, unchecked((uint)0));            // HeadShow (_ReverseMask,_SetSecretary 检查)
+        WriteVarintField(output, 46, unchecked((uint)7));            // NewTaskStage (ActivityLogic:IsCanShowRedDot 读，缺则 nil 崩；0 触发新手引导)
+        WriteVarintField(output, 47, unchecked((uint)v.CopyTrainPoint)); // CopyTrainPoint (CurrencyType.EXERCISES)
+        WriteVarintField(output, 48, unchecked((uint)v.Tower));      // Tower (CurrencyType.TOWER)
+        WriteVarintField(output, 49, unchecked((uint)v.FashionPoint));   // FashionPoint (CurrencyType.FASHION)
+        WriteVarintField(output, 50, unchecked((uint)v.Lucky));      // Lucky (CurrencyType.LUCKY)
+        WriteVarintField(output, 51, unchecked((uint)v.TeacherMedal));   // TeacherMedal (CurrencyType.TEACHINGMERITS)
+        WriteVarintField(output, 52, unchecked((uint)v.TeacherPrestige)); // TeacherPrestige (CurrencyType.TEACHINGPOP)
+        WriteVarintField(output, 53, unchecked((uint)v.GuildContri)); // GuildContri (CurrencyType.CONTRIBUTE)
+        WriteVarintField(output, 56, unchecked((uint)1));            // ServerId (HomePage:_PlayerData 读，缺则 nil 崩)
+        WriteVarintField(output, 58, unchecked((uint)v.BattlePassExp));  // BattlePassExp (CurrencyType.BATTLEPASSEXP)
+        WriteVarintField(output, 59, unchecked((uint)v.BattlePassGold)); // BattlePassGold (CurrencyType.BATTLEPASSGOLD)
+        WriteVarintField(output, 62, unchecked((uint)v.PvePt));      // PvePt (CurrencyType.PVEPT)
+        WriteVarintField(output, 63, unchecked((uint)v.GuildCoinII)); // GuildCoinII (CurrencyType.GUILD_COIN_II)
+        WriteVarintField(output, 64, unchecked((uint)v.UrEquipCoin)); // UrEquipCoin (CurrencyType.UREQUIPCOIN)
+        WriteVarintField(output, 65, unchecked((uint)v.ActivityBattlePassExp)); // ActivityBattlePassExp
         return output.ToArray();
     }
 
@@ -180,6 +221,19 @@ public static class TMessageCodec
             }
         }
         return (shopId, goodId, buyNum, priceIndex);
+    }
+
+    // TFetchMailArg/TOpenMailArg/TDeleteMailArg: Mid(1, uint64)。
+    public static ulong DecodeMailMid(ReadOnlySpan<byte> payload)
+    {
+        var reader = new PbReader(payload);
+        ulong mid = 0;
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            if (field == 1 && wire == 0) mid = reader.ReadVarint();
+            else reader.Skip(wire);
+        }
+        return mid;
     }
 
     // TBuyGoodsRet: Reward(1, repeated TCommonReward)/GoodId(2)/BuyNum(3)。
