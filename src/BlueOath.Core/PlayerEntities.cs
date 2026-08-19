@@ -35,7 +35,13 @@ public sealed record PlayerCharacter(
     int PvePt = 0,
     int GuildCoinII = 0,
     int UrEquipCoin = 0,
-    int ActivityBattlePassExp = 0);
+    int ActivityBattlePassExp = 0,
+    int GetHeroCount = 0,
+    int AttackCount = 0,
+    int MarriedNum = 0,
+    int Head = 1021051,
+    int HeadFrame = 0,
+    string Message = "");
 
 /// <summary>
 /// 船坞中的单个舰娘实例。对应 <c>hero.UpdateHeroBagData</c> 的 THeroGrid 字段。
@@ -52,9 +58,9 @@ public sealed record Hero(
     int UpdateTime = 0,
     int Affection = 0,
     int MarryTime = 0,
-    int CurHp = 0,
     int Mood = 0,
     int MarryType = 0,
+    long CurHp = 0,
     IReadOnlyList<uint>? EquipSlots = null);
 
 /// <summary>
@@ -63,7 +69,7 @@ public sealed record Hero(
 /// </summary>
 public sealed record HeroDock(
     IReadOnlyList<Hero> Heroes,
-    int BagSize = 100);
+    int BagSize = 200);
 
 /// <summary>仓库中的单个道具堆叠（TGridInfo）。</summary>
 public sealed record BagItem(int TemplateId, int Num);
@@ -127,6 +133,9 @@ public static class PlayerAccountFactory
     /// <summary>GM 默认体力（供应）。</summary>
     public const int DefaultSupply = 9999;
 
+    /// <summary>HP 系数（shiplogic.lua HP_COEFFICIENT），CurHp 等于此值时满血。</summary>
+    public const long HpCoefficient = 10000000000;
+
     /// <summary>创建新档案的默认账号（角色 + 含一只秘书舰的船坞 + 空仓库/时装）。</summary>
     public static PlayerAccount CreateDefault(string profileId, int nowSeconds)
     {
@@ -143,10 +152,10 @@ public static class PlayerAccountFactory
             UpdateTime: nowSeconds,
             Affection: 1000,
             MarryTime: 0,
-            CurHp: 1000,
+            CurHp: HpCoefficient,
             Mood: 0,
             MarryType: 0);
-        var dock = new HeroDock([hero], BagSize: 100);
+        var dock = new HeroDock([hero], BagSize: 200);
         var bag = new PlayerBag([], BagSize: 100);
         var fashion = new PlayerFashion([]);
         var equip = new PlayerEquip([], EquipBagSize: 2000);
@@ -167,3 +176,9 @@ public sealed record GmMailConfig(ulong Mid, int CurrencyType, int Num, string S
 
 /// <summary>GM 邮件配置集合。</summary>
 public sealed record GmMailsConfig(IReadOnlyList<GmMailConfig> Mails);
+
+/// <summary>单个抽卡池中的船娘条目（TemplateId → 权重）。</summary>
+public sealed record BuildShipEntry(int TemplateId, int Weight);
+
+/// <summary>单个抽卡池配置（来自 config_build_ship）。</summary>
+public sealed record BuildShipPool(int PoolId, IReadOnlyList<BuildShipEntry> Ships);

@@ -29,6 +29,10 @@ internal static class ServerHostBuilder
         builder.Logging.AddFilter<ConsoleLoggerProvider>(GameLoginFileLoggerProvider.Category, LogLevel.None);
         builder.Logging.AddProvider(new GameLoginFileLoggerProvider());
 
+        // GM WebUI 的日志广播器（SSE 实时推送）。
+        var logBroadcast = new LogBroadcastProvider();
+        builder.Logging.AddProvider(logBroadcast);
+
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<ServerEndpoints>();
         builder.Services.AddSingleton<SqliteGameRepository>(sp =>
@@ -50,6 +54,11 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<BootstrapHttpSession>();
         builder.Services.AddSingleton<GameLoginSession>();
 
+        // GM 模块（WebUI + 命令解析）。
+        builder.Services.AddSingleton(logBroadcast);
+        builder.Services.AddSingleton<GmCommandHandler>();
+        builder.Services.AddSingleton<GmWebListener>();
+
         // 主监听器可选择性携带 TLS 材质，故用工厂构造（未启用 TLS 时 GetService 返回 null）。
         builder.Services.AddSingleton<FrontDoorTcpListener>(sp => new FrontDoorTcpListener(
             sp.GetRequiredService<ServerOptions>(),
@@ -65,6 +74,7 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<FrontDoorTcpListener>());
         builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<GameLoginTcpListener>());
         builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<KcpGameLoginListener>());
+        builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<GmWebListener>());
 
         return builder.Build();
     }

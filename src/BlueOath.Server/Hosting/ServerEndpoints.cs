@@ -15,6 +15,9 @@ internal sealed class ServerEndpoints
     /// <summary>游戏登录 KCP/UDP 端口，未启用时为 null。</summary>
     public int? KcpGameLoginPort { get; set; }
 
+    /// <summary>GM WebUI 端口，未启用时为 null。</summary>
+    public int? GmPort { get; set; }
+
     /// <summary>返回引导响应中使用的游戏登录端口，未配置时回退到默认 7201。</summary>
     public int ResolvedGameLoginPort => GameLoginPort is > 0 ? GameLoginPort.Value : 7201;
 }

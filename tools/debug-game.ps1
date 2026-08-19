@@ -60,7 +60,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "TLS material generation failed: $materialLine" }
   $material = $materialLine | ConvertFrom-Json
 
-  $serverArgs = @($serverDll, '--port=0', '--region=jp', "--data=$dataRoot", "--capture=$traffic", '--game-login-port=7201')
+  $serverArgs = @($serverDll,  '--port=0', '--region=jp', "--data=$dataRoot", "--capture=$traffic", '--game-login-port=7201', '--gm-port=9780')
   $serverStart = [System.Diagnostics.ProcessStartInfo]::new('dotnet')
   $serverStart.UseShellExecute = $false
   $serverStart.CreateNoWindow = $true
@@ -117,6 +117,7 @@ try {
   Write-Host ('  server http port : ' + $ready.port) -ForegroundColor Green
   Write-Host ('  proxy tls port   : ' + $proxyReady.port) -ForegroundColor Green
   Write-Host ('  game login port  : 7201') -ForegroundColor Green
+  Write-Host ('  GM WebUI         : http://localhost:' + $ready.gmPort) -ForegroundColor Green
   Write-Host ('  payload log (live): ' + $payloadLog) -ForegroundColor Green
   Write-Host ('  run dir (server/proxy logs): ' + $runRoot) -ForegroundColor Green
   Write-Host ''

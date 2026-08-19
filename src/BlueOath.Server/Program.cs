@@ -51,6 +51,7 @@ internal static class Program
             port = endpoints.Port,
             gameLoginPort = endpoints.GameLoginPort,
             kcpGameLoginPort = endpoints.KcpGameLoginPort,
+            gmPort = endpoints.GmPort,
             region = options.Profile.Region.ToString(),
             version = options.Profile.ClientVersion,
             tls = tls is not null,

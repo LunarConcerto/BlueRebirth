@@ -237,7 +237,7 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 
 | 模块 | 文件数 | 说明 |
 |------|--------|------|
-| 建造 (BuildShip) | 10 | 抽卡，含建造队列/UP池/UR池 |
+| 建造 (BuildShip) | 10 | 抽卡，含建造队列/UP池/UR池；**已打通**（10 连 + 动画 + 船坞入库，见会话记录） |
 | 商店 (Shop) | 6 | 含快速购买/物品详情 |
 | 任务 (Task) | 4 | 含成就/日常/周常/教学任务 |
 | 后宅 3D (Building) | 11 | 含 2D 列表/3D 场景/生产/配方 |
@@ -546,3 +546,109 @@ user.UserLogin 响应 → LuaEvent.LoginOk → LoginStage:_LoginOk
 1. **装备字段必须无条件编码**：`EnhanceLv`/`Star`/`HeroId`/`EnhanceExp` 在 `EquipBagOverlay` 里做表索引和比较，值为 0 也必须编码（与 HeroGrid 的 `Exp`/`Mood` 同理）。
 2. **Lua 1-based vs C# 0-based**：客户端 `nIndex` 从 1 开始，服务端数组从 0 开始，`hero.ChangeEquip` 的 Index 参数需要 `-1` 转换。
 3. **装备仓库独立于道具仓库**：`EquipBagSize` 控制装备容量，`EquipInfo` 存储装备实例（含 `HeroId` 标记归属），`EquipNum` 按模板统计数量。
+
+---
+
+## 会话记录：2026-08-19 — 抽卡系统（建造）打通
+
+### 核心成果
+
+**抽卡（建造）系统完全打通**，10 连抽卡 + 动画展示 + 船坞入库全链路通。
+
+### 设计定位
+
+- 抽卡是纯服务端行为，客户端 `config_build_ship` 仅用于卡池展示（无实际池数据）。
+- 卡池数据驱动：`runtime/jp/build-pools.json`（`poolId` + `ships[{templateId, weight}]`）。
+- 池 ID 与客户端 `config_extract_ship.id` 对应（如池 1 对应新手池）。
+
+### 数据流
+
+- `buildship.BuildShip`（C2S）：`TBuildShipArg{Id, Num, CacheId}` → 服务端按权重随机抽 `Num` 艘船 → 创建 `Hero` 实例入船坞 → 返回 `TBuildShipRet{BuildShipResult=[TCommonReward]}`。
+- 响应前推送 `hero.UpdateHeroBagData`（仅新 hero）+ `illustrate.IllustrateInfo`（仅新船图鉴），确保 `ShowGirlPage` 和 `CheckShowMeet` 数据就绪。
+
+### 修复的报错（抽卡链路，共 8 个）
+
+| 报错 | 根因 | 修复 |
+|------|------|------|
+| `emaillogic.lua:45` compare nil | `TempLateId=0` 未编码 | 无条件编码 |
+| `equipdata.lua:66` compare nil | `HeroId=0` 未编码 | HeroId 无条件编码 |
+| `equiplogic.lua:444` table index nil | `Star/EnhanceLv=0` 未编码 | 无条件编码 |
+| `showgirlpage.lua:158` index nil | HeroId 无效 → hero 数据为空 | 设置 `Fashioning = (TemplateId-1)/10`（sf_id） |
+| `buildshippage.lua:729` index nil | `SpReward/TransReward` 未编码 | 编码空元素 |
+| `marrylogic.lua:246` loveInfo nil | `Affection=0` → `GetLoveInfo` 无匹配 | `Affection=1000` |
+| `buildshiplogic.lua:77` index nil | 池中船不在 `config_ship_handbook` | 只放 handbook 中存在的船 |
+| 船坞不显示角色 | `HeroBagSize=100` 低于下限 200 | `HeroBagSize=200` |
+
+### 协议字段编码策略
+
+| 字段 | 策略 |
+|------|------|
+| `TCommonReward.Id`(4) | 无条件编码（`_LoadTenCard` 读 HeroId，`IsLock` 需要） |
+| `TCommonReward.Type/ConfigId/Num` | 条件编码（非 0） |
+| `TBuildShipRet.SpReward`(2) | 每个 reward 编码一个空元素（`_LoadTenCard` 里 `self.transReward[n].Reward` 访问） |
+| `TBuildShipRet.TransReward`(3) | 同上 |
+| `HeroGrid.Fashioning`(22) | 必须非 0（`_SetExtraInfo` 调用 `GetShipShowByFashionId`） |
+
+### 改动文件
+
+- `PlayerEntities.cs`：`BuildShipEntry`/`BuildShipPool` record；`HeroDock.BagSize=200`。
+- `PlayerDataCodec.cs`：`EncodeBuildShipRet` 完整编码（含 `SpReward`/`TransReward` 空元素）。
+- `GameLoginMessageHandler.cs`：`GmBuildPoolLoader`（JSON 数据驱动）、`BuildBuildShipRetAsync`、`RollShip`/`WeightedPick`/`AddShip`、`DecodeBuildShipArg`、`_nextHeroId`/`_lastBuildHeroIds`/`GetAccountAsync`。
+- `GameLoginSession.cs`：`buildship.BuildShip` 分支（先推 hero+illustrate，再应答）。
+- `runtime/jp/build-pools.json`：卡池配置（池 ID 1，3 艘船）。
+
+### 关键知识点
+
+1. **抽卡是纯服务端行为**：客户端 `config_build_ship` 无实际池数据，服务器数据驱动。
+2. **`Fashioning` 必须非 0**：`_SetExtraInfo` 调用 `GetShipShowByFashionId(Fashioning)`，为 0 时返回 nil → 提前 return → hero 数据为空。
+3. **池中船必须在 `config_ship_handbook` 中**：`UpdateHero` 处理 handbook 时查不到会崩溃，导致图鉴数据不完整。
+4. **`HeroBagSize` 下限 200**：`config_parameter[20].value=200`，低于此值会被 `GetBaseShipNum` 的 `Mathf.Clamp` 修正，但显示仍可能异常。
+
+---
+
+## 会话记录：2026-08-19 — 玩家个人资料（Profile）打通
+
+### 核心成果
+
+**玩家个人资料页无报错**，修改秘书舰、改名、改签名、改头像、改头像框全部可用。
+
+### 修复的报错
+
+| 报错 | 根因 | 修复 |
+|------|------|------|
+| `readonlymeta.lua:139` math.floor nil | `GetHeroCount`/`AttackCount` 未编码 | 编码 `GetHeroCount(41)`/`AttackCount(40)`/`MarriedNum(45)` |
+| `playerheadframelogic.lua:53` index nil | `Head`(4) 未编码 → `config_profile[nil]` | 编码 `Head=1021051`（默认秘书舰） |
+| `medallogic.lua:9` index nil | `MedalAcquiredTime` 编码了 MedalId=0 元素 | 不编码该字段（protobuf default_value={}） |
+| `headdata.lua:71` table index nil | `user.GetHeadBuyCount` 未处理 | 返回 `ShipFleetId=0, Count=0` |
+| 头像无法修改 | `user.NewHeadUnlockedList` 未推送 | 登录时推送船坞所有舰娘的 sf_id |
+
+### 实现的协议
+
+| 协议 | 参数 | 功能 |
+|------|------|------|
+| `user.SetUserSecretary` | `SecretaryId(1, uint32)` | 修改秘书舰 |
+| `user.ChangeName` | `Name(1, string)` | 改名 |
+| `user.SetMessage` | `Message(1, string)` | 修改个人签名 |
+| `user.SetPlayerHeadFrame` | `headFrameId(1, int32)` | 修改头像框 |
+| `user.SetHead` | `ProfileID(2, int32)` | 修改头像 |
+| `user.GetHeadBuyCount` | `ShipFleetId(1)` | 查询头像购买计数（返回 0） |
+| `user.BuyHead` | — | 购买头像（空响应） |
+| `user.NewHeadUnlockedList` | (推送) | 动态推送船坞所有舰娘的 sf_id |
+
+### 新增字段
+
+- `PlayerCharacter` / `UserInfoFields`：`Head`(4)、`HeadFrame`(5)、`Message`(25)、`GetHeroCount`(41)、`AttackCount`(40)、`MarriedNum`(45)
+- `BuildUserProfileUpdateAsync` 统一处理所有档案更新（解码 → 更新 → 落盘 → 推送）
+
+### 改动文件
+
+- `PlayerEntities.cs`：`PlayerCharacter` 新增 `Head`/`HeadFrame`/`Message`/`GetHeroCount`/`AttackCount`/`MarriedNum`
+- `GameLoginProtocol.cs`：`UserInfoFields` 新增对应字段 + `EncodeRetGetUserInfo` 编码
+- `GameLoginMessageHandler.cs`：`BuildUserProfileUpdateAsync` + `DecodeVarintField`/`DecodeStringField` + `BuildHeadUnlockedListPush` + `user.SetHead` 等分支
+- `GameLoginSession.cs`：档案更新后推送 `user.UpdateUserInfo`
+
+### 关键知识点
+
+1. **统一档案更新模式**：`BuildUserProfileUpdateAsync(field)` 统一处理所有档案更新，`DecodeVarintField`/`DecodeStringField` 按字段号解码，灵活可扩展。
+2. **`NewHeadUnlockedList` 动态生成**：从船坞 `Heroes` 推导 `sf_id = (TemplateId - 1) / 10`，去重后推送。
+3. **`MedalAcquiredTime` 不编码**：protobuf `default_value={}`，不编码时客户端解出空表，`GetMedalIdTab` 返回空数组。

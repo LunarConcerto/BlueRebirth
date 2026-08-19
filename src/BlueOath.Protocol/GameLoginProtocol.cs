@@ -27,7 +27,9 @@ public sealed record UserInfoFields(
     int CopyTrainPoint = 0, int FashionPoint = 0, int GuildContri = 0,
     int Lucky = 0, int TeacherMedal = 0, int TeacherPrestige = 0,
     int BattlePassExp = 0, int BattlePassGold = 0, int PvePt = 0,
-    int GuildCoinII = 0, int UrEquipCoin = 0, int ActivityBattlePassExp = 0);
+    int GuildCoinII = 0, int UrEquipCoin = 0, int ActivityBattlePassExp = 0,
+    int GetHeroCount = 0, int AttackCount = 0, int MarriedNum = 0,
+    int Head = 1021051, int HeadFrame = 0, string Message = "");
 
 public static class TMessageCodec
 {
@@ -163,6 +165,8 @@ public static class TMessageCodec
         using var output = new MemoryStream();
         if (v.Uid != 0) WriteVarintField(output, 1, v.Uid);
         if (!string.IsNullOrEmpty(v.Uname)) WriteBytes(output, 2, Encoding.UTF8.GetBytes(v.Uname));
+        if (v.Head != 0) WriteVarintField(output, 4, unchecked((uint)v.Head));
+        if (v.HeadFrame != 0) WriteVarintField(output, 5, unchecked((uint)v.HeadFrame));  // HeadFrame
         if (v.Class != 0) WriteVarintField(output, 7, unchecked((uint)v.Class));
         if (v.Level != 0) WriteVarintField(output, 10, unchecked((uint)v.Level));
         WriteVarintField(output, 11, unchecked((uint)0));        // Exp (HomePage:_PlayerData 读，缺则 nil 崩)
@@ -201,6 +205,11 @@ public static class TMessageCodec
         WriteVarintField(output, 63, unchecked((uint)v.GuildCoinII)); // GuildCoinII (CurrencyType.GUILD_COIN_II)
         WriteVarintField(output, 64, unchecked((uint)v.UrEquipCoin)); // UrEquipCoin (CurrencyType.UREQUIPCOIN)
         WriteVarintField(output, 65, unchecked((uint)v.ActivityBattlePassExp)); // ActivityBattlePassExp
+        WriteVarintField(output, 40, unchecked((uint)v.AttackCount));       // AttackCount (recordpage 统计)
+        WriteVarintField(output, 41, unchecked((uint)v.GetHeroCount));      // GetHeroCount (recordpage 统计)
+        WriteVarintField(output, 45, unchecked((uint)v.MarriedNum));        // MarriedNum (recordpage 统计)
+        // 非致命字段，不编码 MedalAcquiredTime（空 repeated 表示无勋章）
+        if (!string.IsNullOrEmpty(v.Message)) WriteBytes(output, 25, Encoding.UTF8.GetBytes(v.Message));
         return output.ToArray();
     }
 

@@ -14,7 +14,8 @@ internal sealed record ServerOptions(
     string? CaptureRoot,
     bool TlsMaterialOnly,
     int? GameLoginPort,
-    int? KcpGameLoginPort)
+    int? KcpGameLoginPort,
+    int? GmPort)
 {
     /// <summary>解析命令行参数；未显式指定的项使用默认值（JP 服、临时端口、本地 data 目录）。</summary>
     public static ServerOptions Parse(string[] args)
@@ -28,6 +29,7 @@ internal sealed record ServerOptions(
         var tlsMaterialOnly = false;
         int? gameLoginPort = null;
         int? kcpGameLoginPort = null;
+        int? gmPort = null;
 
         foreach (var arg in args)
         {
@@ -52,9 +54,12 @@ internal sealed record ServerOptions(
             else if (arg.StartsWith("--kcp-game-login-port=", StringComparison.OrdinalIgnoreCase) &&
                 int.TryParse(arg[22..], out var parsedKcpGameLoginPort) && parsedKcpGameLoginPort is >= 0 and <= 65535)
                 kcpGameLoginPort = parsedKcpGameLoginPort;
+            else if (arg.StartsWith("--gm-port=", StringComparison.OrdinalIgnoreCase) &&
+                int.TryParse(arg[10..], out var parsedGmPort) && parsedGmPort is >= 0 and <= 65535)
+                gmPort = parsedGmPort;
         }
 
         return new ServerOptions(port, profile, dataRoot, enableTls, tlsOutputRoot, captureRoot,
-            tlsMaterialOnly, gameLoginPort, kcpGameLoginPort);
+            tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort);
     }
 }

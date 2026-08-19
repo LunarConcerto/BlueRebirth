@@ -1,7 +1,9 @@
+using System.Text;
 using System.Text.Json;
 using BlueOath.Core;
 using BlueOath.Protocol;
 using BlueOath.Storage;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 
 namespace BlueOath.Server.Protocols;
@@ -21,6 +23,10 @@ internal sealed class GameLoginMessageHandler
     private readonly Dictionary<int, (int Type, int ConfigId, int Num)> _gmGoodsMap;
     private readonly Dictionary<int, int> _fashionSfIdMap;
     private readonly IReadOnlyList<GmMailConfig> _gmMails;
+    private readonly Dictionary<int, BuildShipPool> _buildPools;
+    private readonly Dictionary<int, int> _expPerItem;
+    private readonly Dictionary<int, int> _expNeeded;
+    private readonly Random _rng = new();
 
     public GameLoginMessageHandler(SqliteGameRepository repo, ServerOptions options, ILoggerFactory loggerFactory)
     {
@@ -31,6 +37,8 @@ internal sealed class GameLoginMessageHandler
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId, g => (g.Type, g.ItemId, g.Num));
         _fashionSfIdMap = _gmGoods.FashionSfId.ToDictionary(kv => kv.Key, kv => kv.Value);
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
+        _buildPools = GmBuildPoolLoader.Load(options.DataRoot);
+        (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
     }
 
     /// <summary>
@@ -84,6 +92,34 @@ internal sealed class GameLoginMessageHandler
         {
             ret = await BuildChangeEquipRetAsync(request, profileId, ct);
         }
+        else if (request.Method == "hero.AddExp")
+        {
+            ret = await BuildAddExpRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "user.SetUserSecretary")
+        {
+            ret = await BuildUserProfileUpdateAsync(request, profileId, ct, "Secretary");
+        }
+        else if (request.Method == "user.ChangeName")
+        {
+            ret = await BuildUserProfileUpdateAsync(request, profileId, ct, "Name");
+        }
+        else if (request.Method == "user.SetMessage")
+        {
+            ret = await BuildUserProfileUpdateAsync(request, profileId, ct, "Message");
+        }
+        else if (request.Method == "user.SetPlayerHeadFrame")
+        {
+            ret = await BuildUserProfileUpdateAsync(request, profileId, ct, "HeadFrame");
+        }
+        else if (request.Method == "user.SetHead")
+        {
+            ret = await BuildUserProfileUpdateAsync(request, profileId, ct, "Head");
+        }
+        else if (request.Method == "buildship.BuildShip")
+        {
+            ret = await BuildBuildShipRetAsync(request, profileId, ct);
+        }
         else
         {
             ret = request.Method switch
@@ -99,6 +135,12 @@ internal sealed class GameLoginMessageHandler
                 "mail.DeleteMail" => BuildMailListRet(now),
                 "mail.DeleteAllMail" => BuildMailListRet(now),
                 "mail.ReceiveNewMail" => BuildMailListRet(now),
+                "buildship.BuildShipInfo" => new byte[] { 0x08, 0x00 }, // DrawInfo: empty
+                "buildship.BuildShipBox" => [],
+                "buildship.BuildShipReward" => [],
+                "user.GetHeadBuyCount" => new byte[] { 0x08, 0x00, 0x10, 0x00 }, // ShipFleetId=0, Count=0
+                "user.BuyHead" => [],
+                "user.NewHeadUnlockedList" => [],
                 _ => []
             };
         }
@@ -228,6 +270,12 @@ internal sealed class GameLoginMessageHandler
             // 装备仓库推送（EquipBagSize=2000，初始空）。
             BuildEquipPush(account, now),
 
+            // 头像解锁列表推送（默认秘书舰的 profile 1021051 已解锁）。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "user.NewHeadUnlockedList",
+                Ret: BuildHeadUnlockedListPush(account),
+                Time: now)),
+
             // 邮件系统触发：payback.newPayback 推送会让 EmailService._TagUpdataMail
             // 置 updataTog=true，玩家打开邮件页面时才 SendGetMailList 拉取邮件列表。
             TMessageCodec.EncodeResponse(new TResponse(
@@ -237,7 +285,7 @@ internal sealed class GameLoginMessageHandler
     }
 
     /// <summary>加载账号；不存在时按默认工厂创建并落盘（兼容旧存档）。</summary>
-    private async Task<PlayerAccount> GetOrCreateAccountAsync(string profileId, CancellationToken ct)
+    internal async Task<PlayerAccount> GetOrCreateAccountAsync(string profileId, CancellationToken ct)
     {
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is not null)
@@ -249,6 +297,16 @@ internal sealed class GameLoginMessageHandler
         await _repo.SaveAccountAsync(created, ct);
         return created;
     }
+
+    /// <summary>仅加载账号（不创建），供会话层在推送时读取最新数据。</summary>
+    public async Task<PlayerAccount> GetAccountAsync(string profileId, CancellationToken ct)
+    {
+        var account = await _repo.LoadAccountAsync(profileId, ct);
+        return account ?? PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+    }
+
+    /// <summary>获取最近一次抽卡创建的新英雄 ID 列表（供会话层只推送增量 hero 数据）。</summary>
+    public IReadOnlyList<uint> GetLastBuildHeroIds() => _lastBuildHeroIds;
 
     private static byte[] EncodeCreateUser(PlayerAccount account)
     {
@@ -270,7 +328,9 @@ internal sealed class GameLoginMessageHandler
             CopyTrainPoint: c.CopyTrainPoint, FashionPoint: c.FashionPoint, GuildContri: c.GuildContri,
             Lucky: c.Lucky, TeacherMedal: c.TeacherMedal, TeacherPrestige: c.TeacherPrestige,
             BattlePassExp: c.BattlePassExp, BattlePassGold: c.BattlePassGold, PvePt: c.PvePt,
-            GuildCoinII: c.GuildCoinII, UrEquipCoin: c.UrEquipCoin, ActivityBattlePassExp: c.ActivityBattlePassExp));
+            GuildCoinII: c.GuildCoinII, UrEquipCoin: c.UrEquipCoin, ActivityBattlePassExp: c.ActivityBattlePassExp,
+            GetHeroCount: c.GetHeroCount, AttackCount: c.AttackCount, MarriedNum: c.MarriedNum,
+            Head: c.Head, HeadFrame: c.HeadFrame, Message: c.Message));
     }
 
     private static HeroGrid ToHeroGrid(Hero hero) =>
@@ -335,6 +395,10 @@ internal sealed class GameLoginMessageHandler
     private const int GoodsTypeEquip = 2;
     private const int GoodsTypeFashion = 18;
     private uint _nextEquipId = 1;
+    private uint _nextHeroId = 2; // 1 是默认秘书舰
+
+    /// <summary>为 GM 命令生成下一个可用的舰娘实例 ID（调用前需确保已加载账号）。</summary>
+    public uint NextHeroId() => _nextHeroId++;
 
     /// <summary>初始化 _nextEquipId 为账号中最大装备 ID + 1（避免服务重启后 ID 重复）。</summary>
     private void EnsureEquipIdFromAccount(PlayerAccount account)
@@ -344,6 +408,12 @@ internal sealed class GameLoginMessageHandler
             var maxId = equip.Items.Max(e => e.EquipId);
             if (maxId >= _nextEquipId)
                 _nextEquipId = maxId + 1;
+        }
+        if (account.Dock is { Heroes.Count: > 0 } dock)
+        {
+            var maxId = dock.Heroes.Max(h => h.HeroId);
+            if (maxId >= _nextHeroId)
+                _nextHeroId = maxId + 1;
         }
     }
 
@@ -434,7 +504,7 @@ internal sealed class GameLoginMessageHandler
     /// （constants.lua CurrencyType 与 user_pb.lua TGetUserInfoRet 字段的并集，排除非 UserInfo
     /// 的战斗/建筑临时值如 BULLET/GAS/ELECTRIC 等）。
     /// </summary>
-    private static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)
+    internal static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)
     {
         var c = account.Character;
         c = currencyType switch
@@ -468,7 +538,7 @@ internal sealed class GameLoginMessageHandler
         return account with { Character = c };
     }
 
-    private static PlayerAccount AddBagItem(PlayerAccount account, int templateId, int num)
+    internal static PlayerAccount AddBagItem(PlayerAccount account, int templateId, int num)
     {
         var bag = account.Bag ?? new PlayerBag([], 100);
         var items = bag.Items.ToList();
@@ -657,8 +727,355 @@ internal sealed class GameLoginMessageHandler
     }
 
     /// <summary>
-    /// 装备穿脱后的数据推送（英雄 + 装备），供会话在 hero.ChangeEquip 应答后发出。
+    /// 处理 buildship.BuildShip：按卡池权重随机抽取舰娘，10 连保底至少一个 SR（quality>=3）。
+    /// 抽取到的舰娘加入船坞，返回 TBuildShipRet{BuildShipResult=[TCommonReward]}。
     /// </summary>
+    private async Task<byte[]> BuildBuildShipRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null)
+            return [];
+        var (poolId, num, _) = DecodeBuildShipArg(request.Args);
+        if (num <= 0) num = 1;
+        if (num > 10) num = 10;
+
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        var rewards = new List<CommonReward>();
+        _lastBuildHeroIds = new List<uint>();
+
+        for (var i = 0; i < num; i++)
+        {
+            var tid = RollShip(poolId);
+            if (tid == 0) continue;
+            var heroId = _nextHeroId++;
+            account = AddShip(account, heroId, tid, now);
+            _lastBuildHeroIds.Add(heroId);
+            rewards.Add(new CommonReward(3, tid, 1, (int)heroId));
+        }
+        if (rewards.Count > 0)
+            await _repo.SaveAccountAsync(account, ct);
+
+        return EncodeBuildShipRet(rewards);
+    }
+
+    private List<uint> _lastBuildHeroIds = [];
+
+    /// <summary>
+    /// 按卡池权重随机抽取一个舰娘 TemplateId。返回 0 表示池中没有可抽的船。
+    /// </summary>
+    private int RollShip(int poolId)
+    {
+        if (!_buildPools.TryGetValue(poolId, out var pool) || pool.Ships.Count == 0)
+            return 0;
+        return WeightedPick(pool.Ships);
+    }
+
+    private int WeightedPick(IReadOnlyList<BuildShipEntry> entries)
+    {
+        var totalWeight = entries.Sum(e => e.Weight);
+        if (totalWeight <= 0) return entries[0].TemplateId;
+        var roll = _rng.Next(totalWeight);
+        var cumulative = 0;
+        foreach (var e in entries)
+        {
+            cumulative += e.Weight;
+            if (roll < cumulative)
+                return e.TemplateId;
+        }
+        return entries[^1].TemplateId;
+    }
+
+    /// <summary>舰娘加入船坞：创建 Hero 实例。Affection=1000 避免 GetLoveInfo 返回 nil。</summary>
+    internal static PlayerAccount AddShip(PlayerAccount account, uint heroId, int templateId, int now)
+    {
+        var dock = account.Dock;
+        var heroes = dock.Heroes.ToList();
+        var fashioning = (templateId - 1) / 10;
+        heroes.Add(new Hero(HeroId: heroId, TemplateId: templateId, Level: 1,
+            Fashioning: fashioning, CreateTime: now, UpdateTime: now, Affection: 1000, CurHp: PlayerAccountFactory.HpCoefficient, Mood: 0, MarryType: 0));
+        return account with { Dock = dock with { Heroes = heroes } };
+    }
+
+    /// <summary>解码 TBuildShipArg: Id(1, int32), Num(2, int32), CacheId(3, string)。</summary>
+    private static (int Id, int Num, string CacheId) DecodeBuildShipArg(ReadOnlySpan<byte> payload)
+    {
+        var reader = new ProtoReader(payload);
+        int id = 0, num = 1;
+        var cacheId = "";
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: id = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: num = checked((int)reader.ReadVarint()); break;
+                case 3 when wire == 2: cacheId = reader.ReadString(); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return (id, num, cacheId);
+    }
+
+    /// <summary>编码 TBuildShipRet: BuildShipResult(1, repeated TCommonReward)。</summary>
+    private static byte[] EncodeBuildShipRet(IReadOnlyList<CommonReward> rewards)
+    {
+        using var output = new MemoryStream();
+        foreach (var r in rewards)
+        {
+            using var item = new MemoryStream();
+            if (r.Type != 0) { item.WriteByte(0x08); WriteVarint(item, unchecked((ulong)r.Type)); }
+            if (r.ConfigId != 0) { item.WriteByte(0x10); WriteVarint(item, unchecked((ulong)r.ConfigId)); }
+            if (r.Num != 0) { item.WriteByte(0x18); WriteVarint(item, unchecked((ulong)r.Num)); }
+            item.WriteByte(0x20); WriteVarint(item, unchecked((ulong)r.Id));
+            var body = item.ToArray();
+            output.WriteByte(0x0A);
+            WriteVarint(output, (ulong)body.Length);
+            output.Write(body);
+        }
+        // SpReward(2) 和 TransReward(3) 各编码一个空元素，避免 _LoadTenCard 里
+        // self.transReward[nIndex].Reward 访问 nil 崩溃。
+        for (var i = 0; i < rewards.Count; i++)
+        {
+            output.WriteByte(0x12); output.WriteByte(0x00); // SpReward
+            output.WriteByte(0x1A); output.WriteByte(0x00); // TransReward
+        }
+        return output.ToArray();
+    }
+
+    /// <summary>构建头像解锁列表推送（TNewHeadUnlockedList），包含船坞中所有舰娘的 sf_id。</summary>
+    private static byte[] BuildHeadUnlockedListPush(PlayerAccount account)
+    {
+        // 收集船坞中所有舰娘的 sf_id（ship_info_id = (TemplateId - 1) / 10）
+        var sfIds = account.Dock.Heroes
+            .Select(h => (h.TemplateId - 1) / 10)
+            .Distinct()
+            .ToList();
+        using var output = new MemoryStream();
+        foreach (var sfId in sfIds)
+        {
+            // TNewHeadNode: ShipFleetId(1, int32), ProfileID(2, repeated int32)
+            using var node = new MemoryStream();
+            WriteVarint(node, 0x08); WriteVarint(node, unchecked((ulong)sfId)); // ShipFleetId
+            WriteVarint(node, 0x10); WriteVarint(node, unchecked((ulong)sfId)); // ProfileID = sfId
+            var body = node.ToArray();
+            output.WriteByte(0x0A); // UnlockedList field 1, wire 2
+            WriteVarint(output, (ulong)body.Length);
+            output.Write(body);
+        }
+        return output.ToArray();
+    }
+
+    private static void WriteVarint(Stream output, ulong value)
+    {
+        while (value >= 0x80) { output.WriteByte((byte)(value | 0x80)); value >>= 7; }
+        output.WriteByte((byte)value);
+    }
+
+    private ref struct ProtoReader
+    {
+        private readonly ReadOnlySpan<byte> _data;
+        private int _offset;
+        public ProtoReader(ReadOnlySpan<byte> data) { _data = data; _offset = 0; }
+        public bool TryReadField(out int field, out int wire)
+        {
+            if (_offset >= _data.Length) { field = wire = 0; return false; }
+            var key = ReadVarint();
+            field = checked((int)(key >> 3));
+            wire = (int)(key & 7);
+            return true;
+        }
+        public ulong ReadVarint()
+        {
+            ulong value = 0;
+            for (var shift = 0; shift < 64; shift += 7)
+            {
+                if (_offset >= _data.Length) throw new EndOfStreamException();
+                var cur = _data[_offset++];
+                value |= (ulong)(cur & 0x7f) << shift;
+                if ((cur & 0x80) == 0) return value;
+            }
+            throw new InvalidDataException();
+        }
+        public string ReadString() => Encoding.UTF8.GetString(ReadBytes());
+        public ReadOnlySpan<byte> ReadBytes()
+        {
+            var len = checked((int)ReadVarint());
+            var val = _data.Slice(_offset, len);
+            _offset += len;
+            return val;
+        }
+        public void Skip(int wire)
+        {
+            switch (wire)
+            {
+                case 0: ReadVarint(); break;
+                case 2: ReadBytes(); break;
+                default: throw new InvalidDataException();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 处理用户档案更新（秘书舰/改名/签名/头像/头像框）。
+    /// 解码对应协议的 arg，更新 PlayerCharacter，落盘，返回空响应。
+    /// </summary>
+    private async Task<byte[]> BuildUserProfileUpdateAsync(TRequest request, string profileId, CancellationToken ct, string field)
+    {
+        if (request.Args is null) return [];
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var c = account.Character;
+
+        if (field == "Secretary")
+        {
+            // TSetUserSecretaryArg: SecretaryId(1, uint32)
+            var secId = DecodeVarintField(request.Args, 1);
+            if (secId == 0) return [];
+            c = c with { SecretaryId = (uint)secId };
+        }
+        else if (field == "Name")
+        {
+            // TUserChangeNameArg: Name(1, string)
+            var name = DecodeStringField(request.Args, 1);
+            if (string.IsNullOrWhiteSpace(name)) return [];
+            c = c with { Name = name };
+        }
+        else if (field == "Message")
+        {
+            // TSetUserMsgArg: Message(1, string)
+            var msg = DecodeStringField(request.Args, 1);
+            c = c with { Message = msg ?? "" };
+        }
+        else if (field == "HeadFrame")
+        {
+            // TUserSetPlayerHeadFrameArg: headFrameId(1, int32)
+            var frameId = DecodeVarintField(request.Args, 1);
+            c = c with { HeadFrame = (int)frameId };
+        }
+        else if (field == "Head")
+        {
+            // TNewHeadBuyHeadArg: ShipFleetId(1, int32), ProfileID(2, int32) — 取 ProfileID
+            var profileId_i = DecodeVarintField(request.Args, 2);
+            if (profileId_i == 0) return [];
+            c = c with { Head = (int)profileId_i };
+        }
+        else return [];
+
+        account = account with { Character = c };
+        await _repo.SaveAccountAsync(account, ct);
+        return [];
+    }
+
+    private static ulong DecodeVarintField(ReadOnlySpan<byte> data, int field)
+    {
+        var reader = new ProtoReader(data);
+        while (reader.TryReadField(out var f, out var wire))
+        {
+            if (f == field && wire == 0) return reader.ReadVarint();
+            reader.Skip(wire);
+        }
+        return 0;
+    }
+
+    private static string? DecodeStringField(ReadOnlySpan<byte> data, int field)
+    {
+        var reader = new ProtoReader(data);
+        while (reader.TryReadField(out var f, out var wire))
+        {
+            if (f == field && wire == 2) return reader.ReadString();
+            reader.Skip(wire);
+        }
+        return null;
+    }
+
+    private async Task<byte[]> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        var (heroId, items) = DecodeHeroAddExp(request.Args);
+        if (heroId == 0 || items.Count == 0) return [];
+
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var dock = account.Dock;
+        var heroList = dock.Heroes.ToList();
+        var heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return [];
+        var hero = heroList[heroIdx];
+
+        var totalExp = 0;
+        var bag = account.Bag ?? new PlayerBag([], 100);
+        var bagItems = bag.Items.ToList();
+        foreach (var (itemId, num) in items)
+        {
+            if (!_expPerItem.TryGetValue(itemId, out var perExp)) continue;
+            totalExp += perExp * num;
+            var bagIdx = bagItems.FindIndex(i => i.TemplateId == itemId);
+            if (bagIdx >= 0)
+            {
+                var newNum = bagItems[bagIdx].Num - num;
+                if (newNum <= 0) bagItems.RemoveAt(bagIdx);
+                else bagItems[bagIdx] = bagItems[bagIdx] with { Num = newNum };
+            }
+        }
+        if (totalExp == 0) return [];
+
+        var level = hero.Level;
+        var exp = hero.Exp + totalExp;
+        var maxLevel = 200;
+        while (level < maxLevel)
+        {
+            var needExp = _expNeeded.GetValueOrDefault(level, 500);
+            if (exp < needExp) break;
+            exp -= needExp;
+            level++;
+        }
+        heroList[heroIdx] = hero with { Level = level, Exp = exp };
+        account = account with { Dock = dock with { Heroes = heroList }, Bag = bag with { Items = bagItems } };
+        await _repo.SaveAccountAsync(account, ct);
+
+        return EncodeHeroAddExpRet(heroId, items);
+    }
+
+    private static (uint HeroId, List<(int Id, int Num)> Items) DecodeHeroAddExp(ReadOnlySpan<byte> data)
+    {
+        var reader = new ProtoReader(data);
+        uint heroId = 0;
+        var items = new List<(int, int)>();
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            if (field == 1 && wire == 0) heroId = checked((uint)reader.ReadVarint());
+            else if (field == 2 && wire == 2)
+            {
+                var itemBytes = reader.ReadBytes();
+                var itemReader = new ProtoReader(itemBytes);
+                int curId = 0, curNum = 0;
+                while (itemReader.TryReadField(out var f, out var w))
+                {
+                    if (f == 2 && w == 0) curId = checked((int)itemReader.ReadVarint());
+                    else if (f == 3 && w == 0) curNum = checked((int)itemReader.ReadVarint());
+                    else itemReader.Skip(w);
+                }
+                if (curId > 0 && curNum > 0) items.Add((curId, curNum));
+            }
+            else reader.Skip(wire);
+        }
+        return (heroId, items);
+    }
+
+    private static byte[] EncodeHeroAddExpRet(uint heroId, List<(int Id, int Num)> items)
+    {
+        using var output = new MemoryStream();
+        if (heroId != 0) { output.WriteByte(0x08); WriteVarint(output, heroId); }
+        foreach (var (id, num) in items)
+        {
+            using var item = new MemoryStream();
+            if (id != 0) { item.WriteByte(0x10); WriteVarint(item, unchecked((ulong)id)); }
+            if (num != 0) { item.WriteByte(0x18); WriteVarint(item, unchecked((ulong)num)); }
+            var body = item.ToArray();
+            output.WriteByte(0x12);
+            WriteVarint(output, (ulong)body.Length);
+            output.Write(body);
+        }
+        return output.ToArray();
+    }
+
     public async Task<IReadOnlyList<byte[]>> BuildPostEquipPushesAsync(string profileId, uint now, CancellationToken ct)
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
@@ -717,5 +1134,119 @@ internal static class GmMailsConfigLoader
             Console.Error.WriteLine($"[gm-mails] failed to parse {path}: {ex.Message}");
             return new GmMailsConfig([]);
         }
+    }
+}
+
+/// <summary>从数据目录下的 build-pools.json 加载抽卡池配置（数据驱动，不依赖客户端 config DB）。</summary>
+internal static class GmBuildPoolLoader
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public static Dictionary<int, BuildShipPool> Load(string dataRoot)
+    {
+        var path = Path.Combine(dataRoot, "build-pools.json");
+        if (!File.Exists(path))
+            return [];
+        try
+        {
+            var config = JsonSerializer.Deserialize<GmBuildPoolsConfig>(File.ReadAllText(path), JsonOptions);
+            if (config?.Pools is null) return [];
+            return config.Pools.ToDictionary(p => p.PoolId, p => new BuildShipPool(p.PoolId,
+                p.Ships.Select(s => new BuildShipEntry(s.TemplateId, s.Weight)).ToList()));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[build-pools] failed to parse {path}: {ex.Message}");
+            return [];
+        }
+    }
+}
+
+/// <summary>build-pools.json 的顶层结构。</summary>
+internal sealed record GmBuildPoolsConfig(IReadOnlyList<GmBuildPoolConfig> Pools);
+
+/// <summary>单个卡池配置。</summary>
+internal sealed record GmBuildPoolConfig(int PoolId, IReadOnlyList<GmBuildShipConfig> Ships);
+
+/// <summary>单个卡池中的船娘条目。</summary>
+internal sealed record GmBuildShipConfig(int TemplateId, int Weight);
+
+/// <summary>从 config_ship_exp_item.db 和 config_ship_levelup.db 加载升级所需数据。</summary>
+internal static class ShipLevelupLoader
+{
+    private const byte XorKey = 0x55;
+
+    public static (Dictionary<int, int> ExpPerItem, Dictionary<int, int> ExpNeeded) Load(string dataRoot)
+    {
+        var configDir = Path.GetFullPath(Path.Combine(dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
+        var expPerItem = new Dictionary<int, int>();
+        var expNeeded = new Dictionary<int, int>();
+        LoadExpItems(configDir, expPerItem);
+        LoadLevelupExp(configDir, expNeeded);
+        return (expPerItem, expNeeded);
+    }
+
+    private static void LoadExpItems(string configDir, Dictionary<int, int> result)
+    {
+        try
+        {
+            var path = Path.Combine(configDir, "config_ship_exp_item.db");
+            if (!File.Exists(path)) return;
+            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            c.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+                if (id == 0) continue;
+                var bytes = ReadColumnBytes(r, 1);
+                var json = XorDecode(bytes);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("exp", out var exp))
+                    result[id] = exp.GetInt32();
+            }
+        }
+        catch { }
+    }
+
+    private static void LoadLevelupExp(string configDir, Dictionary<int, int> result)
+    {
+        try
+        {
+            var path = Path.Combine(configDir, "config_ship_levelup.db");
+            if (!File.Exists(path)) return;
+            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            c.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+                if (id == 0) continue;
+                var bytes = ReadColumnBytes(r, 1);
+                var json = XorDecode(bytes);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("exp", out var exp))
+                    result[id] = exp.GetInt32();
+            }
+        }
+        catch { }
+    }
+
+    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal)) return [];
+        var value = reader.GetValue(ordinal);
+        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
+    }
+
+    private static string XorDecode(byte[] source)
+    {
+        var result = new byte[source.Length];
+        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
+        return Encoding.UTF8.GetString(result);
     }
 }
