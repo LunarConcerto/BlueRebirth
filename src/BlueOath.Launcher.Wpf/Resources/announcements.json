@@ -1,0 +1,30 @@
+[
+  {
+    "id": "welcome",
+    "title": "欢迎",
+    "content": "欢迎使用苍蓝誓约本地启动器。\n\n本工具可帮助你在本地 .NET 服务器上运行离线恢复的日服客户端 (v1.4.0)。\n\n点击「启动游戏」按钮即可启动完整服务（服务器 + 代理 + 游戏）。",
+    "severity": "info",
+    "version": "1.0.0"
+  },
+  {
+    "id": "setup",
+    "title": "环境准备",
+    "content": "启动前请确认：\n1. 本地组件已构建（运行 build-native.ps1）。\n2. .NET 服务器可正常编译。\n3. 已安装 Python 3.8+ 用于 TLS 代理。\n4. 游戏客户端 (blueoath/) 目录存在。",
+    "severity": "warning",
+    "version": "1.0.0"
+  },
+  {
+    "id": "debug",
+    "title": "调试启动说明",
+    "content": "使用「调试启动」按钮可以仅启动客户端和代理，连接到已运行的服务器。\n\n适用于在 Rider 中调试服务器代码时使用（可设置断点）。\n\n默认服务器端口：7080（可修改）。",
+    "severity": "info",
+    "version": "1.0.0"
+  },
+  {
+    "id": "logs",
+    "title": "日志说明",
+    "content": "所有运行时日志保存在 runtime/debug/<时间戳>/ 目录下。\n\n- server.stdout.log : 服务器控制台输出\n- server.stderr.log : 服务器错误输出\n- proxy.stderr.log  : 代理错误输出\n- BlueOath.Payload.log : 游戏客户端诊断日志",
+    "severity": "info",
+    "version": "1.0.0"
+  }
+]

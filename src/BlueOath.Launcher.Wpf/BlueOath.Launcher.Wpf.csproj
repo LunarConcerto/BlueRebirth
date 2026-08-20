@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>BlueOath.Launcher.Wpf</AssemblyName>
+    <RootNamespace>BlueOath.Launcher.Wpf</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon />
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\announcements.json" />
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+</Project>
