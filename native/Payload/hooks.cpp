@@ -738,6 +738,24 @@ void TryApplyNewSdkReportHooks() {
 
 bool simulationModeSet = false;
 
+bool loginFallbackStarted = false;
+const ULONGLONG loginFallbackStart = GetTickCount64() + 30000;
+const ULONGLONG loginFallbackDelay = 30000;
+
+bool IsGameNetworkConnected() {
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return false;
+    const auto base = reinterpret_cast<uintptr_t>(ga);
+    const auto netLogicClass = ReadPtrSafe(base + 0x1D30BC8);
+    const auto staticFields = netLogicClass ? ReadPtrSafe(netLogicClass + 0x5C) : 0;
+    const auto mono = staticFields ? ReadPtrSafe(staticFields + 0) : 0;
+    const auto netService = mono ? ReadPtrSafe(mono + 0x14) : 0;
+    const auto core = netService ? ReadPtrSafe(netService + 0x8) : 0;
+    const auto socketObj = core ? ReadPtrSafe(core + 0x8) : 0;
+    const auto sockField8 = socketObj ? ReadPtrSafe(socketObj + 0x8) : 0;
+    return sockField8 == 2;
+}
+
 void DispatchLoginEvent() {
     static ULONGLONG lastDispatch = 0;
     const auto now = GetTickCount64();
@@ -2443,6 +2461,47 @@ bool InstallStrArgHook(uintptr_t rva, void* trampoline, void** stolenOut, size_t
     return true;
 }
 
+template <typename Fn>
+bool InstallReturnHook(uintptr_t rva, void* hookFn, Fn* originalOut, size_t stolenLen, const char* name) {
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return false;
+    wchar_t modulePath[MAX_PATH]{};
+    if (!GetModuleFileNameW(ga, modulePath, MAX_PATH)) return false;
+    if (HashFileSha256(modulePath) != "8AEE607813A759E047D81C2428990609322DE072437DD4597F80E8E3FAD1D404") {
+        Log(std::string(name) + " hook refused: SHA-256 mismatch");
+        return false;
+    }
+    auto address = reinterpret_cast<unsigned char*>(ga) + rva;
+    const unsigned char expected[] = { 0x55, 0x8B, 0xEC };
+    if (memcmp(address, expected, sizeof(expected)) != 0) {
+        char actual[16]{};
+        for (int i = 0; i < 6; ++i) { char b[4]{}; sprintf_s(b, "%02X ", address[i]); strcat_s(actual, b); }
+        Log(std::string(name) + " hook refused: prologue mismatch actual=" + actual);
+        return false;
+    }
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, stolenLen + 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return false;
+    memcpy(tramp, address, stolenLen);
+    const auto backRel = static_cast<int32_t>((reinterpret_cast<uintptr_t>(address) + stolenLen) -
+        (reinterpret_cast<uintptr_t>(tramp) + stolenLen + 5));
+    tramp[stolenLen] = 0xE9;
+    memcpy(tramp + stolenLen + 1, &backRel, 4);
+    *originalOut = reinterpret_cast<Fn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(hookFn);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(address) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(address, stolenLen, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+    memcpy(address, jump, 5);
+    for (size_t i = 5; i < stolenLen; ++i) address[i] = 0x90;
+    VirtualProtect(address, stolenLen, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), address, stolenLen);
+    Log(std::string(name) + " hook applied");
+    return true;
+}
+
 bool InstallXluaExportHook(const char* exportName, void* trampoline, void** stolenOut, size_t stolenLen, const char* name) {
     auto xlua = GetModuleHandleW(L"xlua.dll");
     if (!xlua) return false;
@@ -3737,6 +3796,653 @@ void TryApplyInternalLogExceptionHook() {
     if (internalLogExceptionHookApplied) return;
     internalLogExceptionHookApplied = true;
     InstallStrArgHook(0xE50220, &InternalLogExceptionTrampoline, &internalLogExceptionStolen, 10, "UnityEngine.DebugLogHandler.Internal_LogException");
+}
+
+void* isHitStolen = nullptr;
+bool isHitHookApplied = false;
+using IsHitFn = bool (__cdecl*)(void*, double, double);
+IsHitFn originalIsHit = nullptr;
+
+void LogIsHitResult(double hit, double dodge, bool result) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "__IsHit hit=" << std::to_string(hit) << " dodge=" << std::to_string(dodge)
+        << " result=" << (result ? "true" : "false")
+        << " caller=" << DescribeCaller(_ReturnAddress()) << '\n';
+    output.flush();
+}
+
+bool __cdecl HookIsHit(void* this_, double hit, double dodge) {
+    const auto caller = _ReturnAddress();
+    const auto result = originalIsHit(this_, hit, dodge);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "__IsHit hit=" << std::to_string(hit) << " dodge=" << std::to_string(dodge)
+        << " result=" << (result ? "true" : "false")
+        << " caller=" << DescribeCaller(caller) << '\n';
+    output.flush();
+    return result;
+}
+
+void TryApplyIsHitHook() {
+    if (isHitHookApplied) return;
+    isHitHookApplied = true;
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    auto fn = reinterpret_cast<unsigned char*>(ga) + 0x5281B0;
+    // stolenLen=13: push ebp(1) mov ebp,esp(2) movsd(5) subsd(5) = 13, clean boundary
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 13);
+    const auto backRel = static_cast<int32_t>((reinterpret_cast<uintptr_t>(fn) + 13) - (reinterpret_cast<uintptr_t>(tramp) + 18));
+    tramp[13] = 0xE9;
+    memcpy(tramp + 14, &backRel, 4);
+    originalIsHit = reinterpret_cast<IsHitFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookIsHit);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 13, PAGE_EXECUTE_READWRITE, &oldProtect)) return;
+    memcpy(fn, jump, 5);
+    for (size_t i = 5; i < 13; ++i) fn[i] = 0x90;
+    VirtualProtect(fn, 13, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 13);
+    Log("Battle.Logic.__IsHit hook applied (result)");
+}
+
+using GetAttrDoubleFn = double (__cdecl*)(void*, void*);
+GetAttrDoubleFn originalGetAttrAttack = nullptr;
+bool getAttrAttackHookApplied = false;
+static volatile LONG getAttrAttackCount = 0;
+
+double __cdecl HookGetAttrAttack(void* ship, void* api) {
+    const auto value = originalGetAttrAttack(ship, api);
+    const auto n = InterlockedIncrement(&getAttrAttackCount);
+    if (n <= 60 || n % 200 == 0) {
+        std::lock_guard<std::mutex> guard(logMutex);
+        std::ofstream output(logPath, std::ios::app);
+        output << "GetAttr_Attack ship=0x" << std::hex << reinterpret_cast<uintptr_t>(ship)
+            << std::dec << " value=" << std::to_string(value) << '\n';
+        output.flush();
+    }
+    return value;
+}
+
+void TryApplyGetAttrAttackHook() {
+    if (getAttrAttackHookApplied) return;
+    getAttrAttackHookApplied = true;
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    auto fn = reinterpret_cast<unsigned char*>(ga) + 0x50AD40;
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 5);
+    const auto backRel = static_cast<int32_t>((reinterpret_cast<uintptr_t>(fn) + 5) - (reinterpret_cast<uintptr_t>(tramp) + 10));
+    tramp[5] = 0xE9;
+    memcpy(tramp + 6, &backRel, 4);
+    originalGetAttrAttack = reinterpret_cast<GetAttrDoubleFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookGetAttrAttack);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) return;
+    memcpy(fn, jump, 5);
+    VirtualProtect(fn, 5, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+    Log("Battle.Logic.GetAttr_Attack hook applied");
+}
+
+using GetAttributeFn = double (__cdecl*)(void*, void*, int);
+GetAttributeFn originalShipGetAttribute = nullptr;
+bool shipGetAttributeHookApplied = false;
+static volatile LONG shipGetAttrCount = 0;
+
+double __cdecl HookShipGetAttribute(void* ship, void* api, int propId) {
+    const auto value = originalShipGetAttribute(ship, api, propId);
+    if (propId == 8 || propId == 9 || propId == 19 || propId == 20 || propId == 1 ||
+        propId == 64 || propId == 102 || propId == 178 || propId == 600 || propId == 700 ||
+        propId == 800 || propId == 901 || propId == 931 || propId == 961) {
+        const auto n = InterlockedIncrement(&shipGetAttrCount);
+        if (n <= 200 || n % 200 == 0) {
+            std::lock_guard<std::mutex> guard(logMutex);
+            std::ofstream output(logPath, std::ios::app);
+            output << "GetAttribute ship=0x" << std::hex << reinterpret_cast<uintptr_t>(ship)
+                << std::dec << " prop=" << propId << " value=" << std::to_string(value) << '\n';
+            output.flush();
+        }
+    }
+    return value;
+}
+
+void TryApplyShipGetAttributeHook() {
+    if (shipGetAttributeHookApplied) return;
+    shipGetAttributeHookApplied = true;
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    auto fn = reinterpret_cast<unsigned char*>(ga) + 0x50B1F0;
+    // stolenLen=6: push ebp(1) mov ebp,esp(2) sub esp,0x20(3) = 6, clean boundary
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 6);
+    const auto backRel = static_cast<int32_t>((reinterpret_cast<uintptr_t>(fn) + 6) - (reinterpret_cast<uintptr_t>(tramp) + 11));
+    tramp[6] = 0xE9;
+    memcpy(tramp + 7, &backRel, 4);
+    originalShipGetAttribute = reinterpret_cast<GetAttributeFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookShipGetAttribute);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 6, PAGE_EXECUTE_READWRITE, &oldProtect)) return;
+    memcpy(fn, jump, 5);
+    for (size_t i = 5; i < 6; ++i) fn[i] = 0x90;
+    VirtualProtect(fn, 6, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 6);
+    Log("Battle.Logic.Ship.GetAttribute hook applied");
+}
+
+void* setAttackDmgInfoStolen = nullptr;
+bool setAttackDmgInfoHookApplied = false;
+
+void LogSetAttackDmgInfo(void* dmg) {
+    const auto d = reinterpret_cast<uintptr_t>(dmg);
+    const auto targetUid = ReadPtrSafe(d + 0x8);
+    const auto value = ReadPtrSafe(d + 0x1C);
+    const auto realValue = ReadPtrSafe(d + 0x24);
+    const auto isCrit = ReadPtrSafe(d + 0x28);
+    const auto isMiss = ReadPtrSafe(d + 0x29);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "SetAttackDmgInfo dmg=0x" << std::hex << d
+        << " target=0x" << targetUid << std::dec
+        << " value=" << value << " realValue=" << realValue
+        << " isCrit=" << isCrit << " isMiss=" << isMiss << '\n';
+    output.flush();
+}
+
+void LogSetAttackDmgInfoRaw(unsigned int a1, unsigned int a2, unsigned int a3, unsigned int a4,
+    unsigned int a5, unsigned int a6, unsigned int a7, unsigned int a8, unsigned int a9, unsigned int a10) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "SetAttackDmgInfo raw=" << std::hex << a1 << " " << a2 << " " << a3 << " " << a4 << " "
+        << a5 << " " << a6 << " " << a7 << " " << a8 << " " << a9 << " " << a10 << std::dec << '\n';
+    output.flush();
+}
+
+__declspec(naked) void SetAttackDmgInfoTrampoline() {
+    __asm {
+        pushad
+        // after pushad: orig arg1 at [esp+0x24], arg10 at [esp+0x44]
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        mov eax, dword ptr [esp + 0x44]
+        push eax
+        call LogSetAttackDmgInfoRaw
+        add esp, 40
+        popad
+        jmp dword ptr [setAttackDmgInfoStolen]
+    }
+}
+
+void TryApplySetAttackDmgInfoHook() {
+    if (setAttackDmgInfoHookApplied) return;
+    setAttackDmgInfoHookApplied = true;
+    InstallStrArgHook(0x41E860, &SetAttackDmgInfoTrampoline, &setAttackDmgInfoStolen, 11, "Battle.Display.Context.Anim.Fun.SetAttackDmgInfo0");
+}
+
+void* afterExecuteStolen = nullptr;
+bool afterExecuteHookApplied = false;
+using AfterExecuteFn = void* (__cdecl*)(void*, long long, void*, int, long long, long long, int);
+AfterExecuteFn originalAfterExecute = nullptr;
+
+void DumpAttackInfos(void* container, uintptr_t attackInfoOffset) {
+    if (!container) return;
+    const auto attackInfoList = ReadPtrSafe(reinterpret_cast<uintptr_t>(container) + attackInfoOffset);
+    if (!attackInfoList) return;
+    const auto items = ReadPtrSafe(attackInfoList + 0x8);
+    const auto size = ReadPtrSafe(attackInfoList + 0xC);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    for (unsigned i = 0; i < size && i < 8; ++i) {
+        const auto attackInfo = ReadPtrSafe(items + 0x10 + static_cast<uintptr_t>(i) * 4);
+        if (!attackInfo) continue;
+        const auto dmgList = ReadPtrSafe(attackInfo + 0x18);
+        if (!dmgList) continue;
+        const auto dmgItems = ReadPtrSafe(dmgList + 0x8);
+        const auto dmgSize = ReadPtrSafe(dmgList + 0xC);
+        for (unsigned j = 0; j < dmgSize && j < 8; ++j) {
+            const auto dmg = ReadPtrSafe(dmgItems + 0x10 + static_cast<uintptr_t>(j) * 4);
+            if (!dmg) continue;
+            const auto target = ReadPtrSafe(dmg + 0x8);
+            const auto value = ReadPtrSafe(dmg + 0x1C);
+            const auto realValue = ReadPtrSafe(dmg + 0x24);
+            const auto isCrit = ReadPtrSafe(dmg + 0x28);
+            const auto isMiss = ReadPtrSafe(dmg + 0x29);
+            output << "L2DResult attack[" << i << "] dmg[" << j << "] target=0x"
+                << std::hex << target << std::dec
+                << " value=" << value << " realValue=" << realValue
+                << " isCrit=" << isCrit << " isMiss=" << isMiss << '\n';
+        }
+    }
+    output.flush();
+}
+
+void* __cdecl HookAfterExecute(void* this_, long long serviceId, void* selectInfo, int qte,
+    long long exportFleet, long long targetFleet, int isSpecial) {
+    auto result = originalAfterExecute(this_, serviceId, selectInfo, qte, exportFleet, targetFleet, isSpecial);
+    DumpAttackInfos(result, 0x14);
+    return result;
+}
+
+void TryApplyAfterExecuteHook() {
+    if (afterExecuteHookApplied) return;
+    afterExecuteHookApplied = true;
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    auto fn = reinterpret_cast<unsigned char*>(ga) + 0x520D60;
+    // stolenLen=10: push ebp(1) mov ebp,esp(2) cmp byte[disp32],imm8(7) = 10
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 10);
+    const auto backRel = static_cast<int32_t>((reinterpret_cast<uintptr_t>(fn) + 10) - (reinterpret_cast<uintptr_t>(tramp) + 15));
+    tramp[10] = 0xE9;
+    memcpy(tramp + 11, &backRel, 4);
+    originalAfterExecute = reinterpret_cast<AfterExecuteFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookAfterExecute);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 10, PAGE_EXECUTE_READWRITE, &oldProtect)) return;
+    memcpy(fn, jump, 5);
+    for (size_t i = 5; i < 10; ++i) fn[i] = 0x90;
+    VirtualProtect(fn, 10, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 10);
+    Log("Battle.Logic.EPU_MainGun.AfterExecute hook applied");
+}
+
+void* executeStolen = nullptr;
+bool executeHookApplied = false;
+using ExecuteFn = void* (__cdecl*)(void*, long long, long long, void*, int, int, int);
+ExecuteFn originalExecute = nullptr;
+
+void* __cdecl HookExecute(void* this_, long long sourceFleet, long long targetFleet, void* selectInfo,
+    int qte, int cutin, int isSpecial) {
+    auto result = originalExecute(this_, sourceFleet, targetFleet, selectInfo, qte, cutin, isSpecial);
+    DumpAttackInfos(result, 0x38);
+    return result;
+}
+
+void TryApplyExecuteHook() {
+    if (executeHookApplied) return;
+    executeHookApplied = true;
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    auto fn = reinterpret_cast<unsigned char*>(ga) + 0x520EC0;
+    // stolenLen=12: push ebp(1) mov ebp,esp(2) push esi(1) push 0(2) push [ebp+0x28](3) mov esi,[ebp+8](3) = 12
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 12);
+    const auto backRel = static_cast<int32_t>((reinterpret_cast<uintptr_t>(fn) + 12) - (reinterpret_cast<uintptr_t>(tramp) + 17));
+    tramp[12] = 0xE9;
+    memcpy(tramp + 13, &backRel, 4);
+    originalExecute = reinterpret_cast<ExecuteFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookExecute);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 12, PAGE_EXECUTE_READWRITE, &oldProtect)) return;
+    memcpy(fn, jump, 5);
+    for (size_t i = 5; i < 12; ++i) fn[i] = 0x90;
+    VirtualProtect(fn, 12, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 12);
+    Log("Battle.Logic.EPU_MainGun.Execute hook applied");
+}
+
+void* eventDamageAfterStolen = nullptr;
+bool eventDamageAfterHookApplied = false;
+
+void LogEventDamageAfter(void* this_, void* source, void* sourceOwner, void* target, int skillType,
+    int damageValue, int hit, int crit) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "EventDamageAfter this=0x" << std::hex << reinterpret_cast<uintptr_t>(this_)
+        << " source=0x" << reinterpret_cast<uintptr_t>(source)
+        << " owner=0x" << reinterpret_cast<uintptr_t>(sourceOwner)
+        << " target=0x" << reinterpret_cast<uintptr_t>(target) << std::dec
+        << " skillType=" << skillType << " damage=" << damageValue << " hit=" << hit << " crit=" << crit << '\n';
+    output.flush();
+}
+
+__declspec(naked) void EventDamageAfterTrampoline() {
+    __asm {
+        pushad
+        // _EventDamageAfter(this, source, sourceOwner, target, logicSkillType,
+        //                   damageValue, hit, crit) + one trailing zero slot.
+        // after pushad (8 regs=0x20): [esp+0x24]=this, +0x28=source, +0x2C=owner,
+        //               +0x30=target, +0x34=skillType, +0x38=damage, +0x3C=hit, +0x40=crit
+        mov eax, dword ptr [esp + 0x40]   // crit
+        push eax
+        mov eax, dword ptr [esp + 0x40]   // hit
+        push eax
+        mov eax, dword ptr [esp + 0x40]   // damage
+        push eax
+        mov eax, dword ptr [esp + 0x40]   // skillType
+        push eax
+        mov eax, dword ptr [esp + 0x40]   // target
+        push eax
+        mov eax, dword ptr [esp + 0x40]   // owner
+        push eax
+        mov eax, dword ptr [esp + 0x40]   // source
+        push eax
+        mov eax, dword ptr [esp + 0x40]   // this
+        push eax
+        call LogEventDamageAfter
+        add esp, 32
+        popad
+        jmp dword ptr [eventDamageAfterStolen]
+    }
+}
+
+void TryApplyEventDamageAfterHook() {
+    if (eventDamageAfterHookApplied) return;
+    eventDamageAfterHookApplied = true;
+    // prologue: push ebp(1) mov ebp,esp(2) sub esp,0x10(3) cmp byte[disp32],imm8(7) = 13
+    InstallStrArgHook(0x527380, &EventDamageAfterTrampoline, &eventDamageAfterStolen, 13, "Battle.Logic._EventDamageAfter");
+}
+
+void* executeAtomStolen = nullptr;
+bool executeAtomHookApplied = false;
+
+void LogExecuteAtom(void* this_, void* exportShip, void* targetShip, int qteNum,
+    uint32_t dmgLow, uint32_t dmgHigh, int cutin, int clipIndex, int isSpecial) {
+    uint64_t bits = (static_cast<uint64_t>(dmgHigh) << 32) | dmgLow;
+    double dmgAdd = 0.0;
+    memcpy(&dmgAdd, &bits, 8);
+    const auto es = reinterpret_cast<uintptr_t>(exportShip);
+    const auto ts = reinterpret_cast<uintptr_t>(targetShip);
+    // Ship+0x64 = actSkillInfo; +0x28 = damageFac (active-skill damage factor)
+    double actSkillDamFac = -1.0;
+    const auto actSkillInfo = ReadPtrSafe(es + 0x64);
+    if (actSkillInfo)
+        memcpy(&actSkillDamFac, reinterpret_cast<const void*>(actSkillInfo + 0x28), 8);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "ExecuteAtom this=0x" << std::hex << reinterpret_cast<uintptr_t>(this_)
+        << " exportShip=0x" << es
+        << " targetShip=0x" << ts << std::dec
+        << " qteNum=" << qteNum << " mainGunDamageAdd=" << dmgAdd
+        << " cutin=" << cutin << " clipIndex=" << clipIndex << " isSpecial=" << isSpecial
+        << " actSkillInfo=0x" << std::hex << actSkillInfo << std::dec
+        << " actSkillDamFac=" << actSkillDamFac << '\n';
+    output.flush();
+}
+
+__declspec(naked) void ExecuteAtomTrampoline() {
+    __asm {
+        pushad
+        // __ExecuteAtom(this, exportShip, targetShip, qteNum, mainGunDamageAdd(double),
+        //               cutin, clipIndex, isSpecial, 0)
+        // after pushad (8 regs = 0x20): [esp+0x20]=retaddr, +0x24=this, +0x28=exportShip,
+        //               +0x2C=targetShip, +0x30=qteNum, +0x34/+0x38=damageAdd,
+        //               +0x3C=cutin, +0x40=clipIndex, +0x44=isSpecial.
+        // Reading [esp+0x44] repeatedly works because each push shifts the next arg into
+        // that slot (pushing is right-to-left: isSpecial ... this).
+        mov eax, dword ptr [esp + 0x44]   // isSpecial (9th param)
+        push eax
+        mov eax, dword ptr [esp + 0x44]   // clipIndex
+        push eax
+        mov eax, dword ptr [esp + 0x44]   // cutin
+        push eax
+        mov eax, dword ptr [esp + 0x44]   // damageAdd high
+        push eax
+        mov eax, dword ptr [esp + 0x44]   // damageAdd low
+        push eax
+        mov eax, dword ptr [esp + 0x44]   // qteNum
+        push eax
+        mov eax, dword ptr [esp + 0x44]   // targetShip
+        push eax
+        mov eax, dword ptr [esp + 0x44]   // exportShip
+        push eax
+        mov eax, dword ptr [esp + 0x44]   // this
+        push eax
+        call LogExecuteAtom
+        add esp, 36
+        popad
+        jmp dword ptr [executeAtomStolen]
+    }
+}
+
+void TryApplyExecuteAtomHook() {
+    if (executeAtomHookApplied) return;
+    executeAtomHookApplied = true;
+    // prologue: push ebp(1) mov ebp,esp(2) sub esp,0x78(3) cmp byte[disp32],imm8(7) = 13
+    InstallStrArgHook(0x521E40, &ExecuteAtomTrampoline, &executeAtomStolen, 13, "Battle.Logic.EPU_MainGun.__ExecuteAtom");
+}
+
+// ---------------------------------------------------------------------------
+// MISS fix: several EPU damage paths compute
+//   damage = ceil(baseDamage * <active-skill damage factor>)
+// where the factor is Ship.actSkillInfo.damageFac (0x28). In the offline server
+// the ships carry no configured A-skill, so the factor reads back 0 and every
+// attack computes 0 damage -> DamageInfo.isMiss=true -> "MISS".
+// Neutralize each damageFac multiply (treat factor as 1.0):
+//   EPU_BuffAttack.__Execute         0x52044A  F2 0F 59 45 F4  mulsd xmm0,[ebp-0xc]
+//   EPU_MainGun_Torpedo.__ExecuteAtom 0x521910  F2 0F 59 4D DC  mulsd xmm1,[ebp-0x24]
+//   EPU_MainGun.__ExecuteAtom        0x5222F1  F2 0F 59 45 A0  mulsd xmm0,[ebp-0x60]
+//   EPU_PSkill.__EcecuteMain         0x52314B  F2 0F 59 45 F0  mulsd xmm0,[ebp-0x10]
+//   EPU_PSkill.__Execute             0x5232F0  F2 0F 59 45 F8  mulsd xmm0,[ebp-8]
+//   EPU_AirAttack.__ExecuteAtom      0x523C03  F2 0F 59 45 C0  mulsd xmm0,[ebp-0x40]
+// ---------------------------------------------------------------------------
+bool mainGunDamageFacPatched = false;
+
+void TryApplyMainGunDamageFacPatch() {
+    if (mainGunDamageFacPatched) return;
+    mainGunDamageFacPatched = true;
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    wchar_t modulePath[MAX_PATH]{};
+    if (!GetModuleFileNameW(ga, modulePath, MAX_PATH)) return;
+    if (HashFileSha256(modulePath) != "8AEE607813A759E047D81C2428990609322DE072437DD4597F80E8E3FAD1D404") {
+        Log("main-gun damageFac patch refused: SHA-256 mismatch");
+        return;
+    }
+    struct Slot { uintptr_t rva; unsigned char expect[5]; };
+    const Slot slots[] = {
+        { 0x52044A, { 0xF2, 0x0F, 0x59, 0x45, 0xF4 } },
+        { 0x521910, { 0xF2, 0x0F, 0x59, 0x4D, 0xDC } },
+        { 0x5222F1, { 0xF2, 0x0F, 0x59, 0x45, 0xA0 } },
+        { 0x52314B, { 0xF2, 0x0F, 0x59, 0x45, 0xF0 } },
+        { 0x5232F0, { 0xF2, 0x0F, 0x59, 0x45, 0xF8 } },
+        { 0x523C03, { 0xF2, 0x0F, 0x59, 0x45, 0xC0 } },
+    };
+    for (const auto& s : slots) {
+        auto address = reinterpret_cast<unsigned char*>(ga) + s.rva;
+        if (memcmp(address, s.expect, 5) != 0) {
+            char actual[16]{};
+            for (int i = 0; i < 5; ++i) { char b[4]{}; sprintf_s(b, "%02X ", address[i]); strcat_s(actual, b); }
+            Log(std::string("main-gun damageFac patch refused @0x") + std::to_string(s.rva) +
+                " actual=" + actual);
+            continue;
+        }
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(address, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) continue;
+        memset(address, 0x90, 5);
+        VirtualProtect(address, 5, oldProtect, &oldProtect);
+        FlushInstructionCache(GetCurrentProcess(), address, 5);
+        Log("main-gun damageFac patch applied @0x" + std::to_string(s.rva));
+    }
+}
+
+// ---- damage coefficient probes (log return values; each returns double in ST0) ----
+
+using DamageOddFn = double (__cdecl*)(void*, void*, void*);
+DamageOddFn originalDamageOdd = nullptr;
+bool damageOddHookApplied = false;
+
+double __cdecl HookDamageOdd(void* this_, void* exportShip, void* targetShip) {
+    const auto result = originalDamageOdd(this_, exportShip, targetShip);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "GetDamageOdd_BCS export=0x" << std::hex << reinterpret_cast<uintptr_t>(exportShip)
+        << " target=0x" << reinterpret_cast<uintptr_t>(targetShip) << std::dec
+        << " result=" << std::to_string(result) << '\n';
+    output.flush();
+    return result;
+}
+
+void TryApplyDamageOddHook() {
+    if (damageOddHookApplied) return;
+    damageOddHookApplied = true;
+    InstallReturnHook(0x521A20, &HookDamageOdd, &originalDamageOdd, 6, "GetDamageOdd_BCS");
+}
+
+using AmmoEffectFn = double (__cdecl*)(void*, int, void*);
+AmmoEffectFn originalAmmoEffect = nullptr;
+bool ammoEffectHookApplied = false;
+
+double __cdecl HookAmmoEffect(void* this_, int propId, void* ship) {
+    const auto result = originalAmmoEffect(this_, propId, ship);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "GetAmmounitionEffect prop=" << propId
+        << " ship=0x" << std::hex << reinterpret_cast<uintptr_t>(ship) << std::dec
+        << " result=" << std::to_string(result) << '\n';
+    output.flush();
+    return result;
+}
+
+void TryApplyAmmoEffectHook() {
+    if (ammoEffectHookApplied) return;
+    ammoEffectHookApplied = true;
+    InstallReturnHook(0x66A190, &HookAmmoEffect, &originalAmmoEffect, 6, "GetAmmounitionEffect");
+}
+
+using ShipDamageCoeFn = double (__cdecl*)(void*, void*, int);
+ShipDamageCoeFn originalShipDamageCoe = nullptr;
+bool shipDamageCoeHookApplied = false;
+
+double __cdecl HookShipDamageCoe(void* this_, void* ship, int skillType) {
+    const auto result = originalShipDamageCoe(this_, ship, skillType);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "GetShipDamageCoe skillType=" << skillType
+        << " ship=0x" << std::hex << reinterpret_cast<uintptr_t>(ship) << std::dec
+        << " result=" << std::to_string(result) << '\n';
+    output.flush();
+    return result;
+}
+
+void TryApplyShipDamageCoeHook() {
+    if (shipDamageCoeHookApplied) return;
+    shipDamageCoeHookApplied = true;
+    InstallReturnHook(0x66A3F0, &HookShipDamageCoe, &originalShipDamageCoe, 6, "GetShipDamageCoe");
+}
+
+using QteDamageCoeFn = double (__cdecl*)(void*, int, void*);
+QteDamageCoeFn originalQteDamageCoe = nullptr;
+bool qteDamageCoeHookApplied = false;
+
+double __cdecl HookQteDamageCoe(void* this_, int qteStep, void* ship) {
+    const auto result = originalQteDamageCoe(this_, qteStep, ship);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "GetBattleQteDamageCoe qteStep=" << qteStep
+        << " ship=0x" << std::hex << reinterpret_cast<uintptr_t>(ship) << std::dec
+        << " result=" << std::to_string(result) << '\n';
+    output.flush();
+    return result;
+}
+
+void TryApplyQteDamageCoeHook() {
+    if (qteDamageCoeHookApplied) return;
+    qteDamageCoeHookApplied = true;
+    InstallReturnHook(0x66A260, &HookQteDamageCoe, &originalQteDamageCoe, 6, "GetBattleQteDamageCoe");
+}
+
+using RelationCoeFn = double (__cdecl*)(void*, int, void*);
+RelationCoeFn originalRelationCoe = nullptr;
+bool relationCoeHookApplied = false;
+
+double __cdecl HookRelationCoe(void* this_, int relation, void* fleet) {
+    const auto result = originalRelationCoe(this_, relation, fleet);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "AttackCoeOfRelation relation=" << relation
+        << " fleet=0x" << std::hex << reinterpret_cast<uintptr_t>(fleet) << std::dec
+        << " result=" << std::to_string(result) << '\n';
+    output.flush();
+    return result;
+}
+
+void TryApplyRelationCoeHook() {
+    if (relationCoeHookApplied) return;
+    relationCoeHookApplied = true;
+    InstallReturnHook(0x66BEE0, &HookRelationCoe, &originalRelationCoe, 6, "AttackCoeOfRelation");
+}
+
+using GetASkillAttrFn = void* (__cdecl*)(void*, long long, int, int);
+GetASkillAttrFn originalGetASkillAttr = nullptr;
+bool getASkillAttrHookApplied = false;
+
+void* __cdecl HookGetASkillAttr(void* this_, long long shipUID, int skillType, int isSpecial) {
+    const auto result = originalGetASkillAttr(this_, shipUID, skillType, isSpecial);
+    double damFac = 0.0;
+    if (result)
+        memcpy(&damFac, reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(result) + 0x10), 8);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "GetASkillAttr shipUID=" << shipUID << " skillType=" << skillType
+        << " isSpecial=" << isSpecial
+        << " result=0x" << std::hex << reinterpret_cast<uintptr_t>(result) << std::dec
+        << " damageFac=" << damFac << '\n';
+    output.flush();
+    return result;
+}
+
+void TryApplyGetASkillAttrHook() {
+    if (getASkillAttrHookApplied) return;
+    getASkillAttrHookApplied = true;
+    // prologue: push ebp(1) mov ebp,esp(2) sub esp,? (3) -> need full prologue
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    const auto fn = reinterpret_cast<unsigned char*>(ga) + 0x65BA80;
+    if (fn[0] != 0x55 || fn[1] != 0x8B || fn[2] != 0xEC) {
+        char actual[16]{};
+        for (int i = 0; i < 6; ++i) { char b[4]{}; sprintf_s(b, "%02X ", fn[i]); strcat_s(actual, b); }
+        Log(std::string("GetASkillAttr hook refused: prologue mismatch actual=") + actual);
+        return;
+    }
+    // determine stolenLen: 55 8B EC + 83 EC imm8(3) or 83 EC imm32(6); check byte 4
+    size_t len = 5;
+    if (fn[3] == 0x83 && fn[4] == 0xEC) len = 6; // sub esp, imm8
+    else if (fn[3] == 0x81 && fn[4] == 0xEC) len = 9; // sub esp, imm32
+    else if (fn[3] == 0x80 && fn[4] == 0x3D) len = 13; // cmp byte [disp],imm8
+    InstallReturnHook(0x65BA80, &HookGetASkillAttr, &originalGetASkillAttr, len, "GetASkillAttr");
 }
 
 // Unity log callback registration. Bugly (new_sdk) registers a logMessageReceived callback
@@ -5103,12 +5809,39 @@ void InitializeHooks(HMODULE module) {
         TryApplyLogError2Hook();
         TryApplyLogException2Hook();
         TryApplyInternalLogExceptionHook();
+        TryApplyIsHitHook();
+        TryApplyGetAttrAttackHook();
+        TryApplyShipGetAttributeHook();
+        TryApplySetAttackDmgInfoHook();
+        TryApplyAfterExecuteHook();
+        TryApplyExecuteHook();
+        TryApplyExecuteAtomHook();
+        TryApplyMainGunDamageFacPatch();
+        TryApplyEventDamageAfterHook();
+        TryApplyDamageOddHook();
+        TryApplyAmmoEffectHook();
+        TryApplyShipDamageCoeHook();
+        TryApplyQteDamageCoeHook();
+        TryApplyRelationCoeHook();
+        TryApplyGetASkillAttrHook();
         TryApplyGetComponentsNeedHook();
         TryApplyLuaPcallKHook();
         TryApplySdkLoginHook();
         TryApplyLoginMethodHook();
         TrySetSimulationMode();
         TrySetReview();
+        // Auto-login fallback: the normal trigger is SDK event 29 (announcement WebView
+        // "open"), which does not always fire headlessly. If the game is still sitting at
+        // the SDK login screen (network not connected) long after boot, repeatedly
+        // dispatch the fabricated login result (event 2) until the game connects.
+        if (originalSdkCallback && !IsGameNetworkConnected() &&
+            GetTickCount64() >= loginFallbackStart) {
+            if (!loginFallbackStarted) {
+                loginFallbackStarted = true;
+                Log("login fallback: auto-dispatching fabricated login result");
+            }
+            DispatchLoginEvent();
+        }
         if (closeWebViewRequested && GetTickCount64() >= closeWebViewAt) {
             closeWebViewRequested = false;
             CloseSdkWebView();

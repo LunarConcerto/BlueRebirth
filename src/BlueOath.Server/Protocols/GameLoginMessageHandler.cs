@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using BlueOath.Core;
 using BlueOath.Protocol;
+using BlueOath.Server.Configs;
 using BlueOath.Storage;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
@@ -41,6 +42,7 @@ internal sealed class GameLoginMessageHandler
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
         ChapterCopyLoader.Load(options.DataRoot);
         CopyBattleLoader.Load(options.DataRoot);
+        ShipMainLoader.Load(options.DataRoot);
     }
 
     /// <summary>
@@ -74,8 +76,9 @@ internal sealed class GameLoginMessageHandler
     public async Task<(int Operation, byte[] Payload)> BuildC2SResponseAsync(
         TRequest request, string profileId, CancellationToken ct)
     {
-        _fileLogger.LogInformation("game-login C2S method={Method} callback={Callback} argsLen={ArgsLen}",
-            request.Method, request.CallbackHandler, request.Args?.Length ?? 0);
+        _fileLogger.LogInformation("game-login C2S method={Method} callback={Callback} argsLen={ArgsLen} hex={Hex}",
+            request.Method, request.CallbackHandler, request.Args?.Length ?? 0,
+            request.Args is { Length: > 0 } ? Convert.ToHexString(request.Args) : "");
         var now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         byte[] ret;
         if (request.Method == "shop.BuyGoods")
@@ -138,13 +141,17 @@ internal sealed class GameLoginMessageHandler
         {
             ret = await BuildStartBaseRetAsync(request, profileId, ct);
         }
+        else if (request.Method == "copy.AttackBase")
+        {
+            ret = BuildAttackBaseRet(request.Args);
+        }
         else if (request.Method == "copy.PassBase")
         {
             ret = await BuildPassBaseRetAsync(request, profileId, ct);
         }
         else if (request.Method == "copy.QuitBase")
         {
-            ret = [];
+            ret = BuildQuitBaseRet(request.Args);
         }
         else
         {
@@ -178,7 +185,10 @@ internal sealed class GameLoginMessageHandler
         var response = new TResponse(Method: request.Method, Ret: ret,
             CallbackHandler: request.CallbackHandler, Time: checked((uint)now),
             Token: request.Token, Seq: 0, IsResponse: 1);
-        return (GameOperationCodes.S2C, TMessageCodec.EncodeResponse(response));
+        var encoded = TMessageCodec.EncodeResponse(response);
+        _fileLogger.LogInformation("game-login S2C method={Method} retLen={Len} hex={Hex}",
+            request.Method, ret.Length, Convert.ToHexString(encoded));
+        return (GameOperationCodes.S2C, encoded);
     }
 
     public async Task<byte[]> BuildUpdateUserInfoPushAsync(string profileId, uint now, CancellationToken ct)
@@ -1238,8 +1248,17 @@ internal sealed class GameLoginMessageHandler
             WriteVarint(ship, 0x10); WriteVarint(ship, unchecked((ulong)h.TemplateId));
             WriteVarint(ship, 0x18); WriteVarint(ship, unchecked((ulong)h.Level));
             WriteVarint(ship, 0x20); WriteVarint(ship, unchecked((ulong)i));
-            // Attr (5) — ShipHp=1, Attack=8, Defense=9
-            foreach (var (attrId, val) in new[] { (1, 1000), (8, 100), (9, 50) })
+            // Attr (5) — 按船 TemplateId 查 config_ship_main 发真实属性（考虑等级成长），
+            // 缺表时回退到旧硬编码值。命中判定 __IsHit(hit, dodge) 依赖 Hit/Dodge。
+            var cfg = ShipMainLoader.Get(h.TemplateId);
+            var (shipHp, attack, defense, hit, dodge, crit, antiCrit) = cfg is null
+                ? (1000L, 100L, 50L, 100L, 35L, 0L, 0L)
+                : (ShipMainLoader.Leveled(cfg.Hp, cfg.HpLevelup, h.Level),
+                   ShipMainLoader.Leveled(cfg.Attack, cfg.AttackLevelup, h.Level),
+                   ShipMainLoader.Leveled(cfg.Defense, cfg.DefenseLevelup, h.Level),
+                   cfg.Hit, cfg.Dodge, cfg.Crit, cfg.AntiCrit);
+            foreach (var (attrId, val) in new[] { (1, shipHp), (8, attack), (9, defense),
+                (17, crit), (18, antiCrit), (19, hit), (20, dodge) })
             {
                 using var attr = new MemoryStream();
                 WriteVarint(attr, 0x08); WriteVarint(attr, unchecked((ulong)attrId));
@@ -1330,8 +1349,9 @@ internal sealed class GameLoginMessageHandler
                 if (stat == null) continue;
                 using var es = new MemoryStream();
                 WriteVarint(es, 0x08); WriteVarint(es, unchecked((ulong)enemyId)); // ShipId
-                // Attr (2): ShipHp=1, Attack=8, Defense=9
-                foreach (var (attrId, val) in new[] { (1, stat.Hp), (8, stat.Attack), (9, stat.Defense) })
+                // Attr (2): ShipHp=1, Attack=8, Defense=9, Hit=19, Dodge=20
+                foreach (var (attrId, val) in new[] {
+                    (1, stat.Hp), (8, stat.Attack), (9, stat.Defense), (19, stat.Hit), (20, stat.Dodge) })
                 {
                     using var attr = new MemoryStream();
                     WriteVarint(attr, 0x08); WriteVarint(attr, unchecked((ulong)attrId));
@@ -1418,6 +1438,52 @@ internal sealed class GameLoginMessageHandler
         WriteVarint(ms, 0x50); WriteVarint(ms, 1);
         // PassTime (8) = 60
         WriteVarint(ms, 0x40); WriteVarint(ms, 60);
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// 回环 copy.AttackBase 请求（TAttackBaseArg: AttackType(1)/CopyId(2)/HeroIds(3)/EnemyId(4)）
+    /// 并附带一个伤害值（字段5，按最大生命值比例的扣血，HpCoefficient 比例尺=1e10 下 10%=1e9）。
+    /// 客户端在没有回报时认定攻击失效，因此这里必须回包。
+    /// </summary>
+    private static byte[] BuildAttackBaseRet(byte[]? args)
+    {
+        int attackType = 0, copyId = 0, enemyId = 0;
+        var heroIds = new List<int>();
+        if (args is { Length: > 0 })
+        {
+            var reader = new ProtoReader(args);
+            while (reader.TryReadField(out var field, out var wire))
+            {
+                switch (field)
+                {
+                    case 1 when wire == 0: attackType = checked((int)reader.ReadVarint()); break;
+                    case 2 when wire == 0: copyId = checked((int)reader.ReadVarint()); break;
+                    case 3 when wire == 0: heroIds.Add(checked((int)reader.ReadVarint())); break;
+                    case 4 when wire == 0: enemyId = checked((int)reader.ReadVarint()); break;
+                    default: reader.Skip(wire); break;
+                }
+            }
+        }
+        using var ms = new MemoryStream();
+        if (attackType != 0) { WriteVarint(ms, 0x08); WriteVarint(ms, unchecked((ulong)attackType)); }
+        if (copyId != 0) { WriteVarint(ms, 0x10); WriteVarint(ms, unchecked((ulong)copyId)); }
+        foreach (var hid in heroIds) { WriteVarint(ms, 0x18); WriteVarint(ms, unchecked((ulong)hid)); }
+        if (enemyId != 0) { WriteVarint(ms, 0x20); WriteVarint(ms, unchecked((ulong)enemyId)); }
+        // 伤害：扣除 10% 最大生命值（比例尺下 1e9）
+        WriteVarint(ms, 0x28); WriteVarint(ms, 1_000_000_000UL);
+        return ms.ToArray();
+    }
+
+    /// <summary>回环 copy.QuitBase 请求（TQuitBaseArg），让客户端确认退出请求被受理。</summary>
+    private static byte[] BuildQuitBaseRet(byte[]? args)
+    {
+        using var ms = new MemoryStream();
+        if (args is { Length: > 0 })
+        {
+            // 直接回环原始请求字节（客户端数据回环，避免服务端造数据）
+            ms.Write(args);
+        }
         return ms.ToArray();
     }
 
@@ -1841,7 +1907,7 @@ internal static class CopyBattleLoader
     private static readonly Dictionary<int, EnemyStat> _enemyStats = new();   // enemy id → stats
     private static bool _loaded;
 
-    public sealed record EnemyStat(int Hp, int Attack, int Defense, int Level, int ShipInfoId);
+    public sealed record EnemyStat(int Hp, int Attack, int Defense, int Level, int ShipInfoId, int Hit = 100, int Dodge = 0);
 
     public static void Load(string dataRoot)
     {
@@ -1962,7 +2028,9 @@ internal static class CopyBattleLoader
                     doc.RootElement.TryGetProperty("attack", out var atk) ? atk.GetInt32() : 0,
                     doc.RootElement.TryGetProperty("defense", out var def) ? def.GetInt32() : 0,
                     doc.RootElement.TryGetProperty("level", out var lv) ? lv.GetInt32() : 1,
-                    doc.RootElement.TryGetProperty("ship_info_id", out var sid) ? sid.GetInt32() : 0);
+                    doc.RootElement.TryGetProperty("ship_info_id", out var sid) ? sid.GetInt32() : 0,
+                    doc.RootElement.TryGetProperty("hit", out var hit) ? hit.GetInt32() : 100,
+                    doc.RootElement.TryGetProperty("dodge", out var dodge) ? dodge.GetInt32() : 0);
             }
         }
         catch { }
@@ -1990,6 +2058,71 @@ internal static class CopyBattleLoader
 
     public static EnemyStat? GetEnemyStat(int enemyId)
         => _enemyStats.TryGetValue(enemyId, out var stat) ? stat : null;
+
+    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal)) return [];
+        var value = reader.GetValue(ordinal);
+        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
+    }
+
+    private static string XorDecode(byte[] source)
+    {
+        const byte XorKey = 0x55;
+        var result = new byte[source.Length];
+        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
+        return Encoding.UTF8.GetString(result);
+    }
+}
+
+/// <summary>从 config_ship_main 加载玩家船基础属性（key = sm_id = 船的 TemplateId）。</summary>
+internal static class ShipMainLoader
+{
+    private static readonly Dictionary<int, ConfigShipMain> _ships = new();
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = Path.GetFullPath(Path.Combine(
+                dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
+            var path = Path.Combine(configDir, "config_ship_main.db");
+            if (!File.Exists(path)) return;
+            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            c.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+                if (id == 0) continue;
+                try
+                {
+                    var cfg = JsonSerializer.Deserialize<ConfigShipMain>(XorDecode(ReadColumnBytes(r, 1)));
+                    if (cfg is null) continue;
+                    _ships[id] = cfg;
+                    if (cfg.SmId != 0)
+                        _ships[checked((int)cfg.SmId)] = cfg;
+                }
+                catch
+                {
+                    // 个别坏行（如 id=nill 的无效 JSON）跳过，不影响整表加载。
+                }
+            }
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigShipMain? Get(int templateId)
+        => _ships.TryGetValue(templateId, out var cfg) ? cfg : null;
+
+    /// <summary>属性等级成长：base + levelup × (level - 1)。</summary>
+    public static long Leveled(long baseValue, long levelup, int level)
+        => baseValue + levelup * Math.Max(0, level - 1);
 
     private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
     {
