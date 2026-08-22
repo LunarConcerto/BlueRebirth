@@ -137,10 +137,81 @@
 ## 遗留：伤害量级 / 通关可行性
 - 服务端 `EncodeStartBaseRet` 给玩家船发 Attack=100（硬编码），实测主炮每发 ~100~139。
 - Boss HP=9999999 → 需约 8 万发才能击沉，**不实际**。若要能通关：
-  - 服务端提高玩家 Attack（或按 config_ship_main 的 attack 发），或
+  - 服务端提高玩家 Attack（或按 config_ship_main 发真实攻击），或
   - 降低 config_ship_enemy 的 HP，或
   - payload 里把主炮/鱼雷伤害再乘一个系数。
 - `copy.AttackBase` 确认是 fire-and-forget（客户端不读响应），服务端"直接扣血"方案无效，已排除。
+
+## 2026-08-22 补充：真实敌舰队查表 + 空 copy_attacheds NRE 修复
+- **服务端** `GetFleetIdWithAttached` 不再因 copy_attacheds 为空回退 907，直接查表：
+  copy 6 → fleet 200602 → 敌舰 100003（hp=100, attack=60）等真实配置。
+- 玩家船属性按 `config_ship_main` 查表（含 attack/defense/hp 等级成长 + Torpedo/TorpedoDefense 等），
+  敌舰属性从 `config_ship_enemy` 查（含 Torpedo 属性，修复鱼雷 MISS）。
+- **客户端 PVEStartData NRE 根因**：`EnemyFleet.ConverPB`（0x577150）只初始化 `+0x10`（ships），
+  `+0x14`（attachedFleets）保持 null。剧情关 `copy_attacheds=[]`（大多数关都空）时，
+  ctor 在 `0x58F306` 读 `[敌舰队对象+0x14]` 检查 → NullReferenceException → 战斗加载卡死。
+- **修复**：payload patch `0x58F306`（`je NRE` → `jmp 0x58F3DC` 跳过 attached 处理）。
+- 服务端协议**不能**下发 copy_attacheds（`TBattleEnemyFleet` 只有 FleetId/State/Ships）；
+  客户端从本地 `config_fleet.db` 读。改客户端配置表不可取（易出不可预见问题），故用客户端逻辑 patch。
+- 实测：进战斗正常、真实敌人、伤害正常（80 级船 12821/发）、任务(Mission 101/102/103)正常、copy.PassBase 通关正常。
+- 战斗逻辑中 `log mission state 101/102/103` 来自 `MissionNodeProcessor`，说明服务端 CopyMission 下发正确。
+
+## 2026-08-22 补充：鱼雷 MISS（已解决）
+- 鱼雷伤害公式（`EPU_Torpedo.__ExecuteAtom` 0x523870 等）读 `Torpedo(10)` / `TorpedoDefense(11)` 属性。
+- 服务端此前只发 HP/Attack/Defense/Hit/Dodge，未发 Torpedo → 鱼雷基础伤害 0 → MISS。
+- **修复**：服务端给玩家船补发 `TorpedoAttack/TorpedoDefense`（含等级成长，从 config_ship_main），
+  给敌舰补发（从 config_ship_enemy）。实测鱼雷伤害正常（skillType=5 日志实际是鱼雷伤害，如 57280）。
+
+## 2026-08-22 补充：空袭 MISS（已解决）
+- 现象：空袭技能出现且可用，但伤害事件 `EventDamageAfter skillType=9/12 damage=0 hit=1`，敌舰不掉血。
+- 根因（与主炮 MISS 完全相同的 `Ship.actSkillInfo.damageFac=0`）：
+  - 空袭各子路径的伤害计算函数里，`0x1052f5a0(obj)=*(double*)([obj+0x64]+0x28)` 读取 damageFac，
+    离线服务端无 A-skill → 读回 0。
+  - 空袭伤害最终公式（`__BomberAttack` 0x51D590）：
+    `in = (Max(基础*0.1 + 敌防御, ...) ) * [ebp-0x70] * [ebp-0x68] * [ebp-0x24] * [ebp-0x60](damageFac)`
+    —— `[ebp-0x60]` 由 `0x51DA11 fstp` 存 `0x1052f5a0` 结果（=0），`0x51DA87 mulsd xmm0,[ebp-0x60]` 乘 0。
+  - 运行时钩子逐级确认：ScoutNum(5)=67、ShipPlaneAttack(14)=743、敌防御=1600、基础伤害≈2056、
+    炸弹系数=1.0、命中=1.0、`GetAmmounitionEffect(68)=1.0`、`AirDamageFinal in=0` → 唯独 damageFac=0。
+- 修复（payload，`native/Payload/hooks.cpp`）：
+  1. **hook `0x1052f5a0`（damageFac 读取器）强制返回 1.0**（`TryApplyDamageFacHook`）——覆盖轰炸/战斗/鱼雷机全部子路径。
+  2. NOP 两处 damageFac 乘法（并入 `TryApplyMainGunDamageFacPatch`）：
+     - 轰炸机 `__BomberAttack` `0x51DA87` `F2 0F 59 45 A0 mulsd xmm0,[ebp-0x60]`
+     - 战斗机路径 `0x51E6D7` `F2 0F 59 45 A0 mulsd xmm0,[ebp-0x60]`
+- 服务端配合（`EncodeStartBaseRet`）：为临时舰船补发 `ScoutNum(5)`（carry_plane_count，赤城/加贺=0→fallback 1）
+  与 `ShipPlaneAttack(14)=config_ship_main.ship_bomb_attack`（赤城 743/加贺 676，此前误用 plane_bomb=100）。
+- 实测：战斗机空袭有伤害。注意 `0x51DA87` 字节是 `F2 0F 59 45 A0`（disp8=A0=[ebp-0x60]），
+  反汇编器可能误显示为 `60`，patch 校验字节以实际内存为准。
+- 诊断过程中的关键坑（供参考）：`InstallReturnHook` 对 `push ebp; mov ebp,esp` 函数必须用**与原函数完全相同的参数签名**
+  调用 trampoline，否则 `[ebp+0xc]`/`[ebp+8]` 错位（AirGetAttr 曾因此破坏航速计算）。
+
+## 2026-08-22 补充：临时/支援舰船回环（已解决）
+- 部分剧情关（如第一章第七关）会提供临时舰船：copy.StartBase 请求的 `HeroList`（字段13）里
+  带 `HeroId` 如 10000201/10000202/10000203（不在玩家船坞）。
+- 服务端此前用 deployHeroIds 过滤玩家船坞 → 临时舰船丢失。
+- **修复**：新增 `AssistShipLoader` 加载 `config_assist_ship_info.db`（key = assist_ship_info id =
+  临时船 HeroId，含 ship_main_id/hp/attack/defense/hit/dodge/crit/torpedo 等）。
+  `EncodeStartBaseRet` 按请求顺序构建出战列表：玩家船用船坞实体，非玩家船用 assist 属性创建临时 Hero 回环。
+- 实测：第一章第七关三艘临时舰船（神通/伊勢/伊丽莎白等）正常出战，战斗、结算、PassBase 正常。
+
+## 2026-08-22 补充：海域分页（CopyPage → 海域）关卡节点不显示（已解决）
+- 现象：出击页"海域"分页（SeaCopyPage）本应显示章节节点形式的关卡，实际空无一物。
+- 根因：`copy.GetCopy` 登录推送**只下发 PlotCopy（CopyType=1）**，从未下发海域（SeaCopy, CopyType=2）数据。
+  海域页面数据源 `Data.copyData:GetCopyInfo()`（AllCopyInfo）里没有海域关卡 →
+  - `CheckChapterIsOpen(1001)` = `copySerData[1600100] ~= nil` → false
+  - `GetBattleModeChapter` 按 `copySerData[章节第一关]` 过滤 → 章节列表空
+  - `_SetAreaItem` 里 `m_tabServiceData[baseId]` = nil → 节点走隐藏分支
+- 修复（服务端 `GameLoginMessageHandler.cs`）：
+  1. `ChapterCopyLoader` 扩展：加载海域章节（`class_type=2`，21 章、126 关），新增 `GetSeaLevels()`/`GetSeaFirstCopyId()`。
+  2. 新增 `EncodeSeaCopyInfo()`：CopyType=2 的 TUserCopyInfo（全部海域关卡 BaseInfo + MaxCopyId=第1章第一关 1600100，
+     使 `_getFarestId(SeaCopy)` 落在第 1 章）。
+  3. 登录推送（BuildSyncPushesAsync）在 PlotCopy 后追加一份 `copy.GetCopy`（海域）。
+- **附带发现**：`ChapterCopyLoader.Load` 原直接把 `dataRoot` 当 config 目录（`Path.Combine(configDir, "config_chapter.db")`），
+  从未真正加载 config_chapter。且各 config Loader（ShipMainLoader/CopyBattleLoader/AssistShipLoader/EquipLoader）用
+  `dataRoot/../../blueoath/...` 组合，**只对 runtime/jp 这类 dataRoot（../../ 即项目根）成立**；
+  若用默认 `bin/Debug/net8.0/data`（需 6 级 `..`）则全部失效（静默 fallback）。
+  **已为 ChapterCopyLoader 加 `FindConfigDir()`**（从 dataRoot 向上搜索 `blueoath/blueoath/blueoath_Data/StreamingAssets/config`），
+  **其他 Loader 建议后续统一改用 FindConfigDir**，否则在 bin/Debug dataRoot 下玩家船/敌舰属性均为 fallback 值。
+- 实测：海域分页正常显示第 1 章节点关卡，可切换章节。
 
 ## 地址速查（补充）
 - damageFac 乘法待 NOP 地址：0x52044A / 0x521910 / 0x5222F1 / 0x52314B / 0x5232F0 / 0x523C03。

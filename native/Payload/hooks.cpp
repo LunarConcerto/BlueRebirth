@@ -1,4 +1,4 @@
-#include "hooks.h"
+﻿#include "hooks.h"
 #include <ws2tcpip.h>
 #include <wincrypt.h>
 #include <bcrypt.h>
@@ -1275,7 +1275,7 @@ void LogStageGoto(void* self, int nextStateType, void* enterParam) {
     if (nextStateType == 1) {
         stageMgrInstance = reinterpret_cast<uintptr_t>(self);
     }
-    // 读取 MessageHelper.pbMap（在战斗阶段打印一次）
+    // 璇诲彇 MessageHelper.pbMap锛堝湪鎴樻枟闃舵鎵撳嵃涓€娆★級
     if (nextStateType == 3 || nextStateType == 4) {
         auto ga = GetModuleHandleW(L"GameAssembly.dll");
         if (ga) {
@@ -1288,21 +1288,21 @@ void LogStageGoto(void* self, int nextStateType, void* enterParam) {
             Log("  MessageHelper pbMap=" + std::to_string(pbMap) + " typeInfo=" + std::to_string(mhTypeInfo));
         }
     }
-    // 战斗阶段：尝试读取 enterParam 中的 BattleStartData
+    // 鎴樻枟闃舵锛氬皾璇曡鍙?enterParam 涓殑 BattleStartData
     if (nextStateType == 3 || nextStateType == 4) {
         if (enterParam) {
-            // enterParam 是 LuaTable（FSMParam），尝试读取关键字段
+            // enterParam 鏄?LuaTable锛團SMParam锛夛紝灏濊瘯璇诲彇鍏抽敭瀛楁
             const auto luaTable = reinterpret_cast<uintptr_t>(enterParam);
             Log("  Battle enterParam addr=" + std::to_string(luaTable));
-            // 尝试读取 BattlePlayer (TBattlePlayerList)
+            // 灏濊瘯璇诲彇 BattlePlayer (TBattlePlayerList)
             const auto bp = ReadPtrSafe(luaTable + 0x10); // LuaTable._array
             const auto bpLen = bp ? *reinterpret_cast<const int*>(reinterpret_cast<const char*>(luaTable) + 0x18) : 0;
             Log("  BattlePlayer ref=" + std::to_string(bp) + " len=" + std::to_string(bpLen));
-            // 尝试读取 EnemyFleet
+            // 灏濊瘯璇诲彇 EnemyFleet
             const auto enemyRef = ReadPtrSafe(luaTable + 0x20);
             Log("  EnemyFleet ref=" + std::to_string(enemyRef));
         } else {
-            Log("  enterParam is NULL — StageMgr.Goto called without battle data!");
+            Log("  enterParam is NULL 鈥?StageMgr.Goto called without battle data!");
         }
     }
 }
@@ -1545,7 +1545,7 @@ void TrySetReview() {
     // The game's SetReview (event 19) only sets HasReceiveReviewResult, it never writes
     // AppleReview/AndroidReview (verified: set_AppleReview has zero callers). So
     // BabelTimeSDKManager.AppleReview stays REVIEW_NO_GOT(-1), which makes LoginLogic.CheckUpdate
-    // take the CheckNetState/HasUpdate path and eventually pop "网络不可用". Force
+    // take the CheckNetState/HasUpdate path and eventually pop "缃戠粶涓嶅彲鐢?. Force
     // AppleReview = IS_REVIEW(1) so CheckUpdate skips the update check and goes to getHash.
     // NOTE: the static .cctor resets these fields to -1 after the first write, so keep
     // re-asserting every loop rather than writing once.
@@ -1819,7 +1819,7 @@ void LogMessageHelperUnpack(void* messageStart) {
 }
 __declspec(naked) void MessageHelperUnpackTrampoline() {
     __asm {
-        // 入口: [esp]=retaddr, [esp+4]=Message 起始（或 Message*）
+        // 鍏ュ彛: [esp]=retaddr, [esp+4]=Message 璧峰锛堟垨 Message*锛?
         mov eax, dword ptr [esp + 4]
         pushad
         push eax
@@ -1869,7 +1869,7 @@ void DumpStartBaseDecoded(uintptr_t r);
 void LogPVEStartDataCtor(void* self, void* ret) {
     const auto s = reinterpret_cast<uintptr_t>(self);
     const auto r = reinterpret_cast<uintptr_t>(ret);
-    // 读取 TStartBaseRet 字段: BattlePlayer(0x8) RandomSeed(0xC) Rid(0x10) CopyId(0x18)
+    // 璇诲彇 TStartBaseRet 瀛楁: BattlePlayer(0x8) RandomSeed(0xC) Rid(0x10) CopyId(0x18)
     const auto battlePlayer = r ? ReadPtrSafe(r + 0x8) : 0;
     const auto randomSeed = r ? static_cast<int>(ReadPtrSafe(r + 0xC)) : 0;
     const auto rid = r ? static_cast<int>(ReadPtrSafe(r + 0x10)) : 0;
@@ -1879,12 +1879,12 @@ void LogPVEStartDataCtor(void* self, void* ret) {
     int heroListLen = 0;
     uintptr_t firstBp = 0;
     if (battlePlayer) {
-        // TBattlePlayerList: BattlePlayerList(List) 在 +0x8
+        // TBattlePlayerList: BattlePlayerList(List) 鍦?+0x8
         const auto bpList = ReadPtrSafe(battlePlayer + 0x8);
         if (bpList) {
             bpListLen = static_cast<int>(ReadPtrSafe(bpList + 0xC));
             if (bpListLen > 0) {
-                // List 元素从 +0x10 开始
+                // List 鍏冪礌浠?+0x10 寮€濮?
                 firstBp = ReadPtrSafe(bpList + 0x10);
                 if (firstBp) {
                     // TBattlePlayer.FleetInfo at +0x28
@@ -1934,6 +1934,285 @@ void TryApplyPVEStartDataCtorHook() {
     if (pveStartDataCtorHookApplied) return;
     pveStartDataCtorHookApplied = true;
     InstallStrArgHook(0x58E780, &PVEStartDataCtorTrampoline, &pveStartDataCtorStolen, 24, "PVEStartData..ctor");
+}
+
+// FleetBlo.GetFleet(string dictId) - RVA 0x5E3C70 (17-byte wrapper -> jmp 0x10B38940)
+template <typename Fn>
+bool InstallReturnHook(uintptr_t rva, void* hookFn, Fn* originalOut, size_t stolenLen, const char* name);
+using GetFleetFn = void* (__cdecl*)(void*, void*);
+GetFleetFn originalGetFleet = nullptr;
+bool getFleetHookApplied = false;
+
+void* __cdecl HookGetFleet(void* this_, void* dictId) {
+    const auto result = originalGetFleet(this_, dictId);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "FleetBlo.GetFleet dictId=" << ReadIl2CppString(dictId)
+        << " result=0x" << std::hex << reinterpret_cast<uintptr_t>(result) << std::dec << '\n';
+    output.flush();
+    return result;
+}
+
+void TryApplyGetFleetHook() {
+    if (getFleetHookApplied) return;
+    getFleetHookApplied = true;
+    InstallReturnHook(0x5E3C70, &HookGetFleet, &originalGetFleet, 17, "FleetBlo.GetFleet");
+}
+
+// DictFleet.get_copy_attacheds() - RVA 0x46F780, returns ArrayData
+using GetCopyAttachedsFn = void* (__cdecl*)(void*);
+GetCopyAttachedsFn originalGetCopyAttacheds = nullptr;
+bool getCopyAttachedsHookApplied = false;
+
+void* __cdecl HookGetCopyAttacheds(void* this_) {
+    const auto result = originalGetCopyAttacheds(this_);
+    const auto ad = reinterpret_cast<uintptr_t>(result);
+    int intArrCount = -1, strArrCount = -1, valsLen = -1;
+    if (ad) {
+        const auto ia = ReadPtrSafe(ad + 0x14);   // intArray
+        intArrCount = ia ? static_cast<int>(ReadPtrSafe(ia + 0xC)) : -1;
+        const auto sa = ReadPtrSafe(ad + 0xC);    // array (List<string>)
+        strArrCount = sa ? static_cast<int>(ReadPtrSafe(sa + 0xC)) : -1;
+        const auto vals = ReadPtrSafe(ad + 0x8);  // Values (object[])
+        valsLen = vals ? static_cast<int>(ReadPtrSafe(vals + 0xC)) : -1;  // max_length
+    }
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "get_copy_attacheds this=0x" << std::hex << reinterpret_cast<uintptr_t>(this_)
+        << " result=0x" << ad << std::dec
+        << " intArrCount=" << intArrCount << " strArrCount=" << strArrCount
+        << " valsLen=" << valsLen << '\n';
+    output.flush();
+    return result;
+}
+
+void TryApplyGetCopyAttachedsHook() {
+    if (getCopyAttachedsHookApplied) return;
+    getCopyAttachedsHookApplied = true;
+    // prologue: push ebp(1) mov ebp,esp(2) cmp byte[disp],imm8(7) = 10.
+    // stolenLen must NOT cover the following jne+1 / push [mem] (relative branch would
+    // break in the trampoline).
+    InstallReturnHook(0x46F780, &HookGetCopyAttacheds, &originalGetCopyAttacheds, 10, "DictFleet.get_copy_attacheds");
+}
+
+// il2cpp_array_new_specific (RVA 0x1645C70): PVEStartData creates its enemys[] via this.
+// Log calls where size<=0 or result null (the MISSING-enemys NRE path).
+using ArrayNewFn = void* (__cdecl*)(void*, int);
+ArrayNewFn originalArrayNew = nullptr;
+bool arrayNewHookApplied = false;
+
+void* __cdecl HookArrayNew(void* klass, int size) {
+    const auto result = originalArrayNew(klass, size);
+    // only log PVEStartData ctor region calls (0x58F0xx-0x58F5xx)
+    uintptr_t caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
+    uintptr_t ga = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"GameAssembly.dll"));
+    uintptr_t rva = ga ? (caller - ga) : 0;
+    if ((rva >= 0x58F000 && rva <= 0x58F800) || result == nullptr) {
+        std::lock_guard<std::mutex> guard(logMutex);
+        std::ofstream output(logPath, std::ios::app);
+        output << "ArrayNew klass=0x" << std::hex << reinterpret_cast<uintptr_t>(klass)
+            << " size=" << std::dec << size
+            << " result=0x" << std::hex << reinterpret_cast<uintptr_t>(result) << std::dec
+            << " caller=0x" << std::hex << rva << std::dec << '\n';
+        output.flush();
+    }
+    return result;
+}
+
+void TryApplyArrayNewHook() {
+    if (arrayNewHookApplied) return;
+    arrayNewHookApplied = true;
+    // prologue: push ebp(1) mov ebp,esp(2) push ebx(1) push esi(1) mov esi,[ebp+8](3) = 8
+    InstallReturnHook(0x1645C70, &HookArrayNew, &originalArrayNew, 8, "il2cpp.array_new");
+}
+
+// 0x105E9E70 = `mov eax, [arg+4]` - field access used at 0x58F2EF / 0x58F3A0 (PVEStartData NRE suspects).
+using GetField4Fn = void* (__cdecl*)(void*);
+GetField4Fn originalGetField4 = nullptr;
+bool getField4HookApplied = false;
+
+void* __cdecl HookGetField4(void* arg) {
+    const auto result = originalGetField4(arg);
+    uintptr_t caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
+    uintptr_t ga = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"GameAssembly.dll"));
+    uintptr_t rva = ga ? (caller - ga) : 0;
+    if (rva >= 0x58E000 && rva <= 0x58F980) {
+        std::lock_guard<std::mutex> guard(logMutex);
+        std::ofstream output(logPath, std::ios::app);
+        output << "GetField4 arg=0x" << std::hex << reinterpret_cast<uintptr_t>(arg)
+            << " result=0x" << reinterpret_cast<uintptr_t>(result)
+            << " caller=0x" << rva << std::dec << '\n';
+        output.flush();
+    }
+    return result;
+}
+
+void TryApplyGetField4Hook() {
+    if (getField4HookApplied) return;
+    getField4HookApplied = true;
+    // prologue: push ebp(1) mov ebp,esp(2) mov eax,[ebp+8](3) mov eax,[eax+4](3) = 9
+    InstallReturnHook(0x5E9E70, &HookGetField4, &originalGetField4, 9, "getField4");
+}
+
+// ---- 绌鸿浼ゅ绯绘暟瑙傚療 ----
+using AirCoeFn = double (__cdecl*)(void*, void*, int);
+AirCoeFn originalHpPropChange = nullptr;
+bool hpPropChangeHookApplied = false;
+double __cdecl HookHpPropChange(void* this_, void* ship, int prop) {
+    const auto result = originalHpPropChange(this_, ship, prop);
+    if (prop == 14 || prop == 3 || prop == 4 || prop == 5) {
+        std::lock_guard<std::mutex> guard(logMutex);
+        std::ofstream output(logPath, std::ios::app);
+        output << "GetShipHpPropChange prop=" << prop
+            << " ship=0x" << std::hex << reinterpret_cast<uintptr_t>(ship) << std::dec
+            << " result=" << std::to_string(result) << '\n';
+        output.flush();
+    }
+    return result;
+}
+void TryApplyHpPropChangeHook() {
+    if (hpPropChangeHookApplied) return;
+    hpPropChangeHookApplied = true;
+    // 55 8B EC 83 EC 30 80 3D = push ebp(1) mov ebp,esp(2) sub esp,0x30(3) cmp byte(7) = 13
+    InstallReturnHook(0x66A530, &HookHpPropChange, &originalHpPropChange, 13, "GetShipHpPropChange");
+}
+AirCoeFn originalFormationCoe = nullptr;
+bool formationCoeHookApplied = false;
+double __cdecl HookFormationCoe(void* this_, void* ship, int prop) {
+    const auto result = originalFormationCoe(this_, ship, prop);
+    if (prop == 14 || prop == 3 || prop == 4 || prop == 5) {
+        std::lock_guard<std::mutex> guard(logMutex);
+        std::ofstream output(logPath, std::ios::app);
+        output << "GetShipFormationCoe prop=" << prop
+            << " ship=0x" << std::hex << reinterpret_cast<uintptr_t>(ship) << std::dec
+            << " result=" << std::to_string(result) << '\n';
+        output.flush();
+    }
+    return result;
+}
+void TryApplyFormationCoeHook() {
+    if (formationCoeHookApplied) return;
+    formationCoeHookApplied = true;
+    // 55 8B EC 6A 00 FF 75 08 = push ebp(1) mov ebp,esp(2) push 0(2) push [ebp+8](3) = 8
+    InstallReturnHook(0x66A4F0, &HookFormationCoe, &originalFormationCoe, 8, "GetShipFormationCoe");
+}
+
+
+// 0x1052f5a0(obj) -> double = *(double*)([obj+0x64]+0x28)锛屽嵆 actSkillInfo.damageFac銆?
+// 绌鸿鍚勫瓙璺緞锛堣桨鐐?鎴樻枟鏈虹瓑锛?x51DA06 / 0x51E656 璋冪敤锛夐兘缁忓畠璇?damageFac銆?
+// 绂荤嚎鏈嶅姟绔棤 A-skill锛宒amageFac=0锛屾妸鏈€缁堜激瀹充箻 0銆傚己鍒惰繑鍥?1.0锛堢瓑浠锋寜 1.0 澶勭悊锛夈€?
+using DamageFacReadFn = double (__cdecl*)(void*);
+DamageFacReadFn originalDamageFacRead = nullptr;
+bool damageFacReadHookApplied = false;
+double __cdecl HookDamageFacRead(void* obj) {
+    return 1.0;
+}
+void TryApplyDamageFacHook() {
+    if (damageFacReadHookApplied) return;
+    damageFacReadHookApplied = true;
+    // prologue: 55 8B EC 8B 45 0C = push ebp(1) mov ebp,esp(2) mov eax,[ebp+0xc](3) = 6
+    InstallReturnHook(0x52F5A0, &HookDamageFacRead, &originalDamageFacRead, 6, "DamageFacRead");
+}
+
+// ---------------------------------------------------------------------------
+// NRE-source locator: PVEStartData ctor converges all null-checks to 0x58F95E/0x58F960.
+// Patch each je target so it records which site tripped, then falls into the NRE raise.
+// Diagnostic only. gNreSource is defined near LogCtorRaise (further down).
+// ---------------------------------------------------------------------------
+extern volatile uintptr_t gNreSource;
+void* nreRaiseTarget = nullptr;
+bool nreLocatorApplied = false;
+
+void RecordNreSourceId(int id) { gNreSource = static_cast<uintptr_t>(id); }
+
+// ---------------------------------------------------------------------------
+// MISSING-ENEMIES NRE fix: PVEStartData ctor at 0x58F304 reads
+//   mov eax, [eax+0x14]   ; EnemyFleet.attachedFleets
+//   test eax, eax; je NRE
+// EnemyFleet.ConverPB (0x577150) only initializes +0x10 (ships), leaving
+// +0x14 (attachedFleets) null. With an empty copy_attacheds (normal for most
+// story stages) attachedFleets stays null -> NullReferenceException -> battle
+// load hangs. Fix: on null, jump to the "skip attached" path 0x58F3DC instead
+// of the NRE raise.
+// ---------------------------------------------------------------------------
+bool attachedFleetsFixApplied = false;
+
+void TryApplyAttachedFleetsFix() {
+    if (attachedFleetsFixApplied) return;
+    attachedFleetsFixApplied = true;
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    const auto base = reinterpret_cast<uintptr_t>(ga);
+    // 0x58F306: `0F 84 52 06 00 00` (je NRE at 0x58F95E). Rewrite to `E9 <rel to 0x58F3DC>` + nop.
+    auto address = reinterpret_cast<unsigned char*>(base + 0x58F306);
+    if (address[0] != 0x0F || address[1] != 0x84) {
+        char act[16]{};
+        for (int i = 0; i < 6; ++i) { char b[4]{}; sprintf_s(b, "%02X ", address[i]); strcat_s(act, b); }
+        Log(std::string("attachedFleets fix refused: opcode mismatch actual=") + act);
+        return;
+    }
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(address, 6, PAGE_EXECUTE_READWRITE, &oldProtect)) return;
+    address[0] = 0xE9;
+    *reinterpret_cast<int32_t*>(address + 1) = static_cast<int32_t>(
+        (base + 0x58F3DC) - (base + 0x58F306 + 5));
+    address[5] = 0x90;
+    VirtualProtect(address, 6, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), address, 6);
+    Log("attachedFleets null NRE fix applied @0x58F306");
+}
+
+// Per-site stubs (VirtualAlloc), addressed via gNreStubs[i]. Each stub:
+//   C7 05 <&gNreSource runtime> <id>   ; mov dword ptr [gNreSource], id
+//   68 <0x1058F95E>                    ; push NRE raise entry (GameAssembly fixed ImageBase)
+//   C3                                 ; ret
+// The je is rewritten to `FF 25 <&gNreStubs[i]>` (indirect absolute jmp) - no cross-module
+// relative branch, so no rel32 overflow.
+void* gNreStubs[32] = {};
+
+void TryApplyNreLocator() {
+    if (nreLocatorApplied) return;
+    nreLocatorApplied = true;
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    const auto base = reinterpret_cast<uintptr_t>(ga);
+    const uintptr_t nreEntry = base + 0x58F95E;
+    const uintptr_t gNreSourceAddr = reinterpret_cast<uintptr_t>(&gNreSource);
+    // jump-to-NRE sites inside PVEStartData ctor (je 0F 84 rel32).
+    const uintptr_t sites[] = {
+        0x58F0B3, 0x58F0D9, 0x58F121, 0x58F143, 0x58F197, 0x58F1C5,
+        0x58F1ED, 0x58F210, 0x58F221, 0x58F24D,
+        0x58F288, 0x58F2F9, 0x58F304, 0x58F33C, 0x58F3AA, 0x58F3B5,
+        0x58F4A7, 0x58F4C3, 0x58F55E, 0x58F57C, 0x58F58E, 0x58F5A1,
+    };
+    for (int i = 0; i < (int)(sizeof(sites) / sizeof(sites[0])) && i < 32; i++) {
+        uintptr_t rva = sites[i];
+        auto address = reinterpret_cast<unsigned char*>(base + rva);
+        if (address[0] != 0x0F || address[1] != 0x84) {
+            char act[16]{};
+            for (int j = 0; j < 6; ++j) { char b[4]{}; sprintf_s(b, "%02X ", address[j]); strcat_s(act, b); }
+            Log(std::string("NreLoc skip @0x") + std::to_string(rva) + " actual=" + act);
+            continue;
+        }
+        // build stub
+        auto stub = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (!stub) continue;
+        stub[0] = 0xC7; stub[1] = 0x05;
+        *reinterpret_cast<uintptr_t*>(stub + 2) = gNreSourceAddr;
+        *reinterpret_cast<int*>(stub + 6) = i + 1;   // id
+        stub[10] = 0x68;
+        *reinterpret_cast<uint32_t*>(stub + 11) = static_cast<uint32_t>(nreEntry);
+        stub[15] = 0xC3;
+        gNreStubs[i] = stub;
+        // rewrite je -> FF 25 <&gNreStubs[i]>
+        DWORD oldProtect = 0;
+        if (!VirtualProtect(address, 6, PAGE_EXECUTE_READWRITE, &oldProtect)) continue;
+        address[0] = 0xFF; address[1] = 0x25;
+        *reinterpret_cast<uintptr_t*>(address + 2) = reinterpret_cast<uintptr_t>(&gNreStubs[i]);
+        VirtualProtect(address, 6, oldProtect, &oldProtect);
+        FlushInstructionCache(GetCurrentProcess(), address, 6);
+        Log("NreLoc patched @0x" + std::to_string(rva) + " id=" + std::to_string(i + 1));
+    }
 }
 
 // Dump the fully-deserialized TStartBaseRet object to startbase_decoded.txt (readable),
@@ -2065,7 +2344,7 @@ void DumpStartBaseDecoded(uintptr_t r) {
 void* throwExceptionStolen = nullptr;
 bool throwExceptionHookApplied = false;
 void LogThrowException(void* arg0) {
-    // arg0 = 异常参数（可能是类型 index 或对象）
+    // arg0 = 寮傚父鍙傛暟锛堝彲鑳芥槸绫诲瀷 index 鎴栧璞★級
     Log("IL2CPP ThrowException arg0=" + std::to_string(reinterpret_cast<uintptr_t>(arg0)));
 }
 __declspec(naked) void ThrowExceptionTrampoline() {
@@ -2594,13 +2873,13 @@ void LogStageGetStartData(void* self, void* enterParam) {
 
 __declspec(naked) void StageGetStartDataTrampoline() {
     __asm {
-        // 保存 XMM0/XMM1，避免 Log 破坏 _getStartData 的浮点状态
-        // 入口: [esp]=retaddr, [esp+4]=self, [esp+8]=enterParam
+        // 淇濆瓨 XMM0/XMM1锛岄伩鍏?Log 鐮村潖 _getStartData 鐨勬诞鐐圭姸鎬?
+        // 鍏ュ彛: [esp]=retaddr, [esp+4]=self, [esp+8]=enterParam
         sub esp, 32
         movups xmmword ptr [esp], xmm0
         movups xmmword ptr [esp + 16], xmm1
         pushad
-        // pushad 32 + xmm区 32 = 64; [esp+64]=retaddr, [esp+68]=self, [esp+72]=enterParam
+        // pushad 32 + xmm鍖?32 = 64; [esp+64]=retaddr, [esp+68]=self, [esp+72]=enterParam
         mov eax, dword ptr [esp + 68]
         mov ecx, dword ptr [esp + 72]
         push ecx
@@ -2621,14 +2900,14 @@ void TryApplyStageGetStartDataHook() {
     InstallStrArgHook(0x1EFC00, &StageGetStartDataTrampoline, &stageGetStartDataStolen, 13, "StageSimpleBattle._getStartData");
 }
 
-// ---- 战斗初始化链追踪 ----
+// ---- 鎴樻枟鍒濆鍖栭摼杩借釜 ----
 void DumpBattleStartData(uintptr_t d);
 // initBattle(self, enterParam) - RVA 0x1F0150, prologue: push ebp(1) mov ebp,esp(2) push esi(1) mov esi,[ebp+8](3) = 7 bytes
 void* initBattleStolen = nullptr;
 bool initBattleHookApplied = false;
 void LogInitBattle(void* self, void* enterParam) {
     const auto s = reinterpret_cast<uintptr_t>(self);
-    // StageSimpleBattle 字段: 0x18=changeState, 0x24=mBattleFrame, 0x2C=mStartData, 0x30=mSingleFrame
+    // StageSimpleBattle 瀛楁: 0x18=changeState, 0x24=mBattleFrame, 0x2C=mStartData, 0x30=mSingleFrame
     const auto changeState = ReadPtrSafe(s + 0x18);
     const auto mBattleFrame = ReadPtrSafe(s + 0x24);
     const auto mStartData = ReadPtrSafe(s + 0x2C);
@@ -2727,7 +3006,7 @@ static int gCxxThrowCount = 0;
 void* LogCallGetStartData(void* self, void* enterParam) {
     auto ga = GetModuleHandleW(L"GameAssembly.dll");
     if (!ga) { Log("initBattle GetModuleHandle failed"); return nullptr; }
-    // 先单独测试 IsInGuide (0x33DEA0)，确认异常是否在它里面
+    // 鍏堝崟鐙祴璇?IsInGuide (0x33DEA0)锛岀‘璁ゅ紓甯告槸鍚﹀湪瀹冮噷闈?
     gStartDataException = 0;
     gStartDataExObj = 0;
     gExParamCount = 0;
@@ -3126,6 +3405,7 @@ void TryApplyConfigLookupHook() {
 // The ctor converges all null-checks to 0x58F960 (call NRE raise). We patch the
 // call with a jmp that dumps the ctor's EBP-frame locals + this->fields so the
 // failing check can be identified. Then mimic the call into 0x1633df0.
+volatile uintptr_t gNreSource = 0;
 void* ctorRaiseNreTarget = nullptr;
 
 void LogCtorRaise(uintptr_t ebp) {
@@ -3133,6 +3413,9 @@ void LogCtorRaise(uintptr_t ebp) {
     char tmp[48];
     std::string line = "CtorRaise";
     sprintf_s(tmp, " ebp=0x%X", static_cast<unsigned>(ebp)); line += tmp;
+    if (gNreSource) {
+        sprintf_s(tmp, " nreSrc=0x%X", static_cast<unsigned>(gNreSource)); line += tmp;
+    }
     const uintptr_t self = ReadPtrSafe(ebp + 8);
     const uintptr_t ret = ReadPtrSafe(ebp + 0xC);
     sprintf_s(tmp, " this=0x%X ret=0x%X", static_cast<unsigned>(self), static_cast<unsigned>(ret)); line += tmp;
@@ -3226,11 +3509,11 @@ void TryApplyCtorRaiseHook() {
 
 __declspec(naked) void InitBattleTrampoline() {
     __asm {
-        // 接管 initBattle: 调用原始 _getStartData 并记录返回值
-        // 入口(jmp进入): [esp]=retaddr, [esp+4]=self, [esp+8]=enterParam
+        // 鎺ョ initBattle: 璋冪敤鍘熷 _getStartData 骞惰褰曡繑鍥炲€?
+        // 鍏ュ彛(jmp杩涘叆): [esp]=retaddr, [esp+4]=self, [esp+8]=enterParam
         push ebp
         mov ebp, esp
-        // [ebp+0]=旧ebp, [ebp+4]=retaddr, [ebp+8]=self, [ebp+0xc]=enterParam
+        // [ebp+0]=鏃bp, [ebp+4]=retaddr, [ebp+8]=self, [ebp+0xc]=enterParam
         sub esp, 32
         movups xmmword ptr [esp], xmm0
         movups xmmword ptr [esp + 16], xmm1
@@ -3248,7 +3531,7 @@ __declspec(naked) void InitBattleTrampoline() {
         push dword ptr [ebp + 8]
         call LogCallGetStartData
         add esp, 8
-        // 保存到 [self+0x2c]
+        // 淇濆瓨鍒?[self+0x2c]
         mov ecx, dword ptr [ebp + 8]
         mov dword ptr [ecx + 0x2c], eax
         pop ebp
@@ -3654,9 +3937,9 @@ void LogShipPBConvert(void* lShip, void* retAddr) {
 __declspec(naked) void ShipPBConvertTrampoline() {
     __asm {
         pushad
-        // 静态方法：IL2CPP 调用约定第一个栈参数是 this(=null)，lShip 在第二个参数位置
-        // pushad 后: [esp+32]=返回地址, [esp+40]=lShip
-        mov edx, dword ptr [esp + 32]   // 返回地址（调用者）
+        // 闈欐€佹柟娉曪細IL2CPP 璋冪敤绾﹀畾绗竴涓爤鍙傛暟鏄?this(=null)锛宭Ship 鍦ㄧ浜屼釜鍙傛暟浣嶇疆
+        // pushad 鍚? [esp+32]=杩斿洖鍦板潃, [esp+40]=lShip
+        mov edx, dword ptr [esp + 32]   // 杩斿洖鍦板潃锛堣皟鐢ㄨ€咃級
         mov ecx, dword ptr [esp + 40]   // lShip
         push edx
         push ecx
@@ -4257,6 +4540,8 @@ void TryApplyExecuteAtomHook() {
 //   EPU_PSkill.__EcecuteMain         0x52314B  F2 0F 59 45 F0  mulsd xmm0,[ebp-0x10]
 //   EPU_PSkill.__Execute             0x5232F0  F2 0F 59 45 F8  mulsd xmm0,[ebp-8]
 //   EPU_AirAttack.__ExecuteAtom      0x523C03  F2 0F 59 45 C0  mulsd xmm0,[ebp-0x40]
+//   __BomberAttack                   0x51DA87  F2 0F 59 45 A0  mulsd xmm0,[ebp-0x60]
+//   战斗机路径                        0x51E6D7  F2 0F 59 45 A0  mulsd xmm0,[ebp-0x60]
 // ---------------------------------------------------------------------------
 bool mainGunDamageFacPatched = false;
 
@@ -4279,6 +4564,12 @@ void TryApplyMainGunDamageFacPatch() {
         { 0x52314B, { 0xF2, 0x0F, 0x59, 0x45, 0xF0 } },
         { 0x5232F0, { 0xF2, 0x0F, 0x59, 0x45, 0xF8 } },
         { 0x523C03, { 0xF2, 0x0F, 0x59, 0x45, 0xC0 } },
+        // 绌鸿 __BomberAttack 0x51D590锛?x51DA87 mulsd xmm0,[ebp-0x60]锛堝瓧鑺?F2 0F 59 45 A0锛変篃鏄?
+        // actSkillInfo.damageFac(=0)銆?x51DA11 fstp [ebp-0x60] 鐢?0x1052f5a0
+        // 璇?[skill+0x64]+0x28锛坉amageFac锛夎鐩栵紝DA87 鐩镐箻鎶婃渶缁堜激瀹虫竻闆躲€?
+        { 0x51DA87, { 0xF2, 0x0F, 0x59, 0x45, 0xA0 } },
+        // 绌鸿鎴樻枟鏈鸿矾寰勶紙0x51E500 鍖哄煙鍑芥暟锛夛細0x51E6D7 鍚屾牱鐨?damageFac 涔樻硶銆?
+        { 0x51E6D7, { 0xF2, 0x0F, 0x59, 0x45, 0xA0 } },
     };
     for (const auto& s : slots) {
         auto address = reinterpret_cast<unsigned char*>(ga) + s.rva;
@@ -5783,6 +6074,16 @@ void InitializeHooks(HMODULE module) {
         TryApplyDelayGotoHook();
         TryApplyOnStageStartFinHook();
         TryApplyPVEStartDataCtorHook();
+        TryApplyAttachedFleetsFix();
+        // 绌鸿淇锛歞amageFac(=0) 璇诲彇鍣?0x1052f5a0 寮哄埗杩斿洖 1.0锛岃鐩栬桨鐐?鎴樻枟/楸奸浄鏈哄悇瀛愯矾寰勩€?
+        // 杞扮偢鏈?0x51DA87 / 鎴樻枟鏈?0x51E6D7 鐨勪箻娉曞彟鏈?NOP锛堣 TryApplyMainGunDamageFacPatch锛夈€?
+        TryApplyDamageFacHook();
+        // 璇婃柇閽╁瓙锛堝畾浣?NRE 鐢紝宸插畾浣嶅畬鎴愶紝鏆傛椂鍏抽棴锛?
+        // TryApplyGetFleetHook();
+        // TryApplyGetCopyAttachedsHook();
+        // TryApplyArrayNewHook();
+        // TryApplyGetField4Hook();
+        // TryApplyNreLocator();
         TryApplyInitBattleHook();
         TryApplyStageBeginHook();
         TryApplyLoadingTickHook();

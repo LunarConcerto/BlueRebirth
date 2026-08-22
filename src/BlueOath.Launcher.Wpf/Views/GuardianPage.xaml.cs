@@ -81,4 +81,7 @@ public partial class GuardianPage : UserControl
             LogListBox.ScrollIntoView(_currentEntries[^1]);
         }
     }
+    
+    
+    
 }

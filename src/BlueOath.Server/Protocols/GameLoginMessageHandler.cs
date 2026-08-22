@@ -43,6 +43,8 @@ internal sealed class GameLoginMessageHandler
         ChapterCopyLoader.Load(options.DataRoot);
         CopyBattleLoader.Load(options.DataRoot);
         ShipMainLoader.Load(options.DataRoot);
+        AssistShipLoader.Load(options.DataRoot);
+        EquipLoader.Load(options.DataRoot);
     }
 
     /// <summary>
@@ -288,6 +290,13 @@ internal sealed class GameLoginMessageHandler
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "copy.GetCopy",
                 Ret: EncodePlotCopyInfo(account.Character.PlotChapterId),
+                Time: now)),
+
+            // 海域章节数据推送（CopyType=2 SeaCopy）。海域页面节点依赖 GetCopyInfo() 里
+            // 存在海域关卡，缺则 CheckChapterIsOpen/GetBattleModeChapter 全 false → 海域页空。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "copy.GetCopy",
+                Ret: EncodeSeaCopyInfo(),
                 Time: now)),
 
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目
@@ -1206,18 +1215,31 @@ internal sealed class GameLoginMessageHandler
         // 本关真实敌舰队 id（config_copy → fleet_id），供 TStartBaseRet.EnemyFleet(字段5)
         // → BattleStartData.enemyFleetId 使用。
         var realFleetId = CopyBattleLoader.GetFleetId(copyId);
-        // 敌人舰队锚点必须带 copy_attacheds，否则 PVEStartData..ctor 在 attachedFleets 处 NRE
+        // 敌人舰队锚点：GetFleetIdWithAttached 现直接查表（copy 6 → 200602 → 敌舰 100003）。
         var fleetId = CopyBattleLoader.GetFleetIdWithAttached(copyId);
         var enemyIds = CopyBattleLoader.GetEnemyIds(fleetId);
 
-        // 出战船只必须与玩家本地编队一致：只发部署在编队里的船（按 heroId 过滤），
-        // 否则客户端在本地缓存对照真实出战舰队时会因多出的船引发数组错乱。
-        // 编队为空时回退到全部船（保持向后兼容）。
+        // 出战船只按客户端请求顺序（剧情关可能带临时/支援舰船，其 HeroId 不在玩家船坞，
+        // 需从 config_assist_ship_info 加载回环，否则临时舰船丢失）。编队为空时回退到全部船。
         List<Hero> deploy;
         if (deployHeroIds is { Count: > 0 })
         {
-            var ids = new HashSet<uint>(deployHeroIds.Select(x => (uint)x));
-            deploy = heroes.Where(h => ids.Contains(h.HeroId)).Take(6).ToList();
+            var byId = heroes.ToDictionary(h => (int)h.HeroId);
+            deploy = new List<Hero>();
+            foreach (var id in deployHeroIds)
+            {
+                if (byId.TryGetValue(id, out var hero))
+                {
+                    deploy.Add(hero);
+                }
+                else if (AssistShipLoader.Get(id) is { } assist)
+                {
+                    var templateId = checked((int)assist.ShipMainId);
+                    deploy.Add(new Hero((uint)id, templateId, checked((int)assist.ShipLevel),
+                        (templateId - 1) / 10));
+                }
+                if (deploy.Count >= 6) break;
+            }
         }
         else
         {
@@ -1249,15 +1271,46 @@ internal sealed class GameLoginMessageHandler
             WriteVarint(ship, 0x18); WriteVarint(ship, unchecked((ulong)h.Level));
             WriteVarint(ship, 0x20); WriteVarint(ship, unchecked((ulong)i));
             // Attr (5) — 按船 TemplateId 查 config_ship_main 发真实属性（考虑等级成长），
-            // 缺表时回退到旧硬编码值。命中判定 __IsHit(hit, dodge) 依赖 Hit/Dodge。
+            // 临时/支援舰船（HeroId 在 config_assist_ship_info）直接用其属性表。
+            // 命中判定 __IsHit(hit, dodge) 依赖 Hit/Dodge。
+            var assist = AssistShipLoader.Get(checked((int)h.HeroId));
             var cfg = ShipMainLoader.Get(h.TemplateId);
-            var (shipHp, attack, defense, hit, dodge, crit, antiCrit) = cfg is null
-                ? (1000L, 100L, 50L, 100L, 35L, 0L, 0L)
-                : (ShipMainLoader.Leveled(cfg.Hp, cfg.HpLevelup, h.Level),
-                   ShipMainLoader.Leveled(cfg.Attack, cfg.AttackLevelup, h.Level),
-                   ShipMainLoader.Leveled(cfg.Defense, cfg.DefenseLevelup, h.Level),
-                   cfg.Hit, cfg.Dodge, cfg.Crit, cfg.AntiCrit);
-            foreach (var (attrId, val) in new[] { (1, shipHp), (8, attack), (9, defense),
+            long shipHp, attack, defense, hit, dodge, crit, antiCrit, torpedoAttack, torpedoDefense;
+            long planeBomb = 0, planeTorpedo = 0, scoutNum = 1;
+            if (assist is not null)
+            {
+                shipHp = assist.Hp; attack = assist.Attack; defense = assist.Defense;
+                hit = assist.Hit; dodge = assist.Dodge; crit = assist.Crit; antiCrit = assist.AntiCrit;
+                torpedoAttack = assist.TorpedoAttack; torpedoDefense = assist.TorpedoDefense;
+                // 空袭伤害基础 ShipPlaneAttack(14)=舰载机轰炸攻击(ship_bomb_attack)。
+                // plane_bomb 是飞机炸弹属性（经飞机装备传递），不是舰载机攻击。
+                if (ShipMainLoader.Get(checked((int)assist.ShipMainId)) is { } acfg)
+                {
+                    planeBomb = acfg.ShipBombAttack;
+                    planeTorpedo = acfg.ShipTorpedoAttack;
+                    if (acfg.CarryPlaneCount > 0) scoutNum = acfg.CarryPlaneCount;
+                }
+            }
+            else if (cfg is null)
+            {
+                shipHp = 1000; attack = 100; defense = 50; hit = 100; dodge = 35;
+                crit = 0; antiCrit = 0; torpedoAttack = 0; torpedoDefense = 0;
+            }
+            else
+            {
+                shipHp = ShipMainLoader.Leveled(cfg.Hp, cfg.HpLevelup, h.Level);
+                attack = ShipMainLoader.Leveled(cfg.Attack, cfg.AttackLevelup, h.Level);
+                defense = ShipMainLoader.Leveled(cfg.Defense, cfg.DefenseLevelup, h.Level);
+                hit = cfg.Hit; dodge = cfg.Dodge; crit = cfg.Crit; antiCrit = cfg.AntiCrit;
+                torpedoAttack = ShipMainLoader.Leveled(cfg.TorpedoAttack, cfg.TorpedoAttackLevelup, h.Level);
+                torpedoDefense = ShipMainLoader.Leveled(cfg.TorpedoDefense, cfg.TorpedoDefenseLevelup, h.Level);
+                planeBomb = cfg.ShipBombAttack;
+                planeTorpedo = cfg.ShipTorpedoAttack;
+                if (cfg.CarryPlaneCount > 0) scoutNum = cfg.CarryPlaneCount;
+            }
+            foreach (var (attrId, val) in new[] { (1, shipHp), (5, scoutNum), (8, attack), (9, defense),
+                (10, torpedoAttack), (11, torpedoDefense),
+                (14, planeBomb), (15, planeTorpedo),
                 (17, crit), (18, antiCrit), (19, hit), (20, dodge) })
             {
                 using var attr = new MemoryStream();
@@ -1275,6 +1328,37 @@ internal sealed class GameLoginMessageHandler
             WriteVarint(pskill, 0x10); WriteVarint(pskill, 1); // PSkillLv=1
             var pskillBytes = pskill.ToArray();
             WriteVarint(ship, 0x42); WriteVarint(ship, (ulong)pskillBytes.Length); ship.Write(pskillBytes);
+            // Equips (7) — TBattleEquip[]。临时/支援舰船用 config_assist_ship_info.equip。
+            // 航母的空袭依赖飞机装备（PlaneNum），否则空袭技能不出现。
+            if (assist?.Equip is { Count: > 0 })
+            {
+                for (int ei = 0; ei < assist.Equip.Count; ei++)
+                {
+                    var eid = checked((int)assist.Equip[ei]);
+                    if (eid == 0) continue;
+                    var ecfg = EquipLoader.Get(eid);
+                    using var eq = new MemoryStream();
+                    WriteVarint(eq, 0x08); WriteVarint(eq, unchecked((ulong)eid)); // EquipTid(1)
+                    WriteVarint(eq, 0x10); WriteVarint(eq, unchecked((ulong)ei));  // EquipIndex(2)
+                    WriteVarint(eq, 0x18); WriteVarint(eq, 100);                   // PlaneNum(3)
+                    if (ecfg?.EquipProp is { Count: > 0 })
+                    {
+                        foreach (var ap in ecfg.EquipProp)
+                        {
+                            if (ap is { Count: >= 2 })
+                            {
+                                using var av = new MemoryStream();
+                                WriteVarint(av, 0x08); WriteVarint(av, unchecked((ulong)ap[0])); // propId
+                                WriteVarint(av, 0x10); WriteVarint(av, unchecked((ulong)ap[1])); // value
+                                var avb = av.ToArray();
+                                WriteVarint(eq, 0x22); WriteVarint(eq, (ulong)avb.Length); eq.Write(avb);
+                            }
+                        }
+                    }
+                    var eqb = eq.ToArray();
+                    WriteVarint(ship, 0x3A); WriteVarint(ship, (ulong)eqb.Length); ship.Write(eqb);
+                }
+            }
             var sb = ship.ToArray();
             WriteVarint(fleet, 0x22); WriteVarint(fleet, (ulong)sb.Length); fleet.Write(sb);
             // HeroList (8) — one per ship
@@ -1349,9 +1433,12 @@ internal sealed class GameLoginMessageHandler
                 if (stat == null) continue;
                 using var es = new MemoryStream();
                 WriteVarint(es, 0x08); WriteVarint(es, unchecked((ulong)enemyId)); // ShipId
-                // Attr (2): ShipHp=1, Attack=8, Defense=9, Hit=19, Dodge=20
+                // Attr (2): ShipHp=1, Attack=8, Defense=9, Torpedo=10, TorpedoDefense=11,
+                //          Hit=19, Dodge=20
                 foreach (var (attrId, val) in new[] {
-                    (1, stat.Hp), (8, stat.Attack), (9, stat.Defense), (19, stat.Hit), (20, stat.Dodge) })
+                    (1, stat.Hp), (8, stat.Attack), (9, stat.Defense),
+                    (10, stat.TorpedoAttack), (11, stat.TorpedoDefense),
+                    (19, stat.Hit), (20, stat.Dodge) })
                 {
                     using var attr = new MemoryStream();
                     WriteVarint(attr, 0x08); WriteVarint(attr, unchecked((ulong)attrId));
@@ -1735,6 +1822,32 @@ public static byte[] EncodePlotCopyInfo(int chapterId = 1, bool markPassed = fal
         WriteVarint(ms, 0x18); WriteVarint(ms, 1);
         return ms.ToArray();
     }
+
+    /// <summary>编码海域（SeaCopy, CopyType=2）数据为 TUserCopyInfo protobuf。
+    /// 海域页面（SeaCopyPage）依赖 Data.copyData:GetCopyInfo() 里有海域关卡，
+    /// 否则 CheckChapterIsOpen/GetBattleModeChapter 返回 false，节点不显示。
+    /// MaxCopyId = 第 1 章第一关，使 _getFarestId(SeaCopy) 落在第 1 章。</summary>
+    public static byte[] EncodeSeaCopyInfo()
+    {
+        var seaLevels = ChapterCopyLoader.GetSeaLevels();
+        var maxCopyId = ChapterCopyLoader.GetSeaFirstCopyId();
+        using var ms = new MemoryStream();
+        foreach (var cid in seaLevels)
+        {
+            using var baseInfo = new MemoryStream();
+            WriteVarint(baseInfo, 0x08); WriteVarint(baseInfo, unchecked((ulong)cid)); // BaseId(1)
+            WriteVarint(baseInfo, 0x10); WriteVarint(baseInfo, 0); // Rid(2)=0
+            WriteVarint(baseInfo, 0x18); WriteVarint(baseInfo, 0); // StarLevel(3)=0
+            WriteVarint(baseInfo, 0x20); WriteVarint(baseInfo, 0); // IsRunningFight(4)=0
+            WriteVarint(baseInfo, 0x28); WriteVarint(baseInfo, 0); // LBPoint(5)=0
+            WriteVarint(baseInfo, 0x30); WriteVarint(baseInfo, 0); // FirstPassTime(6)=0
+            var body = baseInfo.ToArray();
+            WriteVarint(ms, 0x0A); WriteVarint(ms, (ulong)body.Length); ms.Write(body);
+        }
+        WriteVarint(ms, 0x10); WriteVarint(ms, unchecked((ulong)maxCopyId)); // MaxCopyId(2)
+        WriteVarint(ms, 0x18); WriteVarint(ms, 2); // CopyType(3)=SeaCopy
+        return ms.ToArray();
+    }
 }
 
 /// <summary>从数据目录下的 gm-goods.json 加载 GM 商品配置（数据驱动，避免硬编码）。</summary>
@@ -1907,7 +2020,8 @@ internal static class CopyBattleLoader
     private static readonly Dictionary<int, EnemyStat> _enemyStats = new();   // enemy id → stats
     private static bool _loaded;
 
-    public sealed record EnemyStat(int Hp, int Attack, int Defense, int Level, int ShipInfoId, int Hit = 100, int Dodge = 0);
+    public sealed record EnemyStat(int Hp, int Attack, int Defense, int Level, int ShipInfoId,
+        int Hit = 100, int Dodge = 0, int TorpedoAttack = 0, int TorpedoDefense = 0);
 
     public static void Load(string dataRoot)
     {
@@ -2030,7 +2144,9 @@ internal static class CopyBattleLoader
                     doc.RootElement.TryGetProperty("level", out var lv) ? lv.GetInt32() : 1,
                     doc.RootElement.TryGetProperty("ship_info_id", out var sid) ? sid.GetInt32() : 0,
                     doc.RootElement.TryGetProperty("hit", out var hit) ? hit.GetInt32() : 100,
-                    doc.RootElement.TryGetProperty("dodge", out var dodge) ? dodge.GetInt32() : 0);
+                    doc.RootElement.TryGetProperty("dodge", out var dodge) ? dodge.GetInt32() : 0,
+                    doc.RootElement.TryGetProperty("torpedo_attack", out var ta) ? ta.GetInt32() : 0,
+                    doc.RootElement.TryGetProperty("torpedo_defense", out var td) ? td.GetInt32() : 0);
             }
         }
         catch { }
@@ -2042,13 +2158,11 @@ internal static class CopyBattleLoader
     public static bool HasCopyAttacheds(int fleetId)
         => _fleetHasAttached.TryGetValue(fleetId, out var has) && has;
 
-    /// <summary>敌人舰队锚点：优先返回带 copy_attacheds 的舰队，否则回退到临时测试舰队 907。</summary>
+    /// <summary>敌人舰队锚点：直接返回 config_copy 查到的真实舰队 id。
+    /// 不再因 copy_attacheds 为空回退到临时测试舰队 907（此前误判，导致所有关卡
+    /// 都弹 907 的 9999999HP 伤害测试敌舰 71）。若客户端 PVEStartData 因此 NRE，再单独处理。</summary>
     public static int GetFleetIdWithAttached(int copyId)
-    {
-        var fleetId = GetFleetId(copyId);
-        if (HasCopyAttacheds(fleetId)) return fleetId;
-        return 907; // 临时测试锚点：copy_attacheds=[[908,0],[909,0],[910,0]]，全部可解析
-    }
+        => GetFleetId(copyId);
 
     public static int GetConfigId(int copyId)
         => _copyConfigIdMap.TryGetValue(copyId, out var id) ? id : copyId;
@@ -2140,19 +2254,20 @@ internal static class ShipMainLoader
     }
 }
 
-/// <summary>从 config_chapter 加载章节 → 关卡列表映射。</summary>
-internal static class ChapterCopyLoader
+/// <summary>从 config_assist_ship_info 加载临时/支援舰船（key = assist_ship_info id = HeroId）。</summary>
+internal static class AssistShipLoader
 {
-    private static readonly Dictionary<int, List<int>> _chapterCopies = new();
-    private static readonly Dictionary<int, int> _firstCopyMap = new();
+    private static readonly Dictionary<int, ConfigAssistShipInfo> _ships = new();
     private static bool _loaded;
 
-    public static void Load(string configDir)
+    public static void Load(string dataRoot)
     {
         if (_loaded) return;
         try
         {
-            var path = Path.Combine(configDir, "config_chapter.db");
+            var configDir = Path.GetFullPath(Path.Combine(
+                dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
+            var path = Path.Combine(configDir, "config_assist_ship_info.db");
             if (!File.Exists(path)) return;
             using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
             c.Open();
@@ -2163,31 +2278,21 @@ internal static class ChapterCopyLoader
             {
                 var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
                 if (id == 0) continue;
-                var bytes = ReadColumnBytes(r, 1);
-                var json = XorDecode(bytes);
-                using var doc = JsonDocument.Parse(json);
-                if (!doc.RootElement.TryGetProperty("level_list", out var levelList)) continue;
-                if (!doc.RootElement.TryGetProperty("class_type", out var classType)) continue;
-                if (classType.GetInt32() != 1) continue; // only PlotCopy
-                var copies = new List<int>();
-                foreach (var item in levelList.EnumerateArray())
-                    copies.Add(item.GetInt32());
-                _chapterCopies[id] = copies;
-                _firstCopyMap[id] = copies[0];
+                try
+                {
+                    var cfg = JsonSerializer.Deserialize<ConfigAssistShipInfo>(XorDecode(ReadColumnBytes(r, 1)));
+                    if (cfg is null) continue;
+                    _ships[id] = cfg;
+                }
+                catch { }
             }
         }
         catch { }
         _loaded = true;
     }
 
-    public static List<int> GetCopyIds(int chapterId)
-        => _chapterCopies.TryGetValue(chapterId, out var list) ? list : [];
-
-    public static int GetFirstCopyId(int chapterId)
-        => _firstCopyMap.TryGetValue(chapterId, out var id) ? id : 0;
-
-    public static List<int> GetAllChapterIds()
-        => [.. _chapterCopies.Keys.OrderBy(x => x)];
+    public static ConfigAssistShipInfo? Get(int id)
+        => _ships.TryGetValue(id, out var cfg) ? cfg : null;
 
     private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
     {
@@ -2204,3 +2309,167 @@ internal static class ChapterCopyLoader
         return Encoding.UTF8.GetString(result);
     }
 }
+
+/// <summary>从 config_equip 加载装备模板（key = e_id），用于构造出战船只的装备数据。</summary>
+internal static class EquipLoader
+{
+    private static readonly Dictionary<int, ConfigEquip> _equips = new();
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = Path.GetFullPath(Path.Combine(
+                dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
+            var path = Path.Combine(configDir, "config_equip.db");
+            if (!File.Exists(path)) return;
+            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            c.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+                if (id == 0) continue;
+                try
+                {
+                    var cfg = JsonSerializer.Deserialize<ConfigEquip>(XorDecode(ReadColumnBytes(r, 1)));
+                    if (cfg is null) continue;
+                    _equips[id] = cfg;
+                }
+                catch { }
+            }
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigEquip? Get(int id)
+        => _equips.TryGetValue(id, out var cfg) ? cfg : null;
+
+    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal)) return [];
+        var value = reader.GetValue(ordinal);
+        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
+    }
+
+    private static string XorDecode(byte[] source)
+    {
+        const byte XorKey = 0x55;
+        var result = new byte[source.Length];
+        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
+        return Encoding.UTF8.GetString(result);
+    }
+}
+
+/// <summary>从 config_chapter 加载章节 → 关卡列表映射。</summary>
+ internal static class ChapterCopyLoader
+ {
+     private static readonly Dictionary<int, List<int>> _chapterCopies = new();
+     private static readonly Dictionary<int, int> _firstCopyMap = new();
+     private static readonly Dictionary<int, List<int>> _seaChapterCopies = new();
+     private static int _seaFirstChapterId = 0;
+     private static int _seaFirstCopyId = 0;
+     private static bool _loaded;
+
+     public static void Load(string dataRoot)
+     {
+         if (_loaded) return;
+         try
+         {
+             var configDir = FindConfigDir(dataRoot);
+             var path = Path.Combine(configDir, "config_chapter.db");
+             if (!File.Exists(path)) return;
+             using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+             c.Open();
+             using var cmd = c.CreateCommand();
+             cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+             using var r = cmd.ExecuteReader();
+             while (r.Read())
+             {
+                 var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+                 if (id == 0) continue;
+                 var bytes = ReadColumnBytes(r, 1);
+                 var json = XorDecode(bytes);
+                 using var doc = JsonDocument.Parse(json);
+                 if (!doc.RootElement.TryGetProperty("level_list", out var levelList)) continue;
+                 if (!doc.RootElement.TryGetProperty("class_type", out var classType)) continue;
+                 var copies = new List<int>();
+                 foreach (var item in levelList.EnumerateArray())
+                     copies.Add(item.GetInt32());
+                 if (copies.Count == 0) continue;
+                 var ct = classType.GetInt32();
+                 if (ct == 1) // PlotCopy
+                 {
+                     _chapterCopies[id] = copies;
+                     _firstCopyMap[id] = copies[0];
+                 }
+                 else if (ct == 2) // SeaCopy
+                 {
+                     _seaChapterCopies[id] = copies;
+                     if (_seaFirstChapterId == 0 || id < _seaFirstChapterId)
+                     {
+                         _seaFirstChapterId = id;
+                         _seaFirstCopyId = copies[0];
+                     }
+                 }
+             }
+         }
+         catch { }
+         _loaded = true;
+     }
+
+     public static List<int> GetCopyIds(int chapterId)
+         => _chapterCopies.TryGetValue(chapterId, out var list) ? list : [];
+
+     public static int GetFirstCopyId(int chapterId)
+         => _firstCopyMap.TryGetValue(chapterId, out var id) ? id : 0;
+
+     public static List<int> GetAllChapterIds()
+         => [.. _chapterCopies.Keys.OrderBy(x => x)];
+
+     /// <summary>海域（SeaCopy, class_type=2）全部章节的关卡，按章节 id 升序。</summary>
+     public static List<int> GetSeaLevels()
+     {
+         var result = new List<int>();
+         foreach (var chapterId in _seaChapterCopies.Keys.OrderBy(x => x))
+             result.AddRange(_seaChapterCopies[chapterId]);
+         return result;
+     }
+
+     /// <summary>海域第 1 章第一关（用作 MaxCopyId，使 _getFarestId 落在第 1 章）。</summary>
+     public static int GetSeaFirstCopyId() => _seaFirstCopyId;
+
+     /// <summary>从 dataRoot 向上逐级查找游戏配置目录
+     /// （blueoath/blueoath/blueoath_Data/StreamingAssets/config）。适配不同 --data 深度
+     /// （如 runtime/jp 下 dataRoot/../.. 即项目根，bin/Debug/net8.0/data 需向上 6 级）。</summary>
+     internal static string FindConfigDir(string dataRoot)
+     {
+         var dir = new DirectoryInfo(dataRoot);
+         for (var i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
+         {
+             var cand = Path.Combine(dir.FullName, "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config");
+             if (Directory.Exists(cand)) return cand;
+         }
+         return dataRoot;
+     }
+
+     private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
+     {
+         if (reader.IsDBNull(ordinal)) return [];
+         var value = reader.GetValue(ordinal);
+         return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
+     }
+
+     private static string XorDecode(byte[] source)
+     {
+         const byte XorKey = 0x55;
+         var result = new byte[source.Length];
+         for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
+         return Encoding.UTF8.GetString(result);
+     }
+ }
