@@ -5,10 +5,11 @@
     <AssemblyName>BlueOath.Launcher.Wpf</AssemblyName>
     <RootNamespace>BlueOath.Launcher.Wpf</RootNamespace>
     <UseWPF>true</UseWPF>
-    <ApplicationIcon />
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources\announcements.json" />
+    <Resource Include="Resources\app.ico" />
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 </Project>

@@ -39,6 +39,8 @@ internal sealed class GameLoginMessageHandler
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         _buildPools = GmBuildPoolLoader.Load(options.DataRoot);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
+        ChapterCopyLoader.Load(options.DataRoot);
+        CopyBattleLoader.Load(options.DataRoot);
     }
 
     /// <summary>
@@ -96,6 +98,18 @@ internal sealed class GameLoginMessageHandler
         {
             ret = await BuildAddExpRetAsync(request, profileId, ct);
         }
+        else if (request.Method == "tactic.GetHerosTactic")
+        {
+            ret = await BuildGetHerosTacticAsync(profileId, ct);
+        }
+        else if (request.Method == "tactic.SetHerosTactic")
+        {
+            ret = await BuildSetHerosTacticAsync(request, profileId, ct);
+        }
+        else if (request.Method == "guide.PlotReward")
+        {
+            ret = BuildPlotReward(request.Args ?? []);
+        }
         else if (request.Method == "user.SetUserSecretary")
         {
             ret = await BuildUserProfileUpdateAsync(request, profileId, ct, "Secretary");
@@ -120,6 +134,18 @@ internal sealed class GameLoginMessageHandler
         {
             ret = await BuildBuildShipRetAsync(request, profileId, ct);
         }
+        else if (request.Method == "copy.StartBase")
+        {
+            ret = await BuildStartBaseRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "copy.PassBase")
+        {
+            ret = await BuildPassBaseRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "copy.QuitBase")
+        {
+            ret = [];
+        }
         else
         {
             ret = request.Method switch
@@ -141,6 +167,11 @@ internal sealed class GameLoginMessageHandler
                 "user.GetHeadBuyCount" => new byte[] { 0x08, 0x00, 0x10, 0x00 }, // ShipFleetId=0, Count=0
                 "user.BuyHead" => [],
                 "user.NewHeadUnlockedList" => [],
+                "copy.GetCopy" => EncodePlotCopyInfo(),
+                "copy.UnLockCopy" => EncodePlotCopyInfo(),
+                "guide.Setting" => [],
+                "cachedata.CacheData" => EncodeCacheDataRet(),
+                "battle.CreateMutiBattle" => [],
                 _ => []
             };
         }
@@ -235,6 +266,18 @@ internal sealed class GameLoginMessageHandler
                     0x62, 0x06, 0x08, 0x01, 0x10, 0x00, 0x18, 0x00,  // SpecialPlotDatas[0]: HeroId=1
                     0x5A, 0x06, 0x08, 0x01, 0x10, 0x00, 0x18, 0x00,  // NormalPlotDatas[0]: HeroId=1
                 },
+                Time: now)),
+
+            // 编队数据推送，填充玩家编队信息防止 fleetpage 打开时 exHeroInfo nil 崩溃。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "tactic.GetHerosTactic",
+                Ret: EncodeFleet(account.Fleet ?? PlayerAccountFactory.DefaultFleet()),
+                Time: now)),
+
+            // 剧情章节数据推送，填充首章关卡信息防止章节锁定。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "copy.GetCopy",
+                Ret: EncodePlotCopyInfo(account.Character.PlotChapterId),
                 Time: now)),
 
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目
@@ -1076,6 +1119,403 @@ internal sealed class GameLoginMessageHandler
         return output.ToArray();
     }
 
+    private async Task<byte[]> BuildGetHerosTacticAsync(string profileId, CancellationToken ct)
+    {
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var fleet = account.Fleet ?? PlayerAccountFactory.DefaultFleet();
+        return EncodeFleet(fleet);
+    }
+
+    private async Task<byte[]> BuildSetHerosTacticAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var entries = DecodeSetHerosTactic(request.Args ?? []);
+        var newFleet = new PlayerFleet(entries);
+        var updated = account with { Fleet = newFleet };
+        await _repo.SaveAccountAsync(updated, ct);
+        return EncodeFleet(newFleet);
+    }
+
+    private static byte[] BuildPlotReward(byte[] args)
+    {
+        return EncodePlotRewardRet(args.Length > 0 ? (int)DecodeVarint(args.AsSpan()) : 0);
+    }
+
+    /// <summary>推送当前章节的 copy.GetCopy 数据。markPassed=true 表示上一章已通关。</summary>
+    public async Task<byte[]> BuildCopyPushAsync(string profileId, uint now, CancellationToken ct)
+    {
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var chapterId = account.Character.PlotChapterId;
+        return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "copy.GetCopy",
+            Ret: EncodePlotCopyInfo(chapterId, markPassed: chapterId > 1),
+            Time: now));
+    }
+
+    private async Task<byte[]> BuildStartBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        try
+        {
+            var account = await GetOrCreateAccountAsync(profileId, ct);
+            var args = request.Args ?? [];
+            var (copyId, deployHeroIds) = DecodeStartBaseArg(args);
+            _fileLogger.LogInformation("copy.StartBase argsLen={Len} hex={Hex} copyId={CopyId} deployHeroIds={Deploy}",
+                args.Length, Convert.ToHexString(args), copyId,
+                deployHeroIds is null ? "<null>" : string.Join(",", deployHeroIds));
+            var heroList = account.Dock.Heroes.ToList();
+            // 关卡出战舰队必须回环客户端请求里的 HeroList（剧情关限制），
+            // 而不是从玩家编队猜。请求未带时回退到全部船。
+            return EncodeStartBaseRet(copyId, heroList, deployHeroIds);
+        }
+        catch (Exception ex)
+        {
+            _fileLogger.LogError(ex, "BuildStartBaseRetAsync failed");
+            return [];
+        }
+    }
+
+    public byte[] EncodeMutiBattleRet(int copyId, List<Hero> heroes)
+    {
+        // TBattleCreateMutiRet{ BattleId(1), Ip(2), Port(3), Arg(4=TBattleCreateMutiArg) }
+        // TBattleCreateMutiArg 字段与 TStartBaseRet 相同
+        using var ms = new MemoryStream();
+        WriteVarint(ms, 0x08); WriteVarint(ms, 1); // BattleId=1
+        // Arg (4) = TBattleCreateMutiArg，与 TStartBaseRet 编码相同
+        var arg = EncodeStartBaseRet(copyId, heroes, null);
+        WriteVarint(ms, 0x22); WriteVarint(ms, (ulong)arg.Length); ms.Write(arg);
+        return ms.ToArray();
+    }
+
+    public byte[] EncodeStartBaseRetDirect(int copyId, List<Hero> heroes)
+    {
+        return EncodeStartBaseRet(copyId, heroes, null);
+    }
+
+    private static byte[] EncodeStartBaseRet(int copyId, List<Hero> heroes, IReadOnlyList<int>? deployHeroIds = null)
+    {
+        // 本关真实敌舰队 id（config_copy → fleet_id），供 TStartBaseRet.EnemyFleet(字段5)
+        // → BattleStartData.enemyFleetId 使用。
+        var realFleetId = CopyBattleLoader.GetFleetId(copyId);
+        // 敌人舰队锚点必须带 copy_attacheds，否则 PVEStartData..ctor 在 attachedFleets 处 NRE
+        var fleetId = CopyBattleLoader.GetFleetIdWithAttached(copyId);
+        var enemyIds = CopyBattleLoader.GetEnemyIds(fleetId);
+
+        // 出战船只必须与玩家本地编队一致：只发部署在编队里的船（按 heroId 过滤），
+        // 否则客户端在本地缓存对照真实出战舰队时会因多出的船引发数组错乱。
+        // 编队为空时回退到全部船（保持向后兼容）。
+        List<Hero> deploy;
+        if (deployHeroIds is { Count: > 0 })
+        {
+            var ids = new HashSet<uint>(deployHeroIds.Select(x => (uint)x));
+            deploy = heroes.Where(h => ids.Contains(h.HeroId)).Take(6).ToList();
+        }
+        else
+        {
+            deploy = heroes.Take(6).ToList();
+        }
+
+        using var ms = new MemoryStream();
+        // BattlePlayer (1) — TBattlePlayerList with full fleet data
+        using var bpList = new MemoryStream();
+        using var bp = new MemoryStream();
+        WriteVarint(bp, 0x08); WriteVarint(bp, 1); // Pid=1
+        WriteVarint(bp, 0x10); WriteVarint(bp, 1); // Uid=1
+        WriteString(bp, 0x1A, "player"); // Uname
+        WriteVarint(bp, 0x20); WriteVarint(bp, 1); // Level=1
+        WriteVarint(bp, 0x28); WriteVarint(bp, 1); // PlayerCamp=1
+        WriteVarint(bp, 0x30); WriteVarint(bp, 1); // Index=1
+        // FleetInfo (7) — TBattleFleet with full ship data
+        using var fleet = new MemoryStream();
+        WriteVarint(fleet, 0x08); WriteVarint(fleet, 1); // FleetId=1
+        WriteVarint(fleet, 0x10); WriteVarint(fleet, 2); // FormationId=2
+        WriteVarint(fleet, 0x18); WriteVarint(fleet, 1); // Index=1
+        // Ships (4)
+        for (int i = 0; i < deploy.Count; i++)
+        {
+            var h = deploy[i];
+            using var ship = new MemoryStream();
+            WriteVarint(ship, 0x08); WriteVarint(ship, (ulong)h.HeroId);
+            WriteVarint(ship, 0x10); WriteVarint(ship, unchecked((ulong)h.TemplateId));
+            WriteVarint(ship, 0x18); WriteVarint(ship, unchecked((ulong)h.Level));
+            WriteVarint(ship, 0x20); WriteVarint(ship, unchecked((ulong)i));
+            // Attr (5) — ShipHp=1, Attack=8, Defense=9
+            foreach (var (attrId, val) in new[] { (1, 1000), (8, 100), (9, 50) })
+            {
+                using var attr = new MemoryStream();
+                WriteVarint(attr, 0x08); WriteVarint(attr, unchecked((ulong)attrId));
+                WriteVarint(attr, 0x10); WriteVarint(attr, unchecked((ulong)val));
+                var ab = attr.ToArray();
+                WriteVarint(ship, 0x2A); WriteVarint(ship, (ulong)ab.Length); ship.Write(ab);
+            }
+            WriteVarint(ship, 0x30); WriteVarint(ship, PlayerAccountFactory.HpCoefficient); // CurHp(6)
+            WriteVarint(ship, 0x58); WriteVarint(ship, 3); // EquipGridNum(11)
+            WriteVarint(ship, 0x60); WriteVarint(ship, unchecked((ulong)h.Fashioning)); // Fashioning(12)
+            // PSkill (8) — TFiledPSkillLv[], 每艘船给一个最小技能(PSkillId=1,PSkillLv=1)
+            using var pskill = new MemoryStream();
+            WriteVarint(pskill, 0x08); WriteVarint(pskill, 1); // PSkillId=1
+            WriteVarint(pskill, 0x10); WriteVarint(pskill, 1); // PSkillLv=1
+            var pskillBytes = pskill.ToArray();
+            WriteVarint(ship, 0x42); WriteVarint(ship, (ulong)pskillBytes.Length); ship.Write(pskillBytes);
+            var sb = ship.ToArray();
+            WriteVarint(fleet, 0x22); WriteVarint(fleet, (ulong)sb.Length); fleet.Write(sb);
+            // HeroList (8) — one per ship
+            WriteVarint(fleet, 0x40); WriteVarint(fleet, (ulong)h.HeroId);
+        }
+        WriteVarint(fleet, 0x28); WriteVarint(fleet, 0); // StrategyId=0
+        WriteVarint(fleet, 0x38); WriteVarint(fleet, 0); // KillTimes=0
+        WriteVarint(fleet, 0x48); WriteVarint(fleet, 1); // TacticType=1
+        var fb = fleet.ToArray();
+        WriteVarint(bp, 0x3A); WriteVarint(bp, (ulong)fb.Length); bp.Write(fb);
+        var bpb = bp.ToArray();
+        WriteVarint(bpList, 0x0A); WriteVarint(bpList, (ulong)bpb.Length); bpList.Write(bpb);
+        var bplb = bpList.ToArray();
+        WriteVarint(ms, 0x0A); WriteVarint(ms, (ulong)bplb.Length); ms.Write(bplb);
+        // RandomSeed (2)
+        WriteVarint(ms, 0x10); WriteVarint(ms, 12345);
+        // Rid (3) = config_copy 的 r_id（客户端用它作 copyDictId 查 config_copy -> scene_id）
+        var copyRid = CopyBattleLoader.GetConfigId(copyId);
+        WriteVarint(ms, 0x18); WriteVarint(ms, unchecked((ulong)copyRid));
+        // CopyId (6) — 客户端用它在 config_copy_display 里查配置（键=显示 id，来自请求）
+        WriteVarint(ms, 0x30); WriteVarint(ms, unchecked((ulong)copyId));
+        // CopyType (7) = 1 (PlotCopy)
+        WriteVarint(ms, 0x38); WriteVarint(ms, 1);
+        // CopyPass (8) = false
+        // BossProgress (9) = 0
+        // IsRunningFight (10) = false
+        // SafeLv (13) = 0
+        WriteVarint(ms, 0x68); WriteVarint(ms, 0);
+        // BattleMode (18) = Normal=1(普通)/Exercises=2(练习)/Memory=3(记忆)/Sweep=4(扫荡)
+        // 剧情普通关卡官方应为 Normal(1)；Memory(3) 是记忆回放，可能走额外加载路径。
+        WriteVarint(ms, 0x90); WriteVarint(ms, 1);
+        // MatchType (26) = 0
+        WriteVarint(ms, 0xD0); WriteVarint(ms, 0);
+        // Token (16) = ""
+        WriteString(ms, 0x82, "1111111111111111111111111111111111111");
+        // arrRes (4) — TCopyRes[]
+        {
+            using var cr = new MemoryStream();
+            WriteVarint(cr, 0x08); WriteVarint(cr, unchecked((ulong)copyId)); // id
+            var crb = cr.ToArray();
+            WriteVarint(ms, 0x22); WriteVarint(ms, (ulong)crb.Length); ms.Write(crb);
+        }
+        // CopyMission (23) — repeated int32。注意：字段23 是 varint 元素（wire type 0），
+        // 之前的 `0xB8 0x00` 编码出来的不是空数组而是 [0]——客户端按 0 去查 config_mission
+        // 找不到 DictMission，MissionNode 拿 null 直接空引用崩溃。必须发客户端 config_mission
+        // 里真实存在的任务 ID（101/102/103 是一串完整的杀敌链，ECA action 均已配置）。
+        foreach (var mid in new[] { 101, 102, 103 })
+        {
+            WriteVarint(ms, 0xB8);
+            WriteVarint(ms, unchecked((ulong)mid));
+        }
+        // EnemyFleet (5) — repeated int32：本关敌舰队 id → BattleStartData.enemyFleetId。
+        // 客户端战斗帧用它在 config_fleet 查 ship_exp / is_last_fleet，必须非空且有效。
+        WriteVarint(ms, 0x28); WriteVarint(ms, unchecked((ulong)realFleetId));
+        // SkipVcr (17) — TCopySkipVcr[]，补发使 ctor 的 skipVcrs(+0x88) 段有数据
+        {
+            using var sv = new MemoryStream();
+            WriteVarint(sv, 0x08); WriteVarint(sv, 1021051); // ShipInfoId=1（玩家一号舰的 ship_info_id）
+            // StartVcr(2)=false, EndVcr(3)=false 默认不编码（bool 默认 false）
+            var svb = sv.ToArray();
+            WriteVarint(ms, 0x8A); WriteVarint(ms, (ulong)svb.Length); ms.Write(svb);
+        }
+        // EnemyFleets (24) — TBattleEnemyFleet[]，客户端 ctor 与战斗帧都需要
+        if (enemyIds.Count > 0)
+        {
+            using var ef = new MemoryStream();
+            WriteVarint(ef, 0x08); WriteVarint(ef, unchecked((ulong)fleetId)); // FleetId
+            WriteVarint(ef, 0x10); WriteVarint(ef, 0); // State=0
+            foreach (var enemyId in enemyIds)
+            {
+                var stat = CopyBattleLoader.GetEnemyStat(enemyId);
+                if (stat == null) continue;
+                using var es = new MemoryStream();
+                WriteVarint(es, 0x08); WriteVarint(es, unchecked((ulong)enemyId)); // ShipId
+                // Attr (2): ShipHp=1, Attack=8, Defense=9
+                foreach (var (attrId, val) in new[] { (1, stat.Hp), (8, stat.Attack), (9, stat.Defense) })
+                {
+                    using var attr = new MemoryStream();
+                    WriteVarint(attr, 0x08); WriteVarint(attr, unchecked((ulong)attrId));
+                    WriteVarint(attr, 0x10); WriteVarint(attr, unchecked((ulong)val));
+                    var ab = attr.ToArray();
+                    WriteVarint(es, 0x12); WriteVarint(es, (ulong)ab.Length); es.Write(ab);
+                }
+                // PSkill (3) — List<int>，至少一个元素使列表非空
+                WriteVarint(es, 0x18); WriteVarint(es, 1);
+                var esb = es.ToArray();
+                WriteVarint(ef, 0x1A); WriteVarint(ef, (ulong)esb.Length); ef.Write(esb);
+            }
+            var efb = ef.ToArray();
+            WriteVarint(ms, 0xC2); WriteVarint(ms, (ulong)efb.Length); ms.Write(efb);
+        }
+        return ms.ToArray();
+    }
+
+    public int DecodeStartBaseCopyIdPublic(byte[] args) => DecodeStartBaseCopyId(args);
+
+    private static int DecodeStartBaseCopyId(byte[] args)
+    {
+        var reader = new ProtoReader(args);
+        var copyId = 0;
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            if (field == 2 && wire == 0) copyId = checked((int)reader.ReadVarint());
+            else reader.Skip(wire);
+        }
+        return copyId;
+    }
+
+    /// <summary>
+    /// 解码 copy.StartBase 请求的 TStartBaseArg，提取：
+    ///  - CopyId(2)
+    ///  - 关卡出战舰队 HeroList(13) 中第一个 TStartBaseHeroList 的 HeroIdList(1, repeated uint32)
+    /// 客户端在请求里已指定本关可出战的舰船（剧情关限制），服务端必须回环它而非自行猜测。
+    /// </summary>
+    private static (int CopyId, List<int>? DeployHeroIds) DecodeStartBaseArg(byte[] args)
+    {
+        var reader = new ProtoReader(args);
+        int copyId = 0;
+        List<int>? deployHeroIds = null;
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 2 when wire == 0:
+                    copyId = checked((int)reader.ReadVarint());
+                    break;
+                case 13 when wire == 2:
+                    // TStartBaseHeroList: HeroIdList(1, repeated uint32) Index(2) StrategyId(3)
+                    var sub = new ProtoReader(reader.ReadBytes());
+                    var ids = new List<int>();
+                    while (sub.TryReadField(out var f2, out var w2))
+                    {
+                        if (f2 == 1 && w2 == 0) ids.Add(checked((int)sub.ReadVarint()));
+                        else sub.Skip(w2);
+                    }
+                    if (ids.Count > 0) deployHeroIds = ids;
+                    break;
+                default:
+                    reader.Skip(wire);
+                    break;
+            }
+        }
+        return (copyId, deployHeroIds);
+    }
+
+    private async Task<byte[]> BuildPassBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        var account = await GetAccountAsync(profileId, ct);
+        return EncodePassBaseRet();
+    }
+
+    private static byte[] EncodePassBaseRet()
+    {
+        using var ms = new MemoryStream();
+        // Grade (4) = 3 (SSS)
+        WriteVarint(ms, 0x20); WriteVarint(ms, 3);
+        // StarLv (6) = 7 (all 3 stars: 1|2|4)
+        WriteVarint(ms, 0x30); WriteVarint(ms, 7);
+        // FirstPass (10) = 1
+        WriteVarint(ms, 0x50); WriteVarint(ms, 1);
+        // PassTime (8) = 60
+        WriteVarint(ms, 0x40); WriteVarint(ms, 60);
+        return ms.ToArray();
+    }
+
+    private static void WriteString(Stream output, int field, string value)
+    {
+        WriteVarint(output, (ulong)field);
+        var bytes = Encoding.UTF8.GetBytes(value);
+        WriteVarint(output, (ulong)bytes.Length);
+        output.Write(bytes);
+    }
+
+    private static byte[] EncodePlotRewardRet(int plotId)
+    {
+        using var ms = new MemoryStream();
+        if (plotId != 0) { WriteVarint(ms, 0x08); WriteVarint(ms, unchecked((ulong)plotId)); }
+        return ms.ToArray();
+    }
+
+    private static ulong DecodeVarint(ReadOnlySpan<byte> data)
+    {
+        ulong value = 0;
+        for (var shift = 0; shift < 64 && shift / 7 < data.Length; shift += 7)
+            value |= (ulong)(data[shift / 7] & 0x7f) << shift;
+        return value;
+    }
+
+    /// <summary>推送 battle.createBattleInfo 触发 BattleLauncher 场景切换。</summary>
+    public byte[] BuildBattleCreateInfoPushEmpty(uint now)
+    {
+        // TBattlePushMessage — 完全空消息，表示本地 PvE
+        using var ms = new MemoryStream();
+        return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "battle.createBattleInfo",
+            Ret: ms.ToArray(),
+            Time: now));
+    }
+
+    public byte[] BuildBattleCreateInfoPush(uint now, int copyId, List<Hero> heroes)
+    {
+        using var ms = new MemoryStream();
+        // UserList (5) — TBattleUserList with BattlePlayer
+        using var userList = new MemoryStream();
+        WriteVarint(userList, 0x08); WriteVarint(userList, 0); // Index=0
+        // Player (2) — TBattlePlayer (same as TStartBaseRet.BattlePlayer)
+        var playerBytes = EncodeBattlePlayer(heroes);
+        WriteVarint(userList, 0x12); WriteVarint(userList, (ulong)playerBytes.Length); userList.Write(playerBytes);
+        var ulb = userList.ToArray();
+        WriteVarint(ms, 0x2A); WriteVarint(ms, (ulong)ulb.Length); ms.Write(ulb);
+        return TMessageCodec.EncodeResponse(new TResponse(
+            Method: "battle.createBattleInfo",
+            Ret: ms.ToArray(),
+            Time: now));
+    }
+
+    private static byte[] EncodeBattlePlayer(List<Hero> heroes)
+    {
+        using var bp = new MemoryStream();
+        WriteVarint(bp, 0x08); WriteVarint(bp, 1); // Pid=1
+        WriteVarint(bp, 0x10); WriteVarint(bp, 1); // Uid=1
+        WriteString(bp, 0x1A, "player"); // Uname
+        WriteVarint(bp, 0x20); WriteVarint(bp, 1); // Level=1
+        WriteVarint(bp, 0x28); WriteVarint(bp, 1); // PlayerCamp=1
+        WriteVarint(bp, 0x30); WriteVarint(bp, 1); // Index=1
+        using var fleet = new MemoryStream();
+        WriteVarint(fleet, 0x08); WriteVarint(fleet, 1); // FleetId=1
+        WriteVarint(fleet, 0x10); WriteVarint(fleet, 2); // FormationId=2
+        WriteVarint(fleet, 0x18); WriteVarint(fleet, 1); // Index=1
+        for (int i = 0; i < Math.Min(heroes.Count, 6); i++)
+        {
+            var h = heroes[i];
+            using var ship = new MemoryStream();
+            WriteVarint(ship, 0x08); WriteVarint(ship, (ulong)h.HeroId);
+            WriteVarint(ship, 0x10); WriteVarint(ship, unchecked((ulong)h.TemplateId));
+            WriteVarint(ship, 0x18); WriteVarint(ship, unchecked((ulong)h.Level));
+            WriteVarint(ship, 0x20); WriteVarint(ship, unchecked((ulong)i));
+            foreach (var (attrId, val) in new[] { (1, 1000), (2, 100), (3, 50) })
+            {
+                using var attr = new MemoryStream();
+                WriteVarint(attr, 0x08); WriteVarint(attr, unchecked((ulong)attrId));
+                WriteVarint(attr, 0x10); WriteVarint(attr, unchecked((ulong)val));
+                var ab = attr.ToArray();
+                WriteVarint(ship, 0x2A); WriteVarint(ship, (ulong)ab.Length); ship.Write(ab);
+            }
+            WriteVarint(ship, 0x30); WriteVarint(ship, PlayerAccountFactory.HpCoefficient);
+            WriteVarint(ship, 0x58); WriteVarint(ship, 3);
+            WriteVarint(ship, 0x60); WriteVarint(ship, unchecked((ulong)h.Fashioning));
+            var sb = ship.ToArray();
+            WriteVarint(fleet, 0x22); WriteVarint(fleet, (ulong)sb.Length); fleet.Write(sb);
+            WriteVarint(fleet, 0x40); WriteVarint(fleet, (ulong)h.HeroId); // HeroList(8) per ship
+        }
+        WriteVarint(fleet, 0x28); WriteVarint(fleet, 0);
+        WriteVarint(fleet, 0x38); WriteVarint(fleet, 0);
+        WriteVarint(fleet, 0x48); WriteVarint(fleet, 1);
+        var fb = fleet.ToArray();
+        WriteVarint(bp, 0x3A); WriteVarint(bp, (ulong)fb.Length); bp.Write(fb);
+        return bp.ToArray();
+    }
+
     public async Task<IReadOnlyList<byte[]>> BuildPostEquipPushesAsync(string profileId, uint now, CancellationToken ct)
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
@@ -1088,6 +1528,146 @@ internal sealed class GameLoginMessageHandler
                 Time: now)),
             BuildEquipPush(account, now),
         ];
+    }
+
+    /// <summary>编码玩家编队数据为 TSelfTactis protobuf。</summary>
+    public static byte[] EncodeFleet(PlayerFleet fleet)
+    {
+        using var ms = new MemoryStream();
+        foreach (var t in fleet.Tactics)
+        {
+            using var entry = new MemoryStream();
+            // tacticName (1)
+            if (!string.IsNullOrEmpty(t.TacticName))
+            {
+                WriteVarint(entry, 0x0A);
+                var nameBytes = Encoding.UTF8.GetBytes(t.TacticName);
+                WriteVarint(entry, (ulong)nameBytes.Length);
+                entry.Write(nameBytes);
+            }
+            // heroInfo (2, repeated int32)
+            if (t.HeroInfo is { Count: > 0 })
+            {
+                foreach (var h in t.HeroInfo)
+                {
+                    WriteVarint(entry, 0x10);
+                    WriteVarint(entry, unchecked((ulong)h));
+                }
+            }
+            // modeId (3)
+            WriteVarint(entry, 0x18);
+            WriteVarint(entry, unchecked((ulong)t.ModeId));
+            // strategyId (4)
+            WriteVarint(entry, 0x20);
+            WriteVarint(entry, unchecked((ulong)t.StrategyId));
+            // formationId (5)
+            WriteVarint(entry, 0x28);
+            WriteVarint(entry, unchecked((ulong)t.FormationId));
+            // type (6)
+            WriteVarint(entry, 0x30);
+            WriteVarint(entry, unchecked((ulong)t.Type));
+            // exHeroInfo (7, repeated int32)
+            if (t.ExHeroInfo is { Count: > 0 })
+            {
+                foreach (var h in t.ExHeroInfo)
+                {
+                    WriteVarint(entry, 0x38);
+                    WriteVarint(entry, unchecked((ulong)h));
+                }
+            }
+            var body = entry.ToArray();
+            WriteVarint(ms, 0x0A); // tactics field 1
+            WriteVarint(ms, (ulong)body.Length);
+            ms.Write(body);
+        }
+        if (fleet.MaxPower != 0)
+        {
+            WriteVarint(ms, 0x10);
+            WriteVarint(ms, unchecked((ulong)fleet.MaxPower));
+        }
+        if (fleet.MinPower != 0)
+        {
+            WriteVarint(ms, 0x18);
+            WriteVarint(ms, unchecked((ulong)fleet.MinPower));
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>解码 SetHerosTactic 请求为 FleetEntry 列表。</summary>
+    public static List<FleetEntry> DecodeSetHerosTactic(byte[] args)
+    {
+        var entries = new List<FleetEntry>();
+        var reader = new ProtoReader(args);
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            if (field == 1 && wire == 2) // tactics
+            {
+                var inner = new ProtoReader(reader.ReadBytes());
+                var modeId = 0;
+                var type = 1;
+                var tacticName = "";
+                var heroInfo = new List<int>();
+                var exHeroInfo = new List<int>();
+                var strategyId = 0;
+                var formationId = 2;
+                while (inner.TryReadField(out var f, out var w))
+                {
+                    switch (f)
+                    {
+                        case 1 when w == 2: tacticName = inner.ReadString(); break;
+                        case 2 when w == 0: heroInfo.Add(checked((int)inner.ReadVarint())); break;
+                        case 3 when w == 0: modeId = checked((int)inner.ReadVarint()); break;
+                        case 4 when w == 0: strategyId = checked((int)inner.ReadVarint()); break;
+                        case 5 when w == 0: formationId = checked((int)inner.ReadVarint()); break;
+                        case 6 when w == 0: type = checked((int)inner.ReadVarint()); break;
+                        case 7 when w == 0: exHeroInfo.Add(checked((int)inner.ReadVarint())); break;
+                        default: inner.Skip(w); break;
+                    }
+                }
+                entries.Add(new FleetEntry(modeId, type, tacticName, heroInfo, exHeroInfo, strategyId, formationId));
+            }
+            else reader.Skip(wire);
+        }
+        return entries;
+    }
+
+    private static byte[] EncodeCacheDataRet()
+    {
+        // TCacheDataRet{Ret=string}
+        using var ms = new MemoryStream();
+        WriteString(ms, 0x0A, "local");
+        return ms.ToArray();
+    }
+
+    /// <summary>编码剧情章节初始数据为 TUserCopyInfo protobuf（CopyType=1 PlotCopy）。</summary>
+public static byte[] EncodePlotCopyInfo(int chapterId = 1, bool markPassed = false)
+    {
+        // 硬编码前 5 章的所有关卡，全部标记为已通关
+        // 章节1: [1,2,3,4,6,7,9,10,11,12,13]
+        // 章节2: [101,102,103,104,105,106,107,108]
+        var hardCodedCopyIds = new[] {
+            // 章节1
+            1,2,3,4,6,7,9,10,11,12,13,
+            // 章节2
+            101,102,103,104,105,106,107,108,
+        };
+        using var ms = new MemoryStream();
+        foreach (var cid in hardCodedCopyIds)
+        {
+            using var baseInfo = new MemoryStream();
+            WriteVarint(baseInfo, 0x08); WriteVarint(baseInfo, unchecked((ulong)cid)); // BaseId(1)
+            WriteVarint(baseInfo, 0x10); WriteVarint(baseInfo, 0); // Rid(2)=0
+            WriteVarint(baseInfo, 0x18); WriteVarint(baseInfo, 0); // StarLevel(3)=0
+            WriteVarint(baseInfo, 0x20); WriteVarint(baseInfo, 0); // IsRunningFight(4)=0
+            WriteVarint(baseInfo, 0x28); WriteVarint(baseInfo, 0); // LBPoint(5)=0
+            WriteVarint(baseInfo, 0x30); WriteVarint(baseInfo, 1); // FirstPassTime(6)=1
+            var body = baseInfo.ToArray();
+            WriteVarint(ms, 0x0A); WriteVarint(ms, (ulong)body.Length); ms.Write(body);
+        }
+        // MaxCopyId = 108（章节2最后一个关卡），使 _getFarestId 返回章节2
+        WriteVarint(ms, 0x10); WriteVarint(ms, 108);
+        WriteVarint(ms, 0x18); WriteVarint(ms, 1);
+        return ms.ToArray();
     }
 }
 
@@ -1245,6 +1825,247 @@ internal static class ShipLevelupLoader
 
     private static string XorDecode(byte[] source)
     {
+        var result = new byte[source.Length];
+        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
+        return Encoding.UTF8.GetString(result);
+    }
+}
+
+/// <summary>从 config_copy / config_fleet / config_ship_enemy 加载战斗配置。</summary>
+internal static class CopyBattleLoader
+{
+    private static readonly Dictionary<int, int> _copyFleetMap = new();       // copy_id → fleet_id
+    private static readonly Dictionary<int, int> _copyConfigIdMap = new();    // copy_id → config_copy DBObject id
+    private static readonly Dictionary<int, List<int>> _fleetEnemies = new(); // fleet_id → enemy ship ids
+    private static readonly Dictionary<int, bool> _fleetHasAttached = new();  // fleet_id → 是否带 copy_attacheds
+    private static readonly Dictionary<int, EnemyStat> _enemyStats = new();   // enemy id → stats
+    private static bool _loaded;
+
+    public sealed record EnemyStat(int Hp, int Attack, int Defense, int Level, int ShipInfoId);
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = Path.GetFullPath(Path.Combine(dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
+            LoadCopyFleet(configDir);
+            LoadFleetEnemies(configDir);
+            LoadEnemyStats(configDir);
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    private static void LoadCopyFleet(string configDir)
+    {
+        try
+        {
+            var path = Path.Combine(configDir, "config_copy.db");
+            if (!File.Exists(path)) return;
+            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            c.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+            using var r = cmd.ExecuteReader();
+            var candidates = new Dictionary<int, (int fleetId, bool isDefault)>();
+            while (r.Read())
+            {
+                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+                if (id == 0) continue;
+                var bytes = ReadColumnBytes(r, 1);
+                var json = XorDecode(bytes);
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("copy_id", out var copyIdProp)) continue;
+                if (!doc.RootElement.TryGetProperty("fleet_id", out var fleetIdProp)) continue;
+                var copyId = copyIdProp.GetInt32();
+                foreach (var item in fleetIdProp.EnumerateArray())
+                {
+                    var fleetId = item.GetInt32();
+                    // 默认分支: blood_range_lower == -1 且 random_weight == 1000
+                    var isDefault = doc.RootElement.TryGetProperty("blood_range_lower", out var brl) && brl.GetInt32() == -1
+                        && doc.RootElement.TryGetProperty("random_weight", out var rw) && rw.GetInt32() == 1000;
+                    if (!candidates.TryGetValue(copyId, out var cur) || (isDefault && !cur.isDefault))
+                        candidates[copyId] = (fleetId, isDefault);
+                    // 记录默认分支对应的 config_copy DBObject id（客户端用该 id 查 config_copy）
+                    if (isDefault) _copyConfigIdMap[copyId] = id;
+                }
+            }
+            foreach (var (copyId, val) in candidates)
+                _copyFleetMap[copyId] = val.fleetId;
+        }
+        catch { }
+    }
+
+    private static void LoadFleetEnemies(string configDir)
+    {
+        try
+        {
+            var path = Path.Combine(configDir, "config_fleet.db");
+            if (!File.Exists(path)) return;
+            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            c.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+                if (id == 0) continue;
+                var bytes = ReadColumnBytes(r, 1);
+                var json = XorDecode(bytes);
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("copy_enemys", out var enemies)) continue;
+                var list = new List<int>();
+                foreach (var item in enemies.EnumerateArray())
+                    list.Add(item.GetInt32());
+                _fleetEnemies[id] = list;
+                // copy_attacheds 结构为 [[attachedFleetId, formation], ...]
+                if (doc.RootElement.TryGetProperty("copy_attacheds", out var attached)
+                    && attached.ValueKind == JsonValueKind.Array)
+                {
+                    var cnt = 0;
+                    foreach (var item in attached.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.Array && item.GetArrayLength() > 0
+                            && item[0].ValueKind == JsonValueKind.Number && item[0].GetInt32() != 0)
+                            cnt++;
+                    }
+                    _fleetHasAttached[id] = cnt > 0;
+                }
+            }
+        }
+        catch { }
+    }
+
+    private static void LoadEnemyStats(string configDir)
+    {
+        try
+        {
+            var path = Path.Combine(configDir, "config_ship_enemy.db");
+            if (!File.Exists(path)) return;
+            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            c.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+                if (id == 0) continue;
+                var bytes = ReadColumnBytes(r, 1);
+                var json = XorDecode(bytes);
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("hp", out var hpProp)) continue;
+                _enemyStats[id] = new EnemyStat(
+                    hpProp.GetInt32(),
+                    doc.RootElement.TryGetProperty("attack", out var atk) ? atk.GetInt32() : 0,
+                    doc.RootElement.TryGetProperty("defense", out var def) ? def.GetInt32() : 0,
+                    doc.RootElement.TryGetProperty("level", out var lv) ? lv.GetInt32() : 1,
+                    doc.RootElement.TryGetProperty("ship_info_id", out var sid) ? sid.GetInt32() : 0);
+            }
+        }
+        catch { }
+    }
+
+    public static int GetFleetId(int copyId)
+        => _copyFleetMap.TryGetValue(copyId, out var id) ? id : copyId;
+
+    public static bool HasCopyAttacheds(int fleetId)
+        => _fleetHasAttached.TryGetValue(fleetId, out var has) && has;
+
+    /// <summary>敌人舰队锚点：优先返回带 copy_attacheds 的舰队，否则回退到临时测试舰队 907。</summary>
+    public static int GetFleetIdWithAttached(int copyId)
+    {
+        var fleetId = GetFleetId(copyId);
+        if (HasCopyAttacheds(fleetId)) return fleetId;
+        return 907; // 临时测试锚点：copy_attacheds=[[908,0],[909,0],[910,0]]，全部可解析
+    }
+
+    public static int GetConfigId(int copyId)
+        => _copyConfigIdMap.TryGetValue(copyId, out var id) ? id : copyId;
+
+    public static List<int> GetEnemyIds(int fleetId)
+        => _fleetEnemies.TryGetValue(fleetId, out var list) ? list : [];
+
+    public static EnemyStat? GetEnemyStat(int enemyId)
+        => _enemyStats.TryGetValue(enemyId, out var stat) ? stat : null;
+
+    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal)) return [];
+        var value = reader.GetValue(ordinal);
+        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
+    }
+
+    private static string XorDecode(byte[] source)
+    {
+        const byte XorKey = 0x55;
+        var result = new byte[source.Length];
+        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
+        return Encoding.UTF8.GetString(result);
+    }
+}
+
+/// <summary>从 config_chapter 加载章节 → 关卡列表映射。</summary>
+internal static class ChapterCopyLoader
+{
+    private static readonly Dictionary<int, List<int>> _chapterCopies = new();
+    private static readonly Dictionary<int, int> _firstCopyMap = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            var path = Path.Combine(configDir, "config_chapter.db");
+            if (!File.Exists(path)) return;
+            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            c.Open();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+                if (id == 0) continue;
+                var bytes = ReadColumnBytes(r, 1);
+                var json = XorDecode(bytes);
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("level_list", out var levelList)) continue;
+                if (!doc.RootElement.TryGetProperty("class_type", out var classType)) continue;
+                if (classType.GetInt32() != 1) continue; // only PlotCopy
+                var copies = new List<int>();
+                foreach (var item in levelList.EnumerateArray())
+                    copies.Add(item.GetInt32());
+                _chapterCopies[id] = copies;
+                _firstCopyMap[id] = copies[0];
+            }
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static List<int> GetCopyIds(int chapterId)
+        => _chapterCopies.TryGetValue(chapterId, out var list) ? list : [];
+
+    public static int GetFirstCopyId(int chapterId)
+        => _firstCopyMap.TryGetValue(chapterId, out var id) ? id : 0;
+
+    public static List<int> GetAllChapterIds()
+        => [.. _chapterCopies.Keys.OrderBy(x => x)];
+
+    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal)) return [];
+        var value = reader.GetValue(ordinal);
+        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
+    }
+
+    private static string XorDecode(byte[] source)
+    {
+        const byte XorKey = 0x55;
         var result = new byte[source.Length];
         for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
         return Encoding.UTF8.GetString(result);

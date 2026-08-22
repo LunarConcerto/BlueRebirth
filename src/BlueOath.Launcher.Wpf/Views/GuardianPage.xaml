@@ -93,7 +93,8 @@
             </Grid.RowDefinitions>
 
             <TabControl Grid.Row="0" ItemsSource="{Binding LogTabs}" SelectedItem="{Binding SelectedLogTab}"
-                        Background="Transparent" BorderThickness="0">
+                        Background="Gray" BorderBrush="Black" BorderThickness="0"
+                        ContentTemplate="{x:Null}">
                 <TabControl.Resources>
                     <Style TargetType="TabItem">
                         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
@@ -131,7 +132,8 @@
 
             <Border Grid.Row="1" Background="{StaticResource BgDarkBrush}"
                     BorderThickness="1,0,0,0" BorderBrush="{StaticResource BgLightBrush}">
-                <ListBox ItemsSource="{Binding SelectedLogTab.Entries}"
+                <ListBox x:Name="LogListBox"
+                         ItemsSource="{Binding SelectedLogTab.Entries}"
                          Background="Transparent" BorderThickness="0"
                          VirtualizingPanel.IsVirtualizing="True"
                          VirtualizingPanel.VirtualizationMode="Recycling"

@@ -132,6 +132,7 @@ public class ProcessManager
 
         try
         {
+            _processStates.Clear();
             string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             string runRoot = Path.Combine(_rootDir, "runtime", "debug", stamp);
             string tlsRoot = Path.Combine(runRoot, "tls");

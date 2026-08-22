@@ -4,6 +4,7 @@ using BlueOath.Protocol;
 using BlueOath.Server.Infrastructure;
 using BlueOath.Server.Protocols;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 
 namespace BlueOath.Server.Sessions;
 
@@ -15,6 +16,7 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
 {
     private readonly GameLoginMessageHandler _handler = handler;
     private readonly ILogger _fileLogger = loggerFactory.CreateLogger(GameLoginFileLoggerProvider.Category);
+    private readonly ILogger _messageLogger = loggerFactory.CreateLogger("SocketSession");
 
     public async Task HandleAsync(TcpClient client, int connectionId, CancellationToken ct)
     {
@@ -47,6 +49,8 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         continue;
 
                     var request = TMessageCodec.DecodeRequest(payload);
+
+                    _messageLogger.Log(LogLevel.Information, "GameSession received request method={Method}", request.Method);
 
                     // player.Login 先解析 pid，更新会话的 profileId，后续请求按该账号读取。
                     if (request.Method == "player.Login")
@@ -209,6 +213,30 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                             Time: now));
                         await NetSocketFrameCodec.WriteAsync(stream, heroPush, NetSocketFrameCodec.TypeData, ct);
                         await NetSocketFrameCodec.WriteAsync(stream, bagPush, NetSocketFrameCodec.TypeData, ct);
+                    }
+
+                    // 剧情奖励领取后，推送更新后的章节数据解锁下一章。
+                    // 全章节已解锁，无需额外推送。
+                    if (request.Method == "guide.PlotReward")
+                    {
+                    }
+
+                    // 战斗开始后，推送 copy.StartBase push 触发 BattleLauncher 打开 StageSimpleBattle（不推 battle.createBattleInfo，避免打开崩溃的 StagePvpBattle）
+                    if (request.Method == "copy.StartBase")
+                    {
+                        var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                        var account = await _handler.GetAccountAsync(profileId, ct);
+                        var heroes = account.Dock.Heroes.ToList();
+                        var copyId = _handler.DecodeStartBaseCopyIdPublic(request.Args ?? []);
+                        var copyPush = TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "copy.StartBase",
+                            Ret: _handler.EncodeStartBaseRetDirect(copyId, heroes),
+                            Time: now,
+                            IsResponse: 0));
+                        await NetSocketFrameCodec.WriteAsync(stream, copyPush, NetSocketFrameCodec.TypeData, ct);
+                        _fileLogger.LogInformation(
+                            "game-login[{ConnectionId}] push copy.StartBase bytes={Bytes}",
+                            connectionId, copyPush.Length);
                     }
                 }
             }

@@ -32,6 +32,10 @@ using CertVerifyCertificateChainPolicyFn = BOOL (WINAPI*)(LPCSTR, PCCERT_CHAIN_C
 using CurlEasySetOptFn = int (__cdecl*)(void*, int, ...);
 using CurlEasyPerformFn = int (__cdecl*)(void*);
 using CurlEasyGetInfoFn = int (__cdecl*)(void*, int, ...);
+struct CurlSlist {
+    char* data;
+    struct CurlSlist* next;
+};
 using GetProcAddressFn = FARPROC (WINAPI*)(HMODULE, LPCSTR);
 using InitSdkFn = uintptr_t (__cdecl*)(const char*, void*);
 using SdkCallbackFn = void (__stdcall*)(int, const char*);
@@ -62,6 +66,8 @@ bool redirectEnabled = false;
 unsigned short redirectPort = 0;
 unsigned short httpRedirectPort = 0;
 bool allowUntrusted = false;
+bool captureBugly = false;
+unsigned short capturePort = 9887;
 bool unityTlsPatchApplied = false;
 bool sdkTlsPatchProcessed = false;
 bool newSdkTlsPatchProcessed = false;
@@ -80,6 +86,7 @@ std::set<std::string> loggedRedirects;
 void Log(const std::string& message);
 std::string DescribeCaller(void* address);
 uintptr_t ReadPtrSafe(uintptr_t addr);
+std::string SafeStr(const char* s);
 
 void Log(const std::string& message) {
     std::lock_guard<std::mutex> guard(logMutex);
@@ -227,6 +234,35 @@ int __cdecl HookSdkCurlEasyPerform(void* handle) {
     return result;
 }
 
+bool IsBuglyReportUrl(const std::string& url) {
+    // Only hijack crash-report uploads; the SDK's normal login/analytics calls must keep
+    // reaching the local backend so the game can actually reach the battle (where the crash
+    // happens) instead of stalling at login.
+    if (url.find("bugly") != std::string::npos) return true;
+    if (url.find("report") != std::string::npos) return true;
+    if (url.find("upload") != std::string::npos) return true;
+    if (url.find("crash") != std::string::npos) return true;
+    if (url.find(".qq.com") != std::string::npos) return true;
+    if (url.find("uop") != std::string::npos) return true;
+    return false;
+}
+
+std::string UrlEncode(const std::string& value) {
+    static constexpr char digits[] = "0123456789ABCDEF";
+    std::string out;
+    for (unsigned char ch : value) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+            ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+            out.push_back(static_cast<char>(ch));
+        } else {
+            out += '%';
+            out += digits[ch >> 4];
+            out += digits[ch & 0xF];
+        }
+    }
+    return out;
+}
+
 int __cdecl HookNewSdkCurlEasyPerform(void* handle) {
     constexpr int curlOptSslVersion = 32;
     constexpr int curlOptSslVerifyPeer = 64;
@@ -237,11 +273,52 @@ int __cdecl HookNewSdkCurlEasyPerform(void* handle) {
     newSdkCurlEasySetOpt(handle, curlOptSslVerifyHost, 0L);
     std::string originalUrl;
     const auto plainHttp = TryUseLocalPlainHttp(handle, newSdkCurlEasySetOpt, originalUrl);
+    std::string captureUrl;
+    if (captureBugly && capturePort) {
+        if (originalUrl.empty()) {
+            char* rawUrl = nullptr;
+            if (curlEasyGetInfo && curlEasyGetInfo(handle, 0x100001, &rawUrl) == 0 && rawUrl)
+                originalUrl = rawUrl;
+        }
+        if (IsBuglyReportUrl(originalUrl)) {
+            captureUrl = std::string("http://127.0.0.1:") + std::to_string(capturePort) +
+                "/bugly-capture?url=" + UrlEncode(originalUrl);
+            newSdkCurlEasySetOpt(handle, 10002, captureUrl.c_str());
+        }
+    }
     LogRedirectOnce("new_sdk curl_easy_perform hooked caller=" + DescribeCaller(_ReturnAddress()) +
-        " url=" + originalUrl + " downgraded=" + (plainHttp ? "true" : "false"));
+        " url=" + originalUrl + " downgraded=" + (plainHttp ? "true" : "false") +
+        " capture=" + (captureUrl.empty() ? "false" : "true"));
     const auto result = newSdkCurlEasyPerform(handle);
-    if (plainHttp) newSdkCurlEasySetOpt(handle, 10002, originalUrl.c_str());
+    if (!captureUrl.empty()) newSdkCurlEasySetOpt(handle, 10002, originalUrl.c_str());
+    else if (plainHttp) newSdkCurlEasySetOpt(handle, 10002, originalUrl.c_str());
     return result;
+}
+
+using CurlEasySetOptVarFn = int (__cdecl*)(void*, int, ...);
+CurlEasySetOptVarFn originalNewSdkCurlSetopt = nullptr;
+bool newSdkCurlSetoptPatched = false;
+
+int __cdecl HookNewSdkCurlSetopt(void* handle, int option, ...) {
+    void* param = nullptr;
+    va_list args;
+    va_start(args, option);
+    param = va_arg(args, void*);
+    va_end(args);
+    if (option == 10002 && param) {
+        Log("new_sdk curl URL: " + SafeStr(reinterpret_cast<const char*>(param)));
+    } else if (option == 10015 && param) {
+        Log("new_sdk curl POSTFIELDS: " + SafeStr(reinterpret_cast<const char*>(param)));
+    } else if (option == 10023 && param) {
+        // CURLOPT_HTTPHEADER: curl_slist chain, log a couple of entries
+        auto node = reinterpret_cast<const struct CurlSlist*>(param);
+        for (int i = 0; i < 12 && node; ++i, node = node->next) {
+            if (node->data) Log("new_sdk curl HEADER: " + SafeStr(node->data));
+        }
+    }
+    if (originalNewSdkCurlSetopt)
+        return originalNewSdkCurlSetopt(handle, option, param);
+    return -1;
 }
 
 void TryPatchCurlCaller(const wchar_t* moduleName, const std::string& expectedHash,
@@ -306,6 +383,357 @@ void TryPatchCurlCaller(const wchar_t* moduleName, const std::string& expectedHa
     VirtualProtect(&performSlot->u1.Function, sizeof(void*), oldProtect, &oldProtect);
     FlushInstructionCache(GetCurrentProcess(), &performSlot->u1.Function, sizeof(void*));
     Log(logName + " TLS patch applied: verified curl_easy_perform IAT");
+}
+
+bool PatchModuleImportSlot(const wchar_t* moduleName, const char* dllName, const char* functionName,
+    void* hook, void** originalOut, const std::string& logName) {
+    auto module = GetModuleHandleW(moduleName);
+    if (!module) return false;
+    auto base = reinterpret_cast<unsigned char*>(module);
+    auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
+    auto nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
+    const auto directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!directory.VirtualAddress) return false;
+    for (auto descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + directory.VirtualAddress);
+         descriptor->Name; ++descriptor) {
+        const char* library = reinterpret_cast<const char*>(base + descriptor->Name);
+        if (_stricmp(library, dllName) != 0) continue;
+        auto names = descriptor->OriginalFirstThunk
+            ? reinterpret_cast<IMAGE_THUNK_DATA*>(base + descriptor->OriginalFirstThunk)
+            : reinterpret_cast<IMAGE_THUNK_DATA*>(base + descriptor->FirstThunk);
+        auto slots = reinterpret_cast<IMAGE_THUNK_DATA*>(base + descriptor->FirstThunk);
+        for (; names->u1.AddressOfData; ++names, ++slots) {
+            if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
+            auto import = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(base + names->u1.AddressOfData);
+            if (strcmp(reinterpret_cast<const char*>(import->Name), functionName) != 0) continue;
+            if (originalOut) *originalOut = reinterpret_cast<void*>(slots->u1.Function);
+            DWORD oldProtect = 0;
+            if (!VirtualProtect(&slots->u1.Function, sizeof(void*), PAGE_READWRITE, &oldProtect)) {
+                Log(logName + " IAT patch refused: VirtualProtect failed");
+                return false;
+            }
+            slots->u1.Function = reinterpret_cast<ULONG_PTR>(hook);
+            VirtualProtect(&slots->u1.Function, sizeof(void*), oldProtect, &oldProtect);
+            FlushInstructionCache(GetCurrentProcess(), &slots->u1.Function, sizeof(void*));
+            Log(logName + " IAT patch applied: " + functionName);
+            return true;
+        }
+    }
+    Log(logName + " IAT patch refused: import not found (" + functionName + ")");
+    return false;
+}
+
+std::string WideToString(const wchar_t* text, int maxChars = 160) {
+    if (!text) return "<null>";
+    std::string out;
+    for (int i = 0; i < maxChars; ++i) {
+        MEMORY_BASIC_INFORMATION m{};
+        const auto addr = reinterpret_cast<unsigned char*>(const_cast<wchar_t*>(text)) + i * 2;
+        if (!VirtualQuery(addr, &m, sizeof(m)) || m.State != MEM_COMMIT ||
+            (m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+            out += "<badptr>";
+            return out;
+        }
+        if (m.Protect & PAGE_READONLY || m.Protect & PAGE_READWRITE || m.Protect & PAGE_EXECUTE_READ ||
+            m.Protect & PAGE_EXECUTE_READWRITE || m.Protect & PAGE_WRITECOPY ||
+            m.Protect & PAGE_EXECUTE_WRITECOPY) {
+            wchar_t ch = text[i];
+            if (!ch) return out;
+            char buf[8]{};
+            WideCharToMultiByte(CP_UTF8, 0, &ch, 1, buf, sizeof(buf), nullptr, nullptr);
+            for (char c : buf) if (c) out.push_back(c);
+        } else {
+            out += "<noperm>";
+            return out;
+        }
+    }
+    return out;
+}
+
+using VsnwprintfSFn = int (__cdecl*)(unsigned __int64, void*, size_t, size_t, const wchar_t*, void*, void*);
+VsnwprintfSFn originalNewSdkVsnwprintfS = nullptr;
+bool newSdkVsnwprintfSPatched = false;
+
+int __cdecl HookNewSdkVsnwprintfS(unsigned __int64 options, void* buffer, size_t bufferCount,
+    size_t maxCount, const wchar_t* format, void* locale, void* argList) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "new_sdk vsnwprintf_s caller=" << DescribeCaller(_ReturnAddress())
+        << " buf=" << std::hex << reinterpret_cast<uintptr_t>(buffer) << std::dec
+        << " count=" << bufferCount << " max=" << maxCount
+        << " fmt=\"" << WideToString(format) << "\"" << '\n';
+    output.flush();
+    return originalNewSdkVsnwprintfS(options, buffer, bufferCount, maxCount, format, locale, argList);
+}
+
+using VswprintfSFn = int (__cdecl*)(unsigned __int64, void*, size_t, const wchar_t*, void*, void*);
+VswprintfSFn originalNewSdkVswprintfS = nullptr;
+bool newSdkVswprintfSPatched = false;
+
+int __cdecl HookNewSdkVswprintfS(unsigned __int64 options, void* buffer, size_t bufferCount,
+    const wchar_t* format, void* locale, void* argList) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "new_sdk vswprintf_s caller=" << DescribeCaller(_ReturnAddress())
+        << " buf=" << std::hex << reinterpret_cast<uintptr_t>(buffer) << std::dec
+        << " count=" << bufferCount
+        << " fmt=\"" << WideToString(format) << "\"" << '\n';
+    output.flush();
+    if (originalNewSdkVswprintfS)
+        return originalNewSdkVswprintfS(options, buffer, bufferCount, format, locale, argList);
+    return -1;
+}
+
+bool newSdkReportFormatPatched = false;
+
+void TryPatchNewSdkReportFormat() {
+    if (newSdkReportFormatPatched || !captureBugly) return;
+    auto newSdk = GetModuleHandleW(L"new_sdk.dll");
+    if (!newSdk) return;
+    newSdkReportFormatPatched = true;
+    wchar_t modulePath[MAX_PATH]{};
+    if (!GetModuleFileNameW(newSdk, modulePath, MAX_PATH)) return;
+    if (HashFileSha256(modulePath) != "1CF7BF8C8B25C3C7F26F839AE8A4D32F1D3A4966ECCC826C8669C8AB5759DB0B") {
+        Log("new_sdk report-format patch refused: SHA-256 mismatch");
+        return;
+    }
+    // RVA 0x537D0 is the literal format string "%" (a lone trailing '%' is an invalid
+    // format specifier under the modern UCRT and fail-fasts via _invalid_parameter_noinfo,
+    // even though the old MSVC CRT new_sdk was built against printed it literally).
+    // Replace the single '%' byte with NUL so the format becomes the empty string and
+    // _vsnwprintf_s succeeds, letting the bugly crash-report flow continue to the upload.
+    auto address = reinterpret_cast<unsigned char*>(newSdk) + 0x537D0;
+    if (*address != '%') {
+        Log("new_sdk report-format patch refused: unexpected byte " + std::to_string(*address));
+        return;
+    }
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(address, 1, PAGE_READWRITE, &oldProtect)) return;
+    *address = 0;
+    VirtualProtect(address, 1, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), address, 1);
+    Log("new_sdk report-format patched: trailing-%% format neutralized");
+}
+
+using ExitFn = void (__cdecl*)(int);
+ExitFn originalNewSdkExit = nullptr;
+bool newSdkExitPatched = false;
+
+void __cdecl HookNewSdkExit(int code) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "new_sdk exit(" << code << ") intercepted caller=" << DescribeCaller(_ReturnAddress()) << '\n';
+    output.flush();
+    if (originalNewSdkExit) originalNewSdkExit(code);
+}
+
+void* newSdkReportCtorStolen = nullptr;
+bool newSdkReportCtorHookApplied = false;
+
+void LogNewSdkReportCtor(void* a1, void* a2, void* a3, void* a4, void* a5) {
+    const auto p1 = reinterpret_cast<uintptr_t>(a1);
+    const auto p2 = reinterpret_cast<uintptr_t>(a2);
+    const auto p3 = reinterpret_cast<uintptr_t>(a3);
+    const auto p4 = reinterpret_cast<uintptr_t>(a4);
+    const auto p5 = reinterpret_cast<uintptr_t>(a5);
+    std::string s1 = SafeStr(reinterpret_cast<const char*>(a1));
+    std::string s2 = SafeStr(reinterpret_cast<const char*>(a2));
+    std::string s3 = SafeStr(reinterpret_cast<const char*>(a3));
+    std::string s4 = SafeStr(reinterpret_cast<const char*>(a4));
+    std::string s5 = SafeStr(reinterpret_cast<const char*>(a5));
+    if (s1 == "<null>") s1 = SafeStr(reinterpret_cast<const char*>(a1) + 4);
+    if (s2 == "<null>") s2 = SafeStr(reinterpret_cast<const char*>(a2) + 4);
+    if (s4 == "<null>") s4 = SafeStr(reinterpret_cast<const char*>(a4) + 4);
+    if (s5 == "<null>") s5 = SafeStr(reinterpret_cast<const char*>(a5) + 4);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "new_sdk report(a1=0x" << std::hex << p1 << std::dec << "[" << s1 << "]"
+        << " a2=0x" << std::hex << p2 << std::dec << "[" << s2 << "]"
+        << " a3=0x" << std::hex << p3 << std::dec << "[" << s3 << "]"
+        << " a4=0x" << std::hex << p4 << std::dec << "[" << s4 << "]"
+        << " a5=0x" << std::hex << p5 << std::dec << "[" << s5 << "])" << '\n';
+    output.flush();
+}
+
+__declspec(naked) void NewSdkReportCtorTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 52]   // arg5
+        push eax
+        mov ecx, dword ptr [esp + 52]   // arg4
+        push ecx
+        mov edx, dword ptr [esp + 52]   // arg3
+        push edx
+        mov eax, dword ptr [esp + 52]   // arg2
+        push eax
+        mov ecx, dword ptr [esp + 52]   // arg1
+        push ecx
+        call LogNewSdkReportCtor
+        add esp, 20
+        popad
+        jmp dword ptr [newSdkReportCtorStolen]
+    }
+}
+
+bool InstallNewSdkRvaHook(uintptr_t rva, void* trampoline, void** stolenOut, size_t stolenLen, const char* name) {
+    auto sdk = GetModuleHandleW(L"new_sdk.dll");
+    if (!sdk) return false;
+    wchar_t modulePath[MAX_PATH]{};
+    if (!GetModuleFileNameW(sdk, modulePath, MAX_PATH)) return false;
+    if (HashFileSha256(modulePath) != "1CF7BF8C8B25C3C7F26F839AE8A4D32F1D3A4966ECCC826C8669C8AB5759DB0B") {
+        Log(std::string(name) + " hook refused: SHA-256 mismatch");
+        return false;
+    }
+    auto address = reinterpret_cast<unsigned char*>(sdk) + rva;
+    const unsigned char expected[] = { 0x55, 0x8B, 0xEC };
+    if (memcmp(address, expected, sizeof(expected)) != 0) {
+        char actual[16]{};
+        for (int i = 0; i < 6; ++i) { char b[4]{}; sprintf_s(b, "%02X ", address[i]); strcat_s(actual, b); }
+        Log(std::string(name) + " hook refused: prologue mismatch actual=" + actual);
+        return false;
+    }
+    auto stolen = VirtualAlloc(nullptr, stolenLen + 7, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!stolen) return false;
+    auto s = reinterpret_cast<unsigned char*>(stolen);
+    memcpy(s, address, stolenLen);
+    int pos = static_cast<int>(stolenLen);
+    auto backTarget = reinterpret_cast<uintptr_t>(address) + stolenLen;
+    s[pos++] = 0xE9;
+    int32_t backRel = static_cast<int32_t>(backTarget - (reinterpret_cast<uintptr_t>(stolen) + pos + 4));
+    memcpy(s + pos, &backRel, 4);
+    pos += 4;
+    *stolenOut = stolen;
+    const auto tramp = reinterpret_cast<uintptr_t>(trampoline);
+    const auto rel = static_cast<int32_t>(tramp - (reinterpret_cast<uintptr_t>(address) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(address, stolenLen, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+    memcpy(address, jump, 5);
+    for (size_t i = 5; i < stolenLen; ++i) address[i] = 0x90;
+    VirtualProtect(address, stolenLen, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), address, stolenLen);
+    Log(std::string(name) + " hook applied");
+    return true;
+}
+
+void TryApplyNewSdkReportCtorHook() {
+    if (newSdkReportCtorHookApplied) return;
+    newSdkReportCtorHookApplied = true;
+    auto sdk = GetModuleHandleW(L"new_sdk.dll");
+    if (!sdk) return;
+    // Bugly's crash finalizer 0x468FF ends by terminating the process. Making its ENTRY a
+    // bare `ret` turns the whole finalizer into a no-op (no report, no exit), so when bugly's
+    // crash-handler races the battle init, the game survives instead of being killed.
+    auto address = reinterpret_cast<unsigned char*>(sdk) + 0x468FF;
+    if (*address != 0x55) {
+        Log("new_sdk finalizer patch refused: unexpected byte " + std::to_string(*address));
+        return;
+    }
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(address, 1, PAGE_READWRITE, &oldProtect)) return;
+    *address = 0xC3;
+    VirtualProtect(address, 1, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), address, 1);
+    Log("new_sdk finalizer patched to ret (no-op)");
+}
+
+void* WINAPI HookNewSdkSetUnhandledExceptionFilter(void* handler) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "new_sdk SetUnhandledExceptionFilter suppressed (handler=0x"
+        << std::hex << reinterpret_cast<uintptr_t>(handler) << std::dec << ")" << '\n';
+    output.flush();
+    return nullptr;
+}
+
+using AddVectoredExceptionHandlerFn = void* (WINAPI*)(unsigned long, void*);
+AddVectoredExceptionHandlerFn originalNewSdkAddVeh = nullptr;
+bool newSdkSetUefPatched = false;
+bool newSdkAddVehPatched = false;
+
+void* WINAPI HookNewSdkAddVectoredExceptionHandler(unsigned long first, void* handler) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "new_sdk AddVectoredExceptionHandler suppressed (first=" << first
+        << " handler=0x" << std::hex << reinterpret_cast<uintptr_t>(handler) << std::dec << ")" << '\n';
+    output.flush();
+    return nullptr;
+}
+
+using InvalidParameterHandlerFn = void (__cdecl*)(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t);
+using SetInvalidParameterHandlerFn = InvalidParameterHandlerFn (__cdecl*)(InvalidParameterHandlerFn);
+SetInvalidParameterHandlerFn originalSetInvalidParameterHandler = nullptr;
+bool newSdkInvalidParamPatched = false;
+void* newSdkRegisteredInvalidHandler = nullptr;
+
+void __cdecl NoopInvalidParameterHandler(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "invalid_parameter suppressed by no-op handler" << '\n';
+    output.flush();
+}
+
+InvalidParameterHandlerFn __cdecl HookSetInvalidParameterHandler(InvalidParameterHandlerFn handler) {
+    newSdkRegisteredInvalidHandler = reinterpret_cast<void*>(handler);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "new_sdk set_invalid_parameter_handler intercepted (handler="
+        << std::hex << reinterpret_cast<uintptr_t>(handler) << std::dec
+        << ") -> registering no-op instead" << '\n';
+    output.flush();
+    if (originalSetInvalidParameterHandler)
+        return originalSetInvalidParameterHandler(reinterpret_cast<InvalidParameterHandlerFn>(&NoopInvalidParameterHandler));
+    return nullptr;
+}
+
+void TryApplyNewSdkReportHooks() {
+    if (newSdkVswprintfSPatched && newSdkInvalidParamPatched && newSdkVsnwprintfSPatched &&
+        newSdkCurlSetoptPatched && newSdkExitPatched) return;
+    if (!GetModuleHandleW(L"new_sdk.dll")) return;
+    if (!newSdkExitPatched) {
+        newSdkExitPatched = PatchModuleImportSlot(L"new_sdk.dll", "api-ms-win-crt-runtime-l1-1-0.dll",
+            "exit", reinterpret_cast<void*>(&HookNewSdkExit),
+            reinterpret_cast<void**>(&originalNewSdkExit), "new_sdk exit");
+    }
+    if (!newSdkCurlSetoptPatched) {
+        newSdkCurlSetoptPatched = PatchModuleImportSlot(L"new_sdk.dll", "libcurl.dll",
+            "curl_easy_setopt", reinterpret_cast<void*>(&HookNewSdkCurlSetopt),
+            reinterpret_cast<void**>(&originalNewSdkCurlSetopt), "new_sdk curl setopt");
+    }
+    if (!newSdkVswprintfSPatched) {
+        newSdkVswprintfSPatched = PatchModuleImportSlot(L"new_sdk.dll",
+            "api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vswprintf_s",
+            reinterpret_cast<void*>(&HookNewSdkVswprintfS),
+            reinterpret_cast<void**>(&originalNewSdkVswprintfS), "new_sdk vswprintf_s");
+    }
+    if (!newSdkVsnwprintfSPatched) {
+        newSdkVsnwprintfSPatched = PatchModuleImportSlot(L"new_sdk.dll",
+            "api-ms-win-crt-stdio-l1-1-0.dll", "__stdio_common_vsnwprintf_s",
+            reinterpret_cast<void*>(&HookNewSdkVsnwprintfS),
+            reinterpret_cast<void**>(&originalNewSdkVsnwprintfS), "new_sdk vsnwprintf_s");
+    }
+    if (!newSdkInvalidParamPatched) {
+        newSdkInvalidParamPatched = PatchModuleImportSlot(L"new_sdk.dll",
+            "api-ms-win-crt-runtime-l1-1-0.dll", "_set_invalid_parameter_handler",
+            reinterpret_cast<void*>(&HookSetInvalidParameterHandler),
+            reinterpret_cast<void**>(&originalSetInvalidParameterHandler), "new_sdk invalid-param");
+    }
+    TryPatchNewSdkReportFormat();
+    TryApplyNewSdkReportCtorHook();
+    if (!newSdkSetUefPatched) {
+        newSdkSetUefPatched = PatchModuleImportSlot(L"new_sdk.dll", "KERNEL32.dll",
+            "SetUnhandledExceptionFilter", reinterpret_cast<void*>(&HookNewSdkSetUnhandledExceptionFilter),
+            nullptr, "new_sdk SetUnhandledExceptionFilter");
+    }
+    if (!newSdkAddVehPatched) {
+        newSdkAddVehPatched = PatchModuleImportSlot(L"new_sdk.dll", "KERNEL32.dll",
+            "AddVectoredExceptionHandler", reinterpret_cast<void*>(&HookNewSdkAddVectoredExceptionHandler),
+            reinterpret_cast<void**>(&originalNewSdkAddVeh), "new_sdk AddVectoredExceptionHandler");
+    }
 }
 
 bool simulationModeSet = false;
@@ -626,6 +1054,12 @@ void* getJsonDataStolen = nullptr;
 bool getJsonDataHookApplied = false;
 void* getAllStolen = nullptr;
 bool getAllHookApplied = false;
+void* getJsonDataGroupStolen = nullptr;
+bool getJsonDataGroupHookApplied = false;
+void* getJsonStrByBytesStolen = nullptr;
+bool getJsonStrByBytesHookApplied = false;
+void* assetLoadAsyncStolen = nullptr;
+bool assetLoadAsyncHookApplied = false;
 void* createPartStolen = nullptr;
 bool createPartHookApplied = false;
 void* playMusicStolen = nullptr;
@@ -693,9 +1127,12 @@ static std::string ReadIl2CppString(void* str) {
         (mem.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return "<unreadable>";
     const int length = *reinterpret_cast<const int*>(reinterpret_cast<const char*>(str) + 8);
     if (length < 0 || length > 8192) return "<bad-len:" + std::to_string(length) + ">";
+    const auto charsAddr = reinterpret_cast<uintptr_t>(str) + 12;
+    const auto regionEnd = reinterpret_cast<uintptr_t>(mem.BaseAddress) + mem.RegionSize;
     std::string name;
-    const auto chars = reinterpret_cast<const wchar_t*>(reinterpret_cast<const char*>(str) + 12);
+    const auto chars = reinterpret_cast<const wchar_t*>(charsAddr);
     for (int i = 0; i < length; ++i) {
+        if (charsAddr + static_cast<size_t>(i) * 2 + 2 > regionEnd) break;
         const auto ch = chars[i];
         if (ch >= 0x20 && ch < 0x7f) name.push_back(static_cast<char>(ch));
         else { char hex[8]{}; sprintf_s(hex, "\\u%04X", static_cast<unsigned>(ch)); name += hex; }
@@ -719,6 +1156,30 @@ void LogGetAll(void* self, void* tableName) {
         t == "config_home_page" || t == "config_function_info" || t == "config_ui_config") {
         Log("GetAll table=" + t);
     }
+}
+
+// GetJsonDataGroup(TableName, key) -> string[]: observe batch config reads.
+void LogGetJsonDataGroup(void* self, void* tableName, void* key) {
+    const auto t = ReadIl2CppString(tableName);
+    Log("GetJsonDataGroup table=" + t + " key=" + ReadIl2CppString(key));
+}
+
+// GetJsonStrByBytes(bytes) -> string: static; record caller.
+// GetJsonStrByBytes: called on EVERY config read; rate-limit to avoid flooding.
+void LogGetJsonStrByBytes(void* bytes) {
+    static volatile LONG bytesCount = 0;
+    static volatile LONG lastLogMs = 0;
+    const auto n = InterlockedIncrement(&bytesCount);
+    const auto now = GetTickCount();
+    const auto last = lastLogMs;
+    if (n > 20) return;                       // first 20 total
+    if (InterlockedCompareExchange(&lastLogMs, now, last) != last) return;
+    Log(std::string("GetJsonStrByBytes caller=") + DescribeCaller(_ReturnAddress()));
+}
+
+void LogAssetLoadAsync(void* self, void* resourcePath, void* act) {
+    const auto p = ReadIl2CppString(resourcePath);
+    Log("LoadAsync " + p + " caller=" + DescribeCaller(_ReturnAddress()));
 }
 
 void LogCreatePart() {
@@ -782,10 +1243,49 @@ void LogNetSocketSend(void* netSocket, void* msg) {
     LogManagedByteArray("NetSocket.Send msg", msg);
 }
 
-void LogStageGoto(void* self, int nextStateType) {
-    Log("StageMgr.Goto nextStateType=" + std::to_string(nextStateType));
+void LogStageGoto(void* self, int nextStateType, void* enterParam) {
+    const char* typeName = "?";
+    if (nextStateType == 1) typeName = "eStageLogin";
+    else if (nextStateType == 2) typeName = "eStageMain";
+    else if (nextStateType == 3) typeName = "eStageSimpleBattle";
+    else if (nextStateType == 4) typeName = "eStagePvpBattle";
+    else if (nextStateType == 5) typeName = "eStageLaunch";
+    Log("StageMgr.Goto nextStateType=" + std::to_string(nextStateType) +
+        " (" + typeName + ")" +
+        " self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " enterParam=" + std::to_string(reinterpret_cast<uintptr_t>(enterParam)));
     if (nextStateType == 1) {
         stageMgrInstance = reinterpret_cast<uintptr_t>(self);
+    }
+    // 读取 MessageHelper.pbMap（在战斗阶段打印一次）
+    if (nextStateType == 3 || nextStateType == 4) {
+        auto ga = GetModuleHandleW(L"GameAssembly.dll");
+        if (ga) {
+            const auto base = reinterpret_cast<uintptr_t>(ga);
+            const uintptr_t mhTypeInfo = ReadPtrSafe(base + 0x1D2E0C0);
+            uintptr_t mhStatic = 0;
+            if (mhTypeInfo) mhStatic = ReadPtrSafe(mhTypeInfo + 0x5C);
+            uintptr_t pbMap = 0;
+            if (mhStatic) pbMap = ReadPtrSafe(mhStatic);
+            Log("  MessageHelper pbMap=" + std::to_string(pbMap) + " typeInfo=" + std::to_string(mhTypeInfo));
+        }
+    }
+    // 战斗阶段：尝试读取 enterParam 中的 BattleStartData
+    if (nextStateType == 3 || nextStateType == 4) {
+        if (enterParam) {
+            // enterParam 是 LuaTable（FSMParam），尝试读取关键字段
+            const auto luaTable = reinterpret_cast<uintptr_t>(enterParam);
+            Log("  Battle enterParam addr=" + std::to_string(luaTable));
+            // 尝试读取 BattlePlayer (TBattlePlayerList)
+            const auto bp = ReadPtrSafe(luaTable + 0x10); // LuaTable._array
+            const auto bpLen = bp ? *reinterpret_cast<const int*>(reinterpret_cast<const char*>(luaTable) + 0x18) : 0;
+            Log("  BattlePlayer ref=" + std::to_string(bp) + " len=" + std::to_string(bpLen));
+            // 尝试读取 EnemyFleet
+            const auto enemyRef = ReadPtrSafe(luaTable + 0x20);
+            Log("  EnemyFleet ref=" + std::to_string(enemyRef));
+        } else {
+            Log("  enterParam is NULL — StageMgr.Goto called without battle data!");
+        }
     }
 }
 
@@ -987,7 +1487,7 @@ void LogNetSocketReceivedPacket(void* netSocket, int isPing, int offset, int len
     if (!buf) { Log("  m_Buffer=0 recvBuf=" + std::to_string(recvBuf)); return; }
     const unsigned char* data = reinterpret_cast<const unsigned char*>(buf + 0x10);
     std::string hex;
-    const int preview = length < 64 ? length : 64;
+    const int preview = length < 2048 ? length : 2048;
     for (int i = 0; i < preview; ++i) {
         char tmp[4]{}; sprintf_s(tmp, "%02X", data[offset + i]); hex += tmp;
     }
@@ -1260,15 +1760,324 @@ __declspec(naked) void NetSocketReceivedPacketTrampoline() {
     }
 }
 
+// MessageHelper.Unpack(Message message) - RVA 0x2A0830
+// prologue: push ebp(1) mov ebp,esp(2) cmp(7) = 10 bytes
+bool InstallStrArgHook(uintptr_t rva, void* trampoline, void** stolenOut, size_t stolenLen, const char* name);
+void* messageHelperUnpackStolen = nullptr;
+bool messageHelperUnpackHookApplied = false;
+void LogMessageHelperUnpack(void* messageStart) {
+    // messageStart = Message struct start (pushad + [esp+36])
+    uintptr_t mStart = reinterpret_cast<uintptr_t>(messageStart);
+    // Message layout: Time(0) Token(4) Payload(8) ErrCode(0xC) ErrMsg(0x10) Handle(0x14) Method(0x18) Seq(0x1C) IsResponse(0x20)
+    uintptr_t methodPtr = 0;
+    std::string methodStr = "null";
+    uintptr_t payloadArr = 0;
+    int payloadLen = 0;
+    int isResp = 0;
+    if (mStart) {
+        methodPtr = ReadPtrSafe(mStart + 0x18);
+        if (methodPtr) methodStr = ReadIl2CppString(reinterpret_cast<void*>(methodPtr));
+        payloadArr = ReadPtrSafe(mStart + 0x8);
+        if (payloadArr) payloadLen = static_cast<int>(ReadPtrSafe(payloadArr + 0xC));
+        isResp = static_cast<int>(ReadPtrSafe(mStart + 0x20));
+    }
+    Log("MessageHelper.Unpack msg=" + std::to_string(mStart) +
+        " method=" + methodStr +
+        " payloadLen=" + std::to_string(payloadLen) +
+        " isResponse=" + std::to_string(isResp));
+    // Save the raw protobuf payload bytes of battle start responses to a dedicated file so
+    // we can diff wire bytes against the decoded object without log truncation.
+    if (methodStr == "copy.StartBase" && payloadArr && payloadLen > 0) {
+        const uintptr_t items = ReadPtrSafe(payloadArr + 0x8);   // byte[] _items
+        const auto base = reinterpret_cast<unsigned char*>(items);
+        if (base) {
+            auto path = logPath.parent_path() / L"startbase_wire.bin";
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            out.write(reinterpret_cast<const char*>(base), payloadLen);
+            out.close();
+            Log("startbase wire saved len=" + std::to_string(payloadLen));
+        }
+    }
+}
+__declspec(naked) void MessageHelperUnpackTrampoline() {
+    __asm {
+        // 入口: [esp]=retaddr, [esp+4]=Message 起始（或 Message*）
+        mov eax, dword ptr [esp + 4]
+        pushad
+        push eax
+        call LogMessageHelperUnpack
+        add esp, 4
+        popad
+        jmp dword ptr [messageHelperUnpackStolen]
+    }
+}
+void TryApplyMessageHelperUnpackHook() {
+    if (messageHelperUnpackHookApplied) return;
+    messageHelperUnpackHookApplied = true;
+    InstallStrArgHook(0x2A0830, &MessageHelperUnpackTrampoline, &messageHelperUnpackStolen, 10, "MessageHelper.Unpack");
+}
+
+// CSharpToLuaFunc.GetQucikConditions(copyid, safelv) - RVA 0x33D8D0
+// prologue: push ebp(1) mov ebp,esp(2) push ecx(1) cmp(7) = 11 bytes
+void* getQucikConditionsStolen = nullptr;
+bool getQucikConditionsHookApplied = false;
+void LogGetQucikConditions(void* copyid, int safelv) {
+    const auto s = copyid ? ReadIl2CppString(copyid) : "null";
+    Log("GetQucikConditions copyid=" + s + " safelv=" + std::to_string(safelv));
+}
+__declspec(naked) void GetQucikConditionsTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]   // copyid (string)
+        mov ecx, dword ptr [esp + 40]   // safelv (int)
+        push ecx
+        push eax
+        call LogGetQucikConditions
+        add esp, 8
+        popad
+        jmp dword ptr [getQucikConditionsStolen]
+    }
+}
+void TryApplyGetQucikConditionsHook() {
+    if (getQucikConditionsHookApplied) return;
+    getQucikConditionsHookApplied = true;
+    InstallStrArgHook(0x33D8D0, &GetQucikConditionsTrampoline, &getQucikConditionsStolen, 11, "GetQucikConditions");
+}
+
+// PVEStartData..ctor(TStartBaseRet ret) - RVA 0x58E780, prologue 24 bytes (SEH)
+void* pveStartDataCtorStolen = nullptr;
+bool pveStartDataCtorHookApplied = false;
+void DumpStartBaseDecoded(uintptr_t r);
+void LogPVEStartDataCtor(void* self, void* ret) {
+    const auto s = reinterpret_cast<uintptr_t>(self);
+    const auto r = reinterpret_cast<uintptr_t>(ret);
+    // 读取 TStartBaseRet 字段: BattlePlayer(0x8) RandomSeed(0xC) Rid(0x10) CopyId(0x18)
+    const auto battlePlayer = r ? ReadPtrSafe(r + 0x8) : 0;
+    const auto randomSeed = r ? static_cast<int>(ReadPtrSafe(r + 0xC)) : 0;
+    const auto rid = r ? static_cast<int>(ReadPtrSafe(r + 0x10)) : 0;
+    int bpListLen = 0;
+    uintptr_t fleetInfo = 0;
+    int shipsLen = 0;
+    int heroListLen = 0;
+    uintptr_t firstBp = 0;
+    if (battlePlayer) {
+        // TBattlePlayerList: BattlePlayerList(List) 在 +0x8
+        const auto bpList = ReadPtrSafe(battlePlayer + 0x8);
+        if (bpList) {
+            bpListLen = static_cast<int>(ReadPtrSafe(bpList + 0xC));
+            if (bpListLen > 0) {
+                // List 元素从 +0x10 开始
+                firstBp = ReadPtrSafe(bpList + 0x10);
+                if (firstBp) {
+                    // TBattlePlayer.FleetInfo at +0x28
+                    fleetInfo = ReadPtrSafe(firstBp + 0x28);
+                    if (fleetInfo) {
+                        // TBattleFleet.Ships(List) at +0x14
+                        const auto ships = ReadPtrSafe(fleetInfo + 0x14);
+                        if (ships) shipsLen = static_cast<int>(ReadPtrSafe(ships + 0xC));
+                        // TBattleFleet.HeroList at +0x24
+                        const auto heroList = ReadPtrSafe(fleetInfo + 0x24);
+                        if (heroList) heroListLen = static_cast<int>(ReadPtrSafe(heroList + 0xC));
+                    }
+                }
+            }
+        }
+    }
+    Log("PVEStartData..ctor self=" + std::to_string(s) +
+        " ret=" + std::to_string(r) +
+        " BattlePlayer=" + std::to_string(battlePlayer) + " bpLen=" + std::to_string(bpListLen) +
+        " FleetInfo=" + std::to_string(fleetInfo) +
+        " shipsLen=" + std::to_string(shipsLen) +
+        " heroListLen=" + std::to_string(heroListLen) +
+        " RandomSeed=" + std::to_string(randomSeed) +
+        " Rid=" + std::to_string(rid));
+    DumpStartBaseDecoded(r);
+}
+__declspec(naked) void PVEStartDataCtorTrampoline() {
+    __asm {
+        sub esp, 32
+        movups xmmword ptr [esp], xmm0
+        movups xmmword ptr [esp + 16], xmm1
+        pushad
+        mov eax, dword ptr [esp + 68]   // self
+        mov ecx, dword ptr [esp + 72]   // ret
+        push ecx
+        push eax
+        call LogPVEStartDataCtor
+        add esp, 8
+        popad
+        movups xmm0, xmmword ptr [esp]
+        movups xmm1, xmmword ptr [esp + 16]
+        add esp, 32
+        jmp dword ptr [pveStartDataCtorStolen]
+    }
+}
+void TryApplyPVEStartDataCtorHook() {
+    if (pveStartDataCtorHookApplied) return;
+    pveStartDataCtorHookApplied = true;
+    InstallStrArgHook(0x58E780, &PVEStartDataCtorTrampoline, &pveStartDataCtorStolen, 24, "PVEStartData..ctor");
+}
+
+// Dump the fully-deserialized TStartBaseRet object to startbase_decoded.txt (readable),
+// alongside the raw wire bytes saved by the Unpack hook. Fields per dump.cs TypeDefIndex 8980.
+void DumpStartBaseDecoded(uintptr_t r) {
+    if (!r) return;
+    auto path = logPath.parent_path() / L"startbase_decoded.txt";
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) return;
+    char tmp[512]{};
+    auto line = [&](const std::string& s) { out << s << '\n'; };
+    auto il = [](uintptr_t p) -> std::string { return p ? std::to_string(p) : "null"; };
+    auto readInt = [](uintptr_t p, int off) { return static_cast<int>(ReadPtrSafe(p + off)); };
+    auto readStr = [](uintptr_t p, int off) -> std::string {
+        auto s = ReadPtrSafe(p + off);
+        return s ? ReadIl2CppString(reinterpret_cast<void*>(s)) : "<null>";
+    };
+    auto readListLen = [](uintptr_t p, int off) {
+        auto l = ReadPtrSafe(p + off);
+        return l ? static_cast<int>(ReadPtrSafe(l + 0xC)) : -1;
+    };
+    auto readListElem = [](uintptr_t p, int off, int idx) -> uintptr_t {
+        auto l = ReadPtrSafe(p + off);          // List object
+        if (!l) return 0;
+        auto arr = ReadPtrSafe(l + 0x8);        // _items (array)
+        if (!arr) return 0;
+        auto size = static_cast<int>(ReadPtrSafe(l + 0xC));
+        if (idx >= size) return 0;
+        return ReadPtrSafe(arr + 0x10 + idx * 4);  // array element refs start at +0x10
+    };
+
+    line("=== TStartBaseRet obj=" + il(r) + " ===");
+    line("BattlePlayer(0x8)=" + il(ReadPtrSafe(r + 0x8)));
+    line("RandomSeed(0xC)=" + std::to_string(readInt(r, 0xC)));
+    line("Rid(0x10)=" + std::to_string(readInt(r, 0x10)));
+    line("arrRes(0x14) len=" + std::to_string(readListLen(r, 0x14)));
+    line("EnemyFleet(0x18) len=" + std::to_string(readListLen(r, 0x18)));
+    line("CopyId(0x1C)=" + std::to_string(readInt(r, 0x1C)));
+    line("CopyType(0x20)=" + std::to_string(readInt(r, 0x20)));
+    line("CopyPass(0x24)=" + std::to_string(readInt(r, 0x24)));
+    line("BossProgress(0x28)=" + std::to_string(readInt(r, 0x28)));
+    line("IsRunningFight(0x2C)=" + std::to_string(readInt(r, 0x2C)));
+    line("ShipEquipGridInfo(0x30) len=" + std::to_string(readListLen(r, 0x30)));
+    line("RandomFactors(0x34) len=" + std::to_string(readListLen(r, 0x34)));
+    line("SafeLv(0x38)=" + std::to_string(readInt(r, 0x38)));
+    line("Verify(0x3C)=" + il(ReadPtrSafe(r + 0x3C)));
+    line("ExtraBattlePlayerList(0x40) len=" + std::to_string(readListLen(r, 0x40)));
+    line("Token(0x44)=" + readStr(r, 0x44));
+    line("SkipVcr(0x48) len=" + std::to_string(readListLen(r, 0x48)));
+    line("BattleMode(0x4C)=" + std::to_string(readInt(r, 0x4C)));
+    line("IsFinal(0x50)=" + std::to_string(readInt(r, 0x50)));
+    line("AnimMode(0x54)=" + std::to_string(readInt(r, 0x54)));
+    line("WeatherGroupId(0x58)=" + std::to_string(readInt(r, 0x58)));
+    line("CopyMission(0x5C) len=" + std::to_string(readListLen(r, 0x5C)));
+    line("EnemyFleets(0x60) len=" + std::to_string(readListLen(r, 0x60)));
+    line("ConfigData(0x64) len=" + std::to_string(readListLen(r, 0x64)));
+    line("MatchType(0x68)=" + std::to_string(readInt(r, 0x68)));
+
+    // BattlePlayer -> TBattlePlayerList.BattlePlayerList(List at +0x8)
+    auto bp = ReadPtrSafe(r + 0x8);
+    auto bpList = bp ? ReadPtrSafe(bp + 0x8) : 0;
+    auto bpLen = bpList ? static_cast<int>(ReadPtrSafe(bpList + 0xC)) : 0;
+    line("  BattlePlayerList len=" + std::to_string(bpLen));
+    for (int i = 0; i < bpLen && i < 4; ++i) {
+        auto p = readListElem(bp, 0x8, i);
+        if (!p) continue;
+        line("    Player[" + std::to_string(i) + "] Pid=" + std::to_string(readInt(p, 0x8)) +
+             " Uid=" + std::to_string(ReadPtrSafe(p + 0x10)) +
+             " Uname=" + readStr(p, 0x18) +
+             " Level=" + std::to_string(readInt(p, 0x1C)) +
+             " PlayerCamp=" + std::to_string(readInt(p, 0x20)) +
+             " Index=" + std::to_string(readInt(p, 0x24)) +
+             " FleetInfo=" + il(ReadPtrSafe(p + 0x28)) +
+             " OpenFunc len=" + std::to_string(readListLen(p, 0x2C)) +
+             " BattleMode=" + std::to_string(readInt(p, 0x30)));
+        auto fleet = ReadPtrSafe(p + 0x28);
+        if (fleet) {
+            line("      Fleet: FleetId=" + std::to_string(readInt(fleet, 0x8)) +
+                 " FormationId=" + std::to_string(readInt(fleet, 0xC)) +
+                 " Index=" + std::to_string(readInt(fleet, 0x10)) +
+                 " Ships len=" + std::to_string(readListLen(fleet, 0x14)) +
+                 " StrategyId=" + std::to_string(readInt(fleet, 0x18)) +
+                 " KillTimes=" + std::to_string(readInt(fleet, 0x20)) +
+                 " HeroList len=" + std::to_string(readListLen(fleet, 0x24)) +
+                 " TacticType=" + std::to_string(readInt(fleet, 0x28)));
+            // dump ship ids/templates
+            auto n = readListLen(fleet, 0x14);
+            for (int j = 0; j < n && j < 8; ++j) {
+                auto sh = readListElem(fleet, 0x14, j);
+                if (!sh) continue;
+                line("        Ship[" + std::to_string(j) + "] HeroId=" + std::to_string(readInt(sh, 0x8)) +
+                     " TemplateId=" + std::to_string(readInt(sh, 0xC)) +
+                     " Level=" + std::to_string(readInt(sh, 0x10)) +
+                     " Index=" + std::to_string(readInt(sh, 0x14)) +
+                     " Attr len=" + std::to_string(readListLen(sh, 0x18)) +
+                     " CurHp=" + std::to_string(ReadPtrSafe(sh + 0x20)) +
+                     " PSkill len=" + std::to_string(readListLen(sh, 0x2C)) +
+                     " EquipGridNum=" + std::to_string(readInt(sh, 0x38)) +
+                     " Fashioning=" + std::to_string(readInt(sh, 0x3C)));
+            }
+        }
+    }
+
+    // EnemyFleets (0x60): List<TBattleEnemyFleet>
+    auto efs = ReadPtrSafe(r + 0x60);
+    auto efn = efs ? static_cast<int>(ReadPtrSafe(efs + 0xC)) : 0;
+    line("  EnemyFleets len=" + std::to_string(efn));
+    for (int i = 0; i < efn && i < 4; ++i) {
+        auto ef = readListElem(r, 0x60, i);
+        if (!ef) continue;
+        line("    EF[" + std::to_string(i) + "] FleetId=" + std::to_string(readInt(ef, 0x8)) +
+             " State=" + std::to_string(readInt(ef, 0xC)) +
+             " Ships len=" + std::to_string(readListLen(ef, 0x10)));
+        auto esn = readListLen(ef, 0x10);
+        for (int j = 0; j < esn && j < 6; ++j) {
+            auto sh = readListElem(ef, 0x10, j);
+            if (!sh) continue;
+            line("      Ship[" + std::to_string(j) + "] ShipId=" + std::to_string(readInt(sh, 0x8)) +
+                 " shipInfoId=" + std::to_string(readInt(sh, 0x10)) +
+                 " lv=" + std::to_string(readInt(sh, 0x18)));
+        }
+    }
+    out.close();
+    Log("startbase decoded written");
+}
+
+// IL2CPP throw exception - RVA 0x11633DF0
+// prologue: push ebp(1) mov ebp,esp(2) sub esp,8(3) = 6 bytes
+void* throwExceptionStolen = nullptr;
+bool throwExceptionHookApplied = false;
+void LogThrowException(void* arg0) {
+    // arg0 = 异常参数（可能是类型 index 或对象）
+    Log("IL2CPP ThrowException arg0=" + std::to_string(reinterpret_cast<uintptr_t>(arg0)));
+}
+__declspec(naked) void ThrowExceptionTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogThrowException
+        add esp, 4
+        popad
+        jmp dword ptr [throwExceptionStolen]
+    }
+}
+void TryApplyThrowExceptionHook() {
+    if (throwExceptionHookApplied) return;
+    throwExceptionHookApplied = true;
+    InstallStrArgHook(0x11633DF0, &ThrowExceptionTrampoline, &throwExceptionStolen, 6, "IL2CPP.ThrowException");
+}
+
 __declspec(naked) void StageGotoTrampoline() {
     __asm {
         pushad
         mov eax, dword ptr [esp + 36]
         mov ecx, dword ptr [esp + 40]
+        mov edx, dword ptr [esp + 44]
+        push edx
         push ecx
         push eax
         call LogStageGoto
-        add esp, 8
+        add esp, 12
         popad
         jmp dword ptr [stageGotoStolen]
     }
@@ -1339,6 +2148,50 @@ __declspec(naked) void GetAllTrampoline() {
         add esp, 8
         popad
         jmp dword ptr [getAllStolen]
+    }
+}
+
+__declspec(naked) void GetJsonDataGroupTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        mov ecx, dword ptr [esp + 40]
+        mov edx, dword ptr [esp + 44]
+        push edx
+        push ecx
+        push eax
+        call LogGetJsonDataGroup
+        add esp, 12
+        popad
+        jmp dword ptr [getJsonDataGroupStolen]
+    }
+}
+
+__declspec(naked) void GetJsonStrByBytesTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogGetJsonStrByBytes
+        add esp, 4
+        popad
+        jmp dword ptr [getJsonStrByBytesStolen]
+    }
+}
+
+__declspec(naked) void AssetLoadAsyncTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        mov ecx, dword ptr [esp + 40]
+        mov edx, dword ptr [esp + 44]
+        push edx
+        push ecx
+        push eax
+        call LogAssetLoadAsync
+        add esp, 12
+        popad
+        jmp dword ptr [assetLoadAsyncStolen]
     }
 }
 
@@ -1629,6 +2482,1140 @@ bool InstallXluaExportHook(const char* exportName, void* trampoline, void** stol
     return true;
 }
 
+void* stageGetStartDataStolen = nullptr;
+bool stageGetStartDataHookApplied = false;
+
+// StageSimpleBattle._getStartData(FSMParam enterParam) - RVA 0x1EFC00
+// NOTE: prologue is push ebp(1)+mov ebp,esp(2)+sub esp,0x28(3)+cmp byte[0x11D453A1],0(7).
+// stolenLen must be 13 (covers the full cmp) - 11 cuts through it and crashes.
+void LogStageGetStartData(void* self, void* enterParam) {
+    const auto ep = reinterpret_cast<uintptr_t>(enterParam);
+    // FSMParam.param at +0xC (boxed Message)
+    const auto boxedMsg = ReadPtrSafe(ep + 0xC);
+    // boxed Message: value fields start at +0x8, Method struct offset 0x18 => boxed+0x20
+    const auto methodStr = boxedMsg ? ReadIl2CppString(reinterpret_cast<void*>(ReadPtrSafe(boxedMsg + 0x20))) : "null";
+    // Payload (byte[]) struct offset 0x8 => boxed+0x10; Il2CppArray: klass(0) monitor(4) bounds(8) max_length(0xC)
+    uintptr_t payloadArr = 0;
+    uintptr_t payloadLen = 0;
+    payloadArr = boxedMsg ? ReadPtrSafe(boxedMsg + 0x10) : 0;
+    if (payloadArr) payloadLen = ReadPtrSafe(payloadArr + 0xC);
+    Log("StageSimpleBattle._getStartData self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " enterParam=" + std::to_string(ep) +
+        " boxedMsg=" + std::to_string(boxedMsg) +
+        " method=" + methodStr +
+        " payloadArr=" + std::to_string(payloadArr) +
+        " payloadLen=" + std::to_string(payloadLen));
+    // Read MessageHelper.pbMap keys
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (ga) {
+        const auto base = reinterpret_cast<uintptr_t>(ga);
+        const uintptr_t mhTypeInfo = ReadPtrSafe(base + 0x1D2E0C0);
+        uintptr_t mhStatic = 0;
+        if (mhTypeInfo) mhStatic = ReadPtrSafe(mhTypeInfo + 0x5C);
+        uintptr_t pbMap = 0;
+        if (mhStatic) pbMap = ReadPtrSafe(mhStatic);
+        // Mono Dictionary<string,Type> IL2CPP object: fields start at +0x8
+        // table(+0x8) linkSlots(+0xC) keySlots(+0x10) valueSlots(+0x14) touchedSlots(+0x18)
+        // emptySlot(+0x1C) count(+0x20) threshold(+0x24) hcp(+0x28)
+        const auto keySlots = pbMap ? ReadPtrSafe(pbMap + 0x10) : 0;
+        const auto count = pbMap ? static_cast<int>(ReadPtrSafe(pbMap + 0x20)) : 0;
+        Log("  pbMap=" + std::to_string(pbMap) + " count=" + std::to_string(count) +
+            " keySlots=" + std::to_string(keySlots));
+        // keySlots is string[] (Il2CppArray): elements start at +0xC
+        if (keySlots && count > 0) {
+            const auto elemBase = keySlots + 0xC;
+            for (int i = 0; i < std::min(count, 12); i++) {
+                const auto key = ReadPtrSafe(elemBase + (uintptr_t)i * 4);
+                const auto keyStr = key ? ReadIl2CppString(reinterpret_cast<void*>(key)) : "null";
+                Log("    keySlots[" + std::to_string(i) + "]=" + keyStr);
+            }
+        }
+    }
+}
+
+__declspec(naked) void StageGetStartDataTrampoline() {
+    __asm {
+        // 保存 XMM0/XMM1，避免 Log 破坏 _getStartData 的浮点状态
+        // 入口: [esp]=retaddr, [esp+4]=self, [esp+8]=enterParam
+        sub esp, 32
+        movups xmmword ptr [esp], xmm0
+        movups xmmword ptr [esp + 16], xmm1
+        pushad
+        // pushad 32 + xmm区 32 = 64; [esp+64]=retaddr, [esp+68]=self, [esp+72]=enterParam
+        mov eax, dword ptr [esp + 68]
+        mov ecx, dword ptr [esp + 72]
+        push ecx
+        push eax
+        call LogStageGetStartData
+        add esp, 8
+        popad
+        movups xmm0, xmmword ptr [esp]
+        movups xmm1, xmmword ptr [esp + 16]
+        add esp, 32
+        jmp dword ptr [stageGetStartDataStolen]
+    }
+}
+
+void TryApplyStageGetStartDataHook() {
+    if (stageGetStartDataHookApplied) return;
+    stageGetStartDataHookApplied = true;
+    InstallStrArgHook(0x1EFC00, &StageGetStartDataTrampoline, &stageGetStartDataStolen, 13, "StageSimpleBattle._getStartData");
+}
+
+// ---- 战斗初始化链追踪 ----
+void DumpBattleStartData(uintptr_t d);
+// initBattle(self, enterParam) - RVA 0x1F0150, prologue: push ebp(1) mov ebp,esp(2) push esi(1) mov esi,[ebp+8](3) = 7 bytes
+void* initBattleStolen = nullptr;
+bool initBattleHookApplied = false;
+void LogInitBattle(void* self, void* enterParam) {
+    const auto s = reinterpret_cast<uintptr_t>(self);
+    // StageSimpleBattle 字段: 0x18=changeState, 0x24=mBattleFrame, 0x2C=mStartData, 0x30=mSingleFrame
+    const auto changeState = ReadPtrSafe(s + 0x18);
+    const auto mBattleFrame = ReadPtrSafe(s + 0x24);
+    const auto mStartData = ReadPtrSafe(s + 0x2C);
+    const auto mSingleFrame = ReadPtrSafe(s + 0x30);
+    Log("StageSimpleBattle.initBattle self=" + std::to_string(s) +
+        " enterParam=" + std::to_string(reinterpret_cast<uintptr_t>(enterParam)) +
+        " changeState=" + std::to_string(changeState) +
+        " mBattleFrame=" + std::to_string(mBattleFrame) +
+        " mStartData=" + std::to_string(mStartData) +
+        " mSingleFrame=" + std::to_string(mSingleFrame));
+}
+static void* gStartDataResult = nullptr;
+static int gStartDataException = 0;
+static uintptr_t gStartDataExObj = 0;
+static uintptr_t gStartDataExAddr = 0;
+static DWORD gExParamCount = 0;
+static uintptr_t gExParams[4] = {0,0,0,0};
+
+typedef void* (__cdecl* GetStartDataFn)(void*, void*, void*);
+
+static int StartDataFilter(void* exceptInfoPtr) {
+    gStartDataExObj = 0;
+    gStartDataExAddr = 0;
+    gExParamCount = 0;
+    auto* rec = reinterpret_cast<EXCEPTION_RECORD*>(exceptInfoPtr);
+    if (rec) {
+        gStartDataExAddr = (uintptr_t)rec->ExceptionAddress;
+        gExParamCount = rec->NumberParameters;
+        for (DWORD i = 0; i < rec->NumberParameters && i < 4; i++)
+            gExParams[i] = (uintptr_t)rec->ExceptionInformation[i];
+        // MSVC C++ exception ABI (code 0xE0434352): [0]=0x19930520 magic,
+        // [1]=thrown object = Il2CppExceptionWrapper*, [2]=ThrowInfo*.
+        if (rec->NumberParameters > 1) gStartDataExObj = (uintptr_t)rec->ExceptionInformation[1];
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+void* CallStartDataSafe(GetStartDataFn fn, void* self, void* enterParam) {
+    __try {
+        return fn(self, enterParam, 0);
+    } __except (StartDataFilter(GetExceptionInformation()->ExceptionRecord)) {
+        gStartDataException = GetExceptionCode();
+        return nullptr;
+    }
+}
+
+typedef int (__cdecl* IsInGuideFn)();
+
+int CallIsInGuideSafe(IsInGuideFn fn) {
+    __try {
+        return fn();
+    } __except (StartDataFilter(GetExceptionInformation()->ExceptionRecord)) {
+        gStartDataException = GetExceptionCode();
+        return 0;
+    }
+}
+
+std::string ReadAsciiCStr(uintptr_t addr) {
+    if (!addr) return "<null>";
+    MEMORY_BASIC_INFORMATION mem{};
+    if (!VirtualQuery(reinterpret_cast<void*>(addr), &mem, sizeof(mem)) ||
+        mem.State != MEM_COMMIT || (mem.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return "<unreadable>";
+    const auto regionEnd = reinterpret_cast<uintptr_t>(mem.BaseAddress) + mem.RegionSize;
+    char buf[160]{};
+    for (int i = 0; i < 159; i++) {
+        if (addr + static_cast<size_t>(i) + 1 > regionEnd) break;
+        const unsigned char c = *reinterpret_cast<unsigned char*>(addr + i);
+        if (c == 0) break;
+        buf[i] = (c >= 0x20 && c < 0x7f) ? static_cast<char>(c) : '?';
+    }
+    return buf;
+}
+
+// Read a null-terminated UTF-16 string in-process (CRT _invalid_parameter args are wchar_t*).
+std::string ReadWideCStr(uintptr_t addr) {
+    if (!addr) return {};
+    MEMORY_BASIC_INFORMATION mem{};
+    if (!VirtualQuery(reinterpret_cast<void*>(addr), &mem, sizeof(mem)) ||
+        mem.State != MEM_COMMIT || (mem.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return {};
+    wchar_t buf[200]{};
+    for (int i = 0; i < 199; i++) {
+        const wchar_t c = *reinterpret_cast<const wchar_t*>(addr + i * 2);
+        if (c == 0) break;
+        buf[i] = (c >= 0x20 && c < 0x7f) ? c : L'?';
+    }
+    char out[400]{};
+    WideCharToMultiByte(CP_UTF8, 0, buf, -1, out, sizeof(out), nullptr, nullptr);
+    return out;
+}
+
+static volatile bool gInBattleStartData = false;
+static volatile bool gBattleStarted = false;
+static volatile bool gInCxxThrowHook = false;
+static int gCxxThrowCount = 0;
+
+void* LogCallGetStartData(void* self, void* enterParam) {
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) { Log("initBattle GetModuleHandle failed"); return nullptr; }
+    // 先单独测试 IsInGuide (0x33DEA0)，确认异常是否在它里面
+    gStartDataException = 0;
+    gStartDataExObj = 0;
+    gExParamCount = 0;
+    typedef int (__cdecl* IsInGuideFn)();
+    auto isInGuide = reinterpret_cast<IsInGuideFn>(reinterpret_cast<uintptr_t>(ga) + 0x33DEA0);
+    int guideResult = CallIsInGuideSafe(isInGuide);
+    if (gStartDataException) {
+        Log("IsInGuide EXCEPTION code=" + std::to_string(gStartDataException));
+        return nullptr;
+    }
+    Log("IsInGuide result=" + std::to_string(guideResult));
+
+    auto fn = reinterpret_cast<GetStartDataFn>(reinterpret_cast<uintptr_t>(ga) + 0x1EFC00);
+    gStartDataResult = nullptr;
+    gStartDataException = 0;
+    gStartDataExObj = 0;
+    gExParamCount = 0;
+    gInBattleStartData = true;
+    gStartDataResult = CallStartDataSafe(fn, self, enterParam);
+    gInBattleStartData = false;
+    if (gStartDataException) {
+        uintptr_t wrapper = gStartDataExObj;
+        // At the SEH filter the wrapper may be clobbered by _CxxThrowException;
+        // try several candidate offsets to find the Il2CppException*.
+        uintptr_t ex = 0;
+        if (wrapper) {
+            for (int off = 0; off <= 0x10; off += 4) {
+                uintptr_t cand = ReadPtrSafe(wrapper + off);
+                if (!cand) continue;
+                uintptr_t k = ReadPtrSafe(cand + 0x0);
+                uintptr_t nm = ReadPtrSafe(k + 0x8);
+                if (k && nm) { ex = cand; break; }
+            }
+        }
+        if (ex) {
+            uintptr_t klass = ReadPtrSafe(ex + 0x0);
+            uintptr_t msgPtr = ReadPtrSafe(ex + 0x8);
+            uintptr_t stPtr = ReadPtrSafe(ex + 0xC);
+            uintptr_t traceIps = ReadPtrSafe(ex + 0x18);
+            std::string className = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0x8)) : "?";
+            std::string nameSpace = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0xC)) : "?";
+            Log("initBattle _getStartData EXCEPTION code=" + std::to_string(gStartDataException) +
+                " wrapper=" + std::to_string(wrapper) +
+                " ex=" + std::to_string(ex) +
+                " class=" + nameSpace + "." + className +
+                " msg=" + (msgPtr ? ReadIl2CppString(reinterpret_cast<void*>(msgPtr)) : "<null>") +
+                " st=" + (stPtr ? ReadIl2CppString(reinterpret_cast<void*>(stPtr)) : "<null>") +
+                " traceIps=" + std::to_string(traceIps) +
+                " p0=" + std::to_string(gExParams[0]) +
+                " p1=" + std::to_string(gExParams[1]) +
+                " p2=" + std::to_string(gExParams[2]));
+        } else {
+            Log("initBattle _getStartData EXCEPTION code=" + std::to_string(gStartDataException) +
+                " wrapper=" + std::to_string(wrapper) +
+                " p0=" + std::to_string(gExParams[0]) +
+                " p1=" + std::to_string(gExParams[1]) +
+                " p2=" + std::to_string(gExParams[2]));
+        }
+    } else {
+        Log("initBattle _getStartData result=" + std::to_string(reinterpret_cast<uintptr_t>(gStartDataResult)));
+        if (gStartDataResult) {
+            gBattleStarted = true;
+            DumpBattleStartData(reinterpret_cast<uintptr_t>(gStartDataResult));
+        }
+    }
+    return gStartDataResult;
+}
+
+// Dump the constructed BattleStartData object fields to startdata_decoded.txt. This reveals
+// how the client interpreted our TStartBaseRet: players/enemys/skipVcrs/battleMode etc.
+void DumpBattleStartData(uintptr_t d) {
+    if (!d) return;
+    auto path = logPath.parent_path() / L"startdata_decoded.txt";
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) return;
+    char tmp[256]{};
+    auto w = [&](const std::string& s) { out << s << '\n'; };
+    auto p = [&](const char* name, int off) {
+        sprintf_s(tmp, "%s(0x%X)=0x%X", name, off, static_cast<unsigned>(ReadPtrSafe(d + off)));
+        w(tmp);
+    };
+    w("=== BattleStartData obj=" + std::to_string(d) + " ===");
+    p("copyDisplayId", 0x8);
+    p("copyDictId", 0xC);
+    p("players", 0x38);
+    p("enemys", 0x3C);
+    p("copyRess", 0x70);
+    p("skipVcrs", 0x88);
+    p("safeLv", 0x8C);
+    p("functionRet", 0x90);
+    p("enemyFleetId", 0x94);
+    p("battleMode", 0x98);
+    p("battleAnimMode", 0x9C);
+    p("weatherGroupId", 0xA0);
+    p("ConfigDatas", 0xA4);
+    p("copyMissionId", 0xA8);
+    // players list
+    auto pl = ReadPtrSafe(d + 0x38);
+    if (pl) {
+        auto arr = ReadPtrSafe(pl + 0x8);
+        auto n = static_cast<int>(ReadPtrSafe(pl + 0xC));
+        sprintf_s(tmp, "  players len=%d", n); w(tmp);
+        for (int i = 0; i < n && i < 4; ++i) {
+            auto e = arr ? ReadPtrSafe(arr + 0x10 + i * 4) : 0;
+            sprintf_s(tmp, "    player[%d]=0x%X", i, static_cast<unsigned>(e)); w(tmp);
+            if (e) {
+                auto fl = ReadPtrSafe(e + 0x28);
+                sprintf_s(tmp, "      fleet=0x%X ships=", static_cast<unsigned>(fl)); w(tmp);
+                if (fl) {
+                    auto s = ReadPtrSafe(fl + 0x14);
+                    auto sn = s ? static_cast<int>(ReadPtrSafe(s + 0xC)) : 0;
+                    auto sa = s ? ReadPtrSafe(s + 0x8) : 0;
+                    sprintf_s(tmp, "      ships len=%d ids=", sn); w(tmp);
+                    for (int j = 0; j < sn && j < 6; ++j) {
+                        auto sh = sa ? ReadPtrSafe(sa + 0x10 + j * 4) : 0;
+                        if (sh) sprintf_s(tmp, "        ship[%d] hero=%d tmpl=%d", j,
+                            static_cast<int>(ReadPtrSafe(sh + 0x8)),
+                            static_cast<int>(ReadPtrSafe(sh + 0xC))), w(tmp);
+                    }
+                }
+            }
+        }
+    }
+    // enemys list
+    auto el = ReadPtrSafe(d + 0x3C);
+    if (el) {
+        auto arr = ReadPtrSafe(el + 0x8);
+        auto n = static_cast<int>(ReadPtrSafe(el + 0xC));
+        sprintf_s(tmp, "  enemys len=%d", n); w(tmp);
+        for (int i = 0; i < n && i < 4; ++i) {
+            auto e = arr ? ReadPtrSafe(arr + 0x10 + i * 4) : 0;
+            sprintf_s(tmp, "    enemy[%d]=0x%X", i, static_cast<unsigned>(e)); w(tmp);
+            if (e) {
+                sprintf_s(tmp, "      dictID=%d ships=%X attached=%X", 
+                    static_cast<int>(ReadPtrSafe(e + 0x8)),
+                    static_cast<unsigned>(ReadPtrSafe(e + 0x10)),
+                    static_cast<unsigned>(ReadPtrSafe(e + 0x14))); w(tmp);
+            }
+        }
+    }
+    // skipVcrs
+    auto sv = ReadPtrSafe(d + 0x88);
+    if (sv) {
+        auto arr = ReadPtrSafe(sv + 0x8);
+        auto n = static_cast<int>(ReadPtrSafe(sv + 0xC));
+        sprintf_s(tmp, "  skipVcrs len=%d", n); w(tmp);
+    }
+    // enemyFleetId int[]
+    auto ef = ReadPtrSafe(d + 0x94);
+    if (ef) {
+        auto arr = ReadPtrSafe(ef + 0x8);
+        auto n = static_cast<int>(ReadPtrSafe(ef + 0xC));
+        sprintf_s(tmp, "  enemyFleetId len=%d values=", n); w(tmp);
+        for (int j = 0; j < n && j < 6; ++j) {
+            int v = arr ? static_cast<int>(ReadPtrSafe(arr + 0x10 + j * 4)) : 0;
+            sprintf_s(tmp, "    [%d]=%d", j, v); w(tmp);
+        }
+    }
+    out.close();
+    Log("startdata decoded written");
+}
+
+// ---- _CxxThrowException (GameAssembly static CRT, RVA 0x169F9EF) ----
+// Prologue: push ebp(1) mov ebp,esp(2) mov ecx,[ebp+0xC](3) = 6 bytes.
+// Entry: [esp]=retaddr, [esp+4]=pExceptionObject(Il2CppExceptionWrapper*),
+//        [esp+8]=pThrowInfo. At entry the wrapper is intact: ex = *(wrapper).
+// This is the single funnel for ALL C++ throws from GameAssembly managed code;
+// the thrower's native stack is still intact here (RaiseException runs later).
+void* cxxThrowStolen = nullptr;
+bool cxxThrowHookApplied = false;
+
+void LogCxxThrow(void* exObj, void* throwInfo) {
+    if (gInCxxThrowHook) return;
+    if (!gInBattleStartData) return;
+    if (gCxxThrowCount >= 8) return;
+    gCxxThrowCount++;
+    gInCxxThrowHook = true;
+    uintptr_t ga = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"GameAssembly.dll"));
+    std::string stack;
+    void* frames[16] = {nullptr};
+    const USHORT n = RtlCaptureStackBackTrace(0, 16, frames, nullptr);
+    for (USHORT i = 0; i < n; i++) {
+        uintptr_t fRva = ga ? reinterpret_cast<uintptr_t>(frames[i]) - ga : 0;
+        char tmp[24]{};
+        sprintf_s(tmp, "%llX,", static_cast<unsigned long long>(fRva));
+        stack += tmp;
+    }
+    // wrapper intact here: ex = *(wrapper)
+    uintptr_t ex = exObj ? ReadPtrSafe(reinterpret_cast<uintptr_t>(exObj)) : 0;
+    uintptr_t klass = ex ? ReadPtrSafe(ex + 0x0) : 0;
+    uintptr_t msgPtr = ex ? ReadPtrSafe(ex + 0x8) : 0;
+    uintptr_t stPtr = ex ? ReadPtrSafe(ex + 0xC) : 0;
+    std::string className = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0x8)) : "?";
+    std::string nameSpace = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0xC)) : "?";
+    Log("CxxThrow wrapper=" + std::to_string(reinterpret_cast<uintptr_t>(exObj)) +
+        " ex=" + std::to_string(ex) +
+        " class=" + nameSpace + "." + className +
+        " msg=" + (msgPtr ? ReadIl2CppString(reinterpret_cast<void*>(msgPtr)) : "<null>") +
+        " st=" + (stPtr ? ReadIl2CppString(reinterpret_cast<void*>(stPtr)) : "<null>") +
+        " stack=" + stack);
+    gInCxxThrowHook = false;
+}
+
+__declspec(naked) void CxxThrowTrampoline() {
+    __asm {
+        sub esp, 32
+        movups xmmword ptr [esp], xmm0
+        movups xmmword ptr [esp + 16], xmm1
+        pushad
+        // pushad 32 + xmm 32 = 64: [esp+64]=retaddr, [esp+68]=exObj, [esp+72]=throwInfo
+        mov eax, dword ptr [esp + 68]
+        mov ecx, dword ptr [esp + 72]
+        push ecx
+        push eax
+        call LogCxxThrow
+        add esp, 8
+        popad
+        movups xmm0, xmmword ptr [esp]
+        movups xmm1, xmmword ptr [esp + 16]
+        add esp, 32
+        jmp dword ptr [cxxThrowStolen]
+    }
+}
+void TryApplyCxxThrowHook() {
+    if (cxxThrowHookApplied) return;
+    cxxThrowHookApplied = true;
+    InstallStrArgHook(0x169F9EF, &CxxThrowTrampoline, &cxxThrowStolen, 6, "_CxxThrowException");
+}
+
+// ---- IL2CPP managed raise helper (RVA 0x1633D20) ----
+// Common funnel for ALL managed exception raises (IndexOutOfRange, NRE, ...):
+// NRE: 0x3025CB -> 0x1633DF0 -> 0x1633DD0 -> 0x1633D20.
+// Prologue: push ebp(1) mov ebp,esp(2) push ecx(1) mov eax,[ebp+8](3) = 7 bytes.
+// Entry: [esp]=retaddr, [esp+4]=Il2CppException* (arg0), thrower stack intact.
+void* raiseHelperStolen = nullptr;
+bool raiseHelperHookApplied = false;
+static int gRaiseHelperCount = 0;
+
+void LogRaiseHelper(void* exPtr) {
+    if (!gInBattleStartData) return;
+    if (gRaiseHelperCount >= 12) return;
+    gRaiseHelperCount++;
+    uintptr_t ga = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"GameAssembly.dll"));
+    std::string stack;
+    void* frames[16] = {nullptr};
+    const USHORT n = RtlCaptureStackBackTrace(0, 16, frames, nullptr);
+    for (USHORT i = 0; i < n; i++) {
+        uintptr_t fRva = ga ? reinterpret_cast<uintptr_t>(frames[i]) - ga : 0;
+        char tmp[24]{};
+        sprintf_s(tmp, "%llX,", static_cast<unsigned long long>(fRva));
+        stack += tmp;
+    }
+    const uintptr_t p = reinterpret_cast<uintptr_t>(exPtr);
+    uintptr_t klass = p ? ReadPtrSafe(p + 0x0) : 0;
+    uintptr_t msgPtr = p ? ReadPtrSafe(p + 0x8) : 0;
+    uintptr_t stPtr = p ? ReadPtrSafe(p + 0xC) : 0;
+    std::string className = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0x8)) : "?";
+    std::string nameSpace = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0xC)) : "?";
+    Log("RaiseHelper ex=" + std::to_string(p) +
+        " class=" + nameSpace + "." + className +
+        " msg=" + (msgPtr ? ReadIl2CppString(reinterpret_cast<void*>(msgPtr)) : "<null>") +
+        " st=" + (stPtr ? ReadIl2CppString(reinterpret_cast<void*>(stPtr)) : "<null>") +
+        " stack=" + stack);
+}
+
+__declspec(naked) void RaiseHelperTrampoline() {
+    __asm {
+        sub esp, 32
+        movups xmmword ptr [esp], xmm0
+        movups xmmword ptr [esp + 16], xmm1
+        pushad
+        // pushad 32 + xmm 32 = 64: [esp+68]=arg0 (Il2CppException*)
+        mov eax, dword ptr [esp + 68]
+        push eax
+        call LogRaiseHelper
+        add esp, 4
+        popad
+        movups xmm0, xmmword ptr [esp]
+        movups xmm1, xmmword ptr [esp + 16]
+        add esp, 32
+        jmp dword ptr [raiseHelperStolen]
+    }
+}
+void TryApplyRaiseHelperHook() {
+    if (raiseHelperHookApplied) return;
+    raiseHelperHookApplied = true;
+    InstallStrArgHook(0x1633D20, &RaiseHelperTrampoline, &raiseHelperStolen, 7, "raiseHelper");
+}
+
+// ---- config_copy lookup (RVA 0x95B750) ----
+// PVEStartData..ctor calls it with arg1 = boxed CopyId; if it returns null the
+// ctor raises NRE at 0x58F93B. Log the copyId used for the lookup.
+// Prologue: push ebp(1) mov ebp,esp(2) cmp byte[mem],0(7) = 10 bytes.
+void* configLookupStolen = nullptr;
+bool configLookupHookApplied = false;
+
+void LogConfigLookup(void* boxed, uintptr_t ctorEbp) {
+    if (!gInBattleStartData) return;
+    int val = -1;
+    std::string raw;
+    std::string klassName = "?";
+    if (boxed) {
+        uintptr_t p = reinterpret_cast<uintptr_t>(boxed);
+        uintptr_t k = ReadPtrSafe(p);
+        if (k) {
+            klassName = ReadAsciiCStr(ReadPtrSafe(k + 0x8));
+            val = *reinterpret_cast<int*>(reinterpret_cast<char*>(boxed) + 8);
+        }
+        char tmp[16];
+        for (int i = 0; i < 16; i++) {
+            sprintf_s(tmp, "%02X ", *reinterpret_cast<unsigned char*>(p + i));
+            raw += tmp;
+        }
+    }
+    std::string locals;
+    if (ctorEbp) {
+        char tmp[24];
+        for (int off = -0x40; off <= -0x14; off += 4) {
+            sprintf_s(tmp, " [e%X]=0x%X", -off, static_cast<unsigned>(ReadPtrSafe(ctorEbp + off)));
+            locals += tmp;
+        }
+    }
+    std::string tbl;
+    {
+        uintptr_t ga = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"GameAssembly.dll"));
+        uintptr_t singleton = ga ? ReadPtrSafe(ga + 0x1D2CB64) : 0;
+        uintptr_t mid = singleton ? ReadPtrSafe(singleton + 0x5C) : 0;
+        uintptr_t mgr = mid ? ReadPtrSafe(mid + 0x4) : 0;
+        uintptr_t table = mgr ? ReadPtrSafe(mgr + 0xF4) : 0;
+        uintptr_t dict = table ? ReadPtrSafe(table + 0x8) : 0;
+        char tmp[96];
+        sprintf_s(tmp, " sing=0x%X mgr=0x%X tbl=0x%X dict=0x%X",
+            static_cast<unsigned>(singleton), static_cast<unsigned>(mgr),
+            static_cast<unsigned>(table), static_cast<unsigned>(dict));
+        tbl = tmp;
+        // dict raw (first 0x24 bytes) + count candidates
+        if (dict) {
+            char r[160];
+            int n = 0;
+            n += sprintf_s(r + n, sizeof(r) - n, " dictRaw=");
+            for (int i = 0; i < 0x24; i += 4) {
+                n += sprintf_s(r + n, sizeof(r) - n, "%X ",
+                    static_cast<unsigned>(ReadPtrSafe(dict + i)));
+            }
+            n += sprintf_s(r + n, sizeof(r) - n, " cnt8=%u cnt10=%u cnt20=%u",
+                static_cast<unsigned>(ReadPtrSafe(dict + 0x8)),
+                static_cast<unsigned>(ReadPtrSafe(dict + 0x10)),
+                static_cast<unsigned>(ReadPtrSafe(dict + 0x20)));
+            tbl += r;
+        }
+        // mgr klass name
+        uintptr_t mgrKlass = mgr ? ReadPtrSafe(mgr) : 0;
+        std::string mgrName = mgrKlass ? ReadAsciiCStr(ReadPtrSafe(mgrKlass + 0x8)) : "?";
+        tbl += " mgrClass=" + mgrName;
+        uintptr_t tblKlass = table ? ReadPtrSafe(table) : 0;
+        std::string tblName = tblKlass ? ReadAsciiCStr(ReadPtrSafe(tblKlass + 0x8)) : "?";
+        tbl += " tblClass=" + tblName;
+    }
+    Log("ConfigLookup boxed=" + std::to_string(reinterpret_cast<uintptr_t>(boxed)) +
+        " klass=" + klassName +
+        " val8=" + std::to_string(val) +
+        " raw=" + raw +
+        " ctor" + locals +
+        tbl);
+}
+
+__declspec(naked) void ConfigLookupTrampoline() {
+    __asm {
+        // entry: [esp]=retaddr, [esp+4]=arg0(0), [esp+8]=arg1(boxed), [esp+0xC]=arg2(0)
+        // EBP = ctor frame (0x95b750 does push ebp; mov ebp,esp so EBP currently = caller's frame)
+        mov eax, ebp
+        sub esp, 32
+        movups xmmword ptr [esp], xmm0
+        movups xmmword ptr [esp + 16], xmm1
+        pushad
+        // pushad 32 + xmm 32 = 64: [esp+64]=retaddr, [esp+68]=arg0, [esp+72]=arg1(boxed)
+        // saved ctor EBP (from mov eax,ebp) at [esp+76]? no: pushad pushed 8 regs, eax saved
+        push eax                    // ctor EBP (we saved it in eax)
+        push dword ptr [esp + 4 + 72]   // arg1 boxed
+        call LogConfigLookup
+        add esp, 8
+        popad
+        movups xmm0, xmmword ptr [esp]
+        movups xmm1, xmmword ptr [esp + 16]
+        add esp, 32
+        jmp dword ptr [configLookupStolen]
+    }
+}
+void TryApplyConfigLookupHook() {
+    if (configLookupHookApplied) return;
+    configLookupHookApplied = true;
+    InstallStrArgHook(0x95B750, &ConfigLookupTrampoline, &configLookupStolen, 10, "configLookup");
+}
+
+// ---- PVEStartData..ctor NRE raise state dump (RVA 0x58F960) ----
+// The ctor converges all null-checks to 0x58F960 (call NRE raise). We patch the
+// call with a jmp that dumps the ctor's EBP-frame locals + this->fields so the
+// failing check can be identified. Then mimic the call into 0x1633df0.
+void* ctorRaiseNreTarget = nullptr;
+
+void LogCtorRaise(uintptr_t ebp) {
+    if (!gInBattleStartData) return;
+    char tmp[48];
+    std::string line = "CtorRaise";
+    sprintf_s(tmp, " ebp=0x%X", static_cast<unsigned>(ebp)); line += tmp;
+    const uintptr_t self = ReadPtrSafe(ebp + 8);
+    const uintptr_t ret = ReadPtrSafe(ebp + 0xC);
+    sprintf_s(tmp, " this=0x%X ret=0x%X", static_cast<unsigned>(self), static_cast<unsigned>(ret)); line += tmp;
+    if (self) {
+        for (int off = 0x8; off <= 0xb8; off += 4) {
+            sprintf_s(tmp, " [%02X]=0x%X", off, static_cast<unsigned>(ReadPtrSafe(self + off))); line += tmp;
+        }
+    }
+    if (ret) {
+        // TStartBaseRet list/object fields: arrRes(0x14) EnemyFleet(0x18) ShipEquipGridInfo(0x30)
+        // RandomFactors(0x34) Verify(0x3C) ExtraBattlePlayerList(0x40) Token(0x44) SkipVcr(0x48)
+        // CopyMission(0x5C) EnemyFleets(0x60) ConfigData(0x64)
+        for (int off = 0x14; off <= 0x64; off += 4) {
+            sprintf_s(tmp, " r[%02X]=0x%X", off, static_cast<unsigned>(ReadPtrSafe(ret + off))); line += tmp;
+        }
+    }
+    if (ebp) {
+        for (int off = -0x40; off <= -0x14; off += 4) {
+            const int o = off < 0 ? -off : off;
+            sprintf_s(tmp, " [e%X]=0x%X", o, static_cast<unsigned>(ReadPtrSafe(ebp + off))); line += tmp;
+        }
+        // enemy container [ebp-0x1c]: List layout _items(+8) _size(+0xC); elements at _items array +0x10
+        uintptr_t container = ReadPtrSafe(ebp - 0x1C);
+        if (container) {
+            uintptr_t items = ReadPtrSafe(container + 0x8);
+            sprintf_s(tmp, " contCnt=%u cont0=0x%X",
+                static_cast<unsigned>(ReadPtrSafe(container + 0xC)),
+                static_cast<unsigned>(items ? ReadPtrSafe(items + 0x10) : 0));
+            line += tmp;
+        }
+        // [ebp-0x20] = config lookup result (e20); dump its klass name + +0x28
+        uintptr_t e20 = ReadPtrSafe(ebp - 0x20);
+        if (e20) {
+            uintptr_t ek = ReadPtrSafe(e20);
+            std::string en = ek ? ReadAsciiCStr(ReadPtrSafe(ek + 0x8)) : "?";
+            sprintf_s(tmp, " e20Class=%s e2028=0x%X",
+                en.c_str(), static_cast<unsigned>(ReadPtrSafe(e20 + 0x28)));
+            line += tmp;
+        }
+    }
+    Log(line);
+}
+
+__declspec(naked) void CtorRaiseTrampoline() {
+    __asm {
+        // entry: EBP = ctor frame, [esp]=0 (pushed arg), no call retaddr pushed
+        push ebp
+        mov ebp, esp
+        sub esp, 32
+        movups xmmword ptr [esp], xmm0
+        movups xmmword ptr [esp + 16], xmm1
+        pushad
+        // saved ctor EBP is at [esp+64] (pushed at entry before our frame)
+        mov eax, dword ptr [esp + 64]
+        push eax
+        call LogCtorRaise
+        add esp, 4
+        popad
+        movups xmm0, xmmword ptr [esp]
+        movups xmm1, xmmword ptr [esp + 16]
+        add esp, 32
+        pop ebp
+        push 0x58F965              // mimic original call return address
+        jmp dword ptr [ctorRaiseNreTarget]
+    }
+}
+void TryApplyCtorRaiseHook() {
+    static bool applied = false;
+    if (applied) return;
+    applied = true;
+    auto ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    uintptr_t base = reinterpret_cast<uintptr_t>(ga);
+    ctorRaiseNreTarget = reinterpret_cast<void*>(base + 0x1633DF0);
+    auto address = reinterpret_cast<unsigned char*>(base + 0x58F960);
+    const unsigned char expected[] = { 0xE8 };
+    if (memcmp(address, expected, 1) != 0) {
+        Log("CtorRaise hook refused: not a call");
+        return;
+    }
+    const auto tramp = reinterpret_cast<uintptr_t>(&CtorRaiseTrampoline);
+    const auto rel = static_cast<int32_t>(tramp - (reinterpret_cast<uintptr_t>(address) + 5));
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(address, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) return;
+    address[0] = 0xE9;
+    memcpy(address + 1, &rel, 4);
+    VirtualProtect(address, 5, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), address, 5);
+    Log("CtorRaise hook applied");
+}
+
+__declspec(naked) void InitBattleTrampoline() {
+    __asm {
+        // 接管 initBattle: 调用原始 _getStartData 并记录返回值
+        // 入口(jmp进入): [esp]=retaddr, [esp+4]=self, [esp+8]=enterParam
+        push ebp
+        mov ebp, esp
+        // [ebp+0]=旧ebp, [ebp+4]=retaddr, [ebp+8]=self, [ebp+0xc]=enterParam
+        sub esp, 32
+        movups xmmword ptr [esp], xmm0
+        movups xmmword ptr [esp + 16], xmm1
+        pushad
+        push dword ptr [ebp + 0xc]    // enterParam
+        push dword ptr [ebp + 8]      // self
+        call LogInitBattle
+        add esp, 8
+        popad
+        movups xmm0, xmmword ptr [esp]
+        movups xmm1, xmmword ptr [esp + 16]
+        add esp, 32
+        // LogCallGetStartData(self, enterParam) -> eax
+        push dword ptr [ebp + 0xc]
+        push dword ptr [ebp + 8]
+        call LogCallGetStartData
+        add esp, 8
+        // 保存到 [self+0x2c]
+        mov ecx, dword ptr [ebp + 8]
+        mov dword ptr [ecx + 0x2c], eax
+        pop ebp
+        ret
+    }
+}
+void TryApplyInitBattleHook() {
+    if (initBattleHookApplied) return;
+    initBattleHookApplied = true;
+    InstallStrArgHook(0x1F0150, &InitBattleTrampoline, &initBattleStolen, 7, "StageSimpleBattle.initBattle");
+}
+
+// StageBegin(self) - RVA 0x1EF2F0, prologue: push ebp(1) mov ebp,esp(2) push ecx(1) cmp byte[0x11D453A7],0(7) = 11 bytes
+void* stageBeginStolen = nullptr;
+bool stageBeginHookApplied = false;
+void LogStageBegin(void* self) {
+    Log("StageSimpleBattle.StageBegin self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void StageBeginTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogStageBegin
+        add esp, 4
+        popad
+        jmp dword ptr [stageBeginStolen]
+    }
+}
+void TryApplyStageBeginHook() {
+    if (stageBeginHookApplied) return;
+    stageBeginHookApplied = true;
+    InstallStrArgHook(0x1EF2F0, &StageBeginTrampoline, &stageBeginStolen, 11, "StageSimpleBattle.StageBegin");
+}
+
+// LoadingTick(self) - RVA 0x1EF290, prologue: push ebp(1) mov ebp,esp(2) mov eax,[ebp+8](3) push esi(1) = 7 bytes
+void* loadingTickStolen = nullptr;
+bool loadingTickHookApplied = false;
+void LogLoadingTick(void* self) {
+    const auto s = reinterpret_cast<uintptr_t>(self);
+    const auto changeState = ReadPtrSafe(s + 0x18);
+    const auto mBattleFrame = ReadPtrSafe(s + 0x24);
+    const auto mStartData = ReadPtrSafe(s + 0x2C);
+    const auto mSingleFrame = ReadPtrSafe(s + 0x30);
+    static int loadingTickCount = 0;
+    if (loadingTickCount < 8) {
+        char tmp[64];
+        std::string extra;
+        uintptr_t ga = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"GameAssembly.dll"));
+        uintptr_t loader = ga ? ReadPtrSafe(ga + 0x1D2C350) : 0;
+        uintptr_t mid = loader ? ReadPtrSafe(loader + 0x5C) : 0;
+        uintptr_t obj = mid ? ReadPtrSafe(mid + 0x4) : 0;
+        int f19 = -1, f1a = -1;
+        int f25 = -1;
+        if (obj) {
+            MEMORY_BASIC_INFORMATION m{};
+            if (VirtualQuery(reinterpret_cast<void*>(obj + 0x19), &m, sizeof(m)) &&
+                m.State == MEM_COMMIT && !(m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+                f19 = *reinterpret_cast<unsigned char*>(obj + 0x19);
+                f1a = *reinterpret_cast<unsigned char*>(obj + 0x1A);
+            }
+        }
+        if (mid) {
+            MEMORY_BASIC_INFORMATION m{};
+            if (VirtualQuery(reinterpret_cast<void*>(mid + 0x25), &m, sizeof(m)) &&
+                m.State == MEM_COMMIT && !(m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+                f25 = *reinterpret_cast<unsigned char*>(mid + 0x25);
+            }
+        }
+        sprintf_s(tmp, " loader=0x%X mid=0x%X obj=0x%X f19=%d f1a=%d mid25=%d",
+            static_cast<unsigned>(loader), static_cast<unsigned>(mid),
+            static_cast<unsigned>(obj), f19, f1a, f25);
+        extra = tmp;
+        if (mSingleFrame) {
+            MEMORY_BASIC_INFORMATION m{};
+            int fin18 = -1, fin19 = -1;
+            if (VirtualQuery(reinterpret_cast<void*>(mSingleFrame + 0x18), &m, sizeof(m)) &&
+                m.State == MEM_COMMIT && !(m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+                fin18 = *reinterpret_cast<unsigned char*>(mSingleFrame + 0x18);
+                fin19 = *reinterpret_cast<unsigned char*>(mSingleFrame + 0x19);
+            }
+            sprintf_s(tmp, " frame18=%d frame19=%d view=0x%X field=0x%X",
+                fin18, fin19,
+                static_cast<unsigned>(ReadPtrSafe(mSingleFrame + 0x34)),
+                static_cast<unsigned>(ReadPtrSafe(mSingleFrame + 0x38)));
+            extra += tmp;
+        }
+        Log("StageSimpleBattle.LoadingTick self=" + std::to_string(s) +
+            " changeState=" + std::to_string(changeState) +
+            " mBattleFrame=" + std::to_string(mBattleFrame) +
+            " mStartData=" + std::to_string(mStartData) +
+            " mSingleFrame=" + std::to_string(mSingleFrame) +
+            " ctrl=0x" + std::to_string(ReadPtrSafe(s + 0x8)) +
+            " ctrlLoading=" + std::to_string(ReadPtrSafe(ReadPtrSafe(s + 0x8) + 0x18)) +
+            " rlm=0x" + std::to_string(ReadPtrSafe(ReadPtrSafe(s + 0x8) + 0x24)) +
+            " tSum=" + std::to_string(ReadPtrSafe(ReadPtrSafe(ReadPtrSafe(s + 0x8) + 0x24) + 0x10)) +
+            " tLoader=" + std::to_string(ReadPtrSafe(ReadPtrSafe(ReadPtrSafe(s + 0x8) + 0x24) + 0x18)) +
+            " fin=" + std::to_string(ReadPtrSafe(ReadPtrSafe(ReadPtrSafe(s + 0x8) + 0x24) + 0x1C)) +
+            extra);
+        loadingTickCount++;
+    }
+}
+__declspec(naked) void LoadingTickTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogLoadingTick
+        add esp, 4
+        popad
+        jmp dword ptr [loadingTickStolen]
+    }
+}
+void TryApplyLoadingTickHook() {
+    if (loadingTickHookApplied) return;
+    loadingTickHookApplied = true;
+    InstallStrArgHook(0x1EF290, &LoadingTickTrampoline, &loadingTickStolen, 7, "StageSimpleBattle.LoadingTick");
+}
+
+// ---- ResLoadMgr.AddRes(self, type, res, userCB, maxNum) RVA 0x1E4B90 ----
+// Log the resource being queued for loading.
+void* addResStolen = nullptr;
+bool addResHookApplied = false;
+void LogAddRes(void* self, void* type, void* res) {
+    Log("AddRes self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " type=" + std::to_string(reinterpret_cast<uintptr_t>(type)) +
+        " res=" + ReadIl2CppString(res));
+}
+__declspec(naked) void AddResTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]   // self
+        mov ecx, dword ptr [esp + 40]   // type
+        mov edx, dword ptr [esp + 44]   // res
+        push edx
+        push ecx
+        push eax
+        call LogAddRes
+        add esp, 12
+        popad
+        jmp dword ptr [addResStolen]
+    }
+}
+void TryApplyAddResHook() {
+    if (addResHookApplied) return;
+    addResHookApplied = true;
+    InstallStrArgHook(0x1E4B90, &AddResTrampoline, &addResStolen, 10, "ResLoadMgr.AddRes");
+}
+
+// ---- SceneLoader.StartLoad (RVA 0x1E81B0) ----
+void* sceneLoadStartStolen = nullptr;
+bool sceneLoadStartHookApplied = false;
+void LogSceneLoadStart(void* self) {
+    Log("SceneLoader.StartLoad self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void SceneLoadStartTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogSceneLoadStart
+        add esp, 4
+        popad
+        jmp dword ptr [sceneLoadStartStolen]
+    }
+}
+void TryApplySceneLoadStartHook() {
+    if (sceneLoadStartHookApplied) return;
+    sceneLoadStartHookApplied = true;
+    InstallStrArgHook(0x1E81B0, &SceneLoadStartTrampoline, &sceneLoadStartStolen, 10, "SceneLoader.StartLoad");
+}
+
+// ---- scene load resolve (RVA 0x12500B0) ----
+void* sceneLoadResolveStolen = nullptr;
+bool sceneLoadResolveHookApplied = false;
+void LogSceneLoadResolve(void* self, void* sceneName) {
+    Log("SceneLoadResolve sceneName=" + ReadIl2CppString(sceneName));
+}
+__declspec(naked) void SceneLoadResolveTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 40]   // arg1 = sceneName
+        push eax
+        call LogSceneLoadResolve
+        add esp, 4
+        popad
+        jmp dword ptr [sceneLoadResolveStolen]
+    }
+}
+void TryApplySceneLoadResolveHook() {
+    if (sceneLoadResolveHookApplied) return;
+    sceneLoadResolveHookApplied = true;
+    InstallStrArgHook(0x12500B0, &SceneLoadResolveTrampoline, &sceneLoadResolveStolen, 8, "sceneLoadResolve");
+}
+
+// ---- ResLoadMgr.StartLoad (RVA 0x1E5800) ----
+void* startLoadStolen = nullptr;
+bool startLoadHookApplied = false;
+void LogStartLoad(void* self, void* cb) {
+    Log("ResLoadMgr.StartLoad self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " cb=" + std::to_string(reinterpret_cast<uintptr_t>(cb)));
+}
+__declspec(naked) void StartLoadTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        mov ecx, dword ptr [esp + 40]
+        push ecx
+        push eax
+        call LogStartLoad
+        add esp, 8
+        popad
+        jmp dword ptr [startLoadStolen]
+    }
+}
+void TryApplyStartLoadHook() {
+    if (startLoadHookApplied) return;
+    startLoadHookApplied = true;
+    InstallStrArgHook(0x1E5800, &StartLoadTrampoline, &startLoadStolen, 6, "ResLoadMgr.StartLoad");
+}
+
+// ---- ResLoadMgr.StartLoadPrior (RVA 0x1E56D0) ----
+void* startLoadPriorStolen = nullptr;
+bool startLoadPriorHookApplied = false;
+void LogStartLoadPrior(void* self, void* prior) {
+    Log("ResLoadMgr.StartLoadPrior self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " prior=" + std::to_string(reinterpret_cast<uintptr_t>(prior)));
+}
+__declspec(naked) void StartLoadPriorTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        mov ecx, dword ptr [esp + 40]
+        push ecx
+        push eax
+        call LogStartLoadPrior
+        add esp, 8
+        popad
+        jmp dword ptr [startLoadPriorStolen]
+    }
+}
+void TryApplyStartLoadPriorHook() {
+    if (startLoadPriorHookApplied) return;
+    startLoadPriorHookApplied = true;
+    InstallStrArgHook(0x1E56D0, &StartLoadPriorTrampoline, &startLoadPriorStolen, 11, "ResLoadMgr.StartLoadPrior");
+}
+
+// ---- changeScene(sceneID) RVA 0x1EAD80 ----
+void* changeSceneStolen = nullptr;
+bool changeSceneHookApplied = false;
+void LogChangeScene(void* self, void* sceneId) {
+    Log("changeScene sceneId=" + ReadIl2CppString(sceneId));
+}
+__declspec(naked) void ChangeSceneTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 40]   // arg1 = sceneId
+        push eax
+        call LogChangeScene
+        add esp, 4
+        popad
+        jmp dword ptr [changeSceneStolen]
+    }
+}
+void TryApplyChangeSceneHook() {
+    if (changeSceneHookApplied) return;
+    changeSceneHookApplied = true;
+    InstallStrArgHook(0x1EAD80, &ChangeSceneTrampoline, &changeSceneStolen, 10, "changeScene");
+}
+
+// ---- scene lookup (DictDataManager) RVA 0x956450 ----
+void* sceneLookupStolen = nullptr;
+bool sceneLookupHookApplied = false;
+void LogSceneLookup(void* self, void* sceneId) {
+    Log("SceneLookup sceneId=" + std::to_string(reinterpret_cast<uintptr_t>(sceneId)));
+}
+__declspec(naked) void SceneLookupTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 40]   // arg1 = sceneId (an int)
+        push eax
+        call LogSceneLookup
+        add esp, 4
+        popad
+        jmp dword ptr [sceneLookupStolen]
+    }
+}
+void TryApplySceneLookupHook() {
+    if (sceneLookupHookApplied) return;
+    sceneLookupHookApplied = true;
+    InstallStrArgHook(0x956450, &SceneLookupTrampoline, &sceneLookupStolen, 10, "SceneLookup");
+}
+
+// ---- DelayGoto (RVA 0x1ECBD0) ----
+void* delayGotoStolen = nullptr;
+bool delayGotoHookApplied = false;
+void LogDelayGoto(void* self) {
+    Log("DelayGoto self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void DelayGotoTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogDelayGoto
+        add esp, 4
+        popad
+        jmp dword ptr [delayGotoStolen]
+    }
+}
+void TryApplyDelayGotoHook() {
+    if (delayGotoHookApplied) return;
+    delayGotoHookApplied = true;
+    InstallStrArgHook(0x1ECBD0, &DelayGotoTrampoline, &delayGotoStolen, 10, "DelayGoto");
+}
+
+// ---- OnStageStartFin (RVA 0x1ECF40) ----
+void* onStageStartFinStolen = nullptr;
+bool onStageStartFinHookApplied = false;
+void LogOnStageStartFin(void* self) {
+    Log("OnStageStartFin self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void OnStageStartFinTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogOnStageStartFin
+        add esp, 4
+        popad
+        jmp dword ptr [onStageStartFinStolen]
+    }
+}
+void TryApplyOnStageStartFinHook() {
+    if (onStageStartFinHookApplied) return;
+    onStageStartFinHookApplied = true;
+    InstallStrArgHook(0x1ECF40, &OnStageStartFinTrampoline, &onStageStartFinStolen, 6, "OnStageStartFin");
+}
+
+// initBattleFrame(self) - RVA 0x1F00E0, prologue: push ebp(1) mov ebp,esp(2) cmp byte[0x11D453A5],0(7) = 10 bytes
+void* initBattleFrameStolen = nullptr;
+bool initBattleFrameHookApplied = false;
+void LogInitBattleFrame(void* self) {
+    Log("StageSimpleBattle.initBattleFrame self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void InitBattleFrameTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogInitBattleFrame
+        add esp, 4
+        popad
+        jmp dword ptr [initBattleFrameStolen]
+    }
+}
+void TryApplyInitBattleFrameHook() {
+    if (initBattleFrameHookApplied) return;
+    initBattleFrameHookApplied = true;
+    InstallStrArgHook(0x1F00E0, &InitBattleFrameTrampoline, &initBattleFrameStolen, 10, "StageSimpleBattle.initBattleFrame");
+}
+
+// createBattleFrame(self) - RVA 0x1EFAB0, prologue: push ebp(1) mov ebp,esp(2) cmp byte[0x11D453A4],0(7) = 10 bytes
+void* createBattleFrameStolen = nullptr;
+bool createBattleFrameHookApplied = false;
+void LogCreateBattleFrame(void* self) {
+    Log("StageSimpleBattle.createBattleFrame self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void CreateBattleFrameTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogCreateBattleFrame
+        add esp, 4
+        popad
+        jmp dword ptr [createBattleFrameStolen]
+    }
+}
+void TryApplyCreateBattleFrameHook() {
+    if (createBattleFrameHookApplied) return;
+    createBattleFrameHookApplied = true;
+    InstallStrArgHook(0x1EFAB0, &CreateBattleFrameTrampoline, &createBattleFrameStolen, 10, "StageSimpleBattle.createBattleFrame");
+}
+
+void* shipPBConvertStolen = nullptr;
+bool shipPBConvertHookApplied = false;
+
+void LogShipPBConvert(void* lShip, void* retAddr) {
+    const auto ls = reinterpret_cast<uintptr_t>(lShip);
+    const auto heroId = ReadPtrSafe(ls + 0x8);
+    const auto templateId = ReadPtrSafe(ls + 0xC);
+    uintptr_t retVa = reinterpret_cast<uintptr_t>(retAddr);
+    uintptr_t rva = retVa >= 0x10000000u ? (retVa - 0x10000000u) : retVa;
+    char hexBuf[16];
+    sprintf_s(hexBuf, "%X", static_cast<unsigned int>(rva));
+    Log("Ship.PBConvert lShip=" + std::to_string(ls) +
+        " retRVA=0x" + hexBuf +
+        " HeroId=" + std::to_string(heroId) +
+        " TemplateId=" + std::to_string(templateId));
+}
+
+__declspec(naked) void ShipPBConvertTrampoline() {
+    __asm {
+        pushad
+        // 静态方法：IL2CPP 调用约定第一个栈参数是 this(=null)，lShip 在第二个参数位置
+        // pushad 后: [esp+32]=返回地址, [esp+40]=lShip
+        mov edx, dword ptr [esp + 32]   // 返回地址（调用者）
+        mov ecx, dword ptr [esp + 40]   // lShip
+        push edx
+        push ecx
+        call LogShipPBConvert
+        add esp, 8
+        popad
+        jmp dword ptr [shipPBConvertStolen]
+    }
+}
+
+void TryApplyShipPBConvertHook() {
+    if (shipPBConvertHookApplied) return;
+    shipPBConvertHookApplied = true;
+    // prologue: push ebp(1) mov ebp,esp(2) push -1(2) push imm(5) mov eax,fs:[0](6) push eax(1)
+    // boundary at offset 17 (after push eax) - 17 bytes covers these instructions fully
+    InstallStrArgHook(0x307F20, &ShipPBConvertTrampoline, &shipPBConvertStolen, 17, "Ship.PBConvert");
+}
+
 void TryApplyLuaPcallKHook() {
     if (luaPcallKHookApplied) return;
     if (InstallXluaExportHook("lua_pcallk", &LuaPcallKTrampoline, &luaPcallKStolen, 14, "lua_pcallk")) {
@@ -1708,6 +3695,87 @@ void TryApplyUIShipProxyCtorHook() {
     InstallStrArgHook(0x4F33D0, &UIShipProxyCtorTrampoline, &uiShipProxyCtorStolen, 10, "UIShipProxy.ctor");
 }
 
+void* internalLogExceptionStolen = nullptr;
+bool internalLogExceptionHookApplied = false;
+
+void LogInternalLogException(void* ex, void* obj) {
+    std::string type = "?";
+    std::string msg = "?";
+    std::string st = "?";
+    if (ex) {
+        const auto exAddr = reinterpret_cast<uintptr_t>(ex);
+        const auto klass = ReadPtrSafe(exAddr);
+        const auto className = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0x8)) : "";
+        const auto nameSpace = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0xC)) : "";
+        type = nameSpace + "." + className;
+        msg = ReadIl2CppString(reinterpret_cast<void*>(ReadPtrSafe(exAddr + 0x8)));
+        st = ReadIl2CppString(reinterpret_cast<void*>(ReadPtrSafe(exAddr + 0xC)));
+    }
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "UnityException type=" << type << " msg=" << msg
+        << " caller=" << DescribeCaller(_ReturnAddress()) << '\n';
+    output << "UnityException stack=" << st << '\n';
+    output.flush();
+}
+
+__declspec(naked) void InternalLogExceptionTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 40]   // obj
+        push eax
+        mov ecx, dword ptr [esp + 40]   // ex
+        push ecx
+        call LogInternalLogException
+        add esp, 8
+        popad
+        jmp dword ptr [internalLogExceptionStolen]
+    }
+}
+
+void TryApplyInternalLogExceptionHook() {
+    if (internalLogExceptionHookApplied) return;
+    internalLogExceptionHookApplied = true;
+    InstallStrArgHook(0xE50220, &InternalLogExceptionTrampoline, &internalLogExceptionStolen, 10, "UnityEngine.DebugLogHandler.Internal_LogException");
+}
+
+// Unity log callback registration. Bugly (new_sdk) registers a logMessageReceived callback
+// that runs its crash-handler flow (report + exit) when Unity logs errors during the battle
+// transition. Replacing every registered callback with a no-op stops bugly's crash trigger
+// without touching the game's managed logic.
+void* addLogMessageReceivedStolen = nullptr;
+bool addLogMessageReceivedHookApplied = false;
+
+void __cdecl NoopLogCallback(void* condition, void* stack, int type) { }
+
+void LogAddLogMessageReceived(void* cb) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "logMessageReceived registration suppressed (cb=0x"
+        << std::hex << reinterpret_cast<uintptr_t>(cb) << std::dec << ")" << '\n';
+    output.flush();
+}
+
+__declspec(naked) void AddLogMessageReceivedTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]   // cb delegate
+        push eax
+        call LogAddLogMessageReceived
+        add esp, 4
+        mov eax, dword ptr [esp + 36]   // cb (for forwarding, replaced with no-op)
+        mov dword ptr [esp + 36], 0     // placeholder; call original with &NoopLogCallback below
+        popad
+        jmp dword ptr [addLogMessageReceivedStolen]
+    }
+}
+
+void TryApplyAddLogMessageReceivedHook() {
+    if (addLogMessageReceivedHookApplied) return;
+    addLogMessageReceivedHookApplied = true;
+    InstallStrArgHook(0xE43420, &AddLogMessageReceivedTrampoline, &addLogMessageReceivedStolen, 10, "Application.add_logMessageReceived");
+}
+
 void TryApplyGetJsonDataHook() {
     if (getJsonDataHookApplied) return;
     getJsonDataHookApplied = true;
@@ -1718,6 +3786,26 @@ void TryApplyGetAllHook() {
     if (getAllHookApplied) return;
     getAllHookApplied = true;
     InstallStrArgHook(0x2E2740, &GetAllTrampoline, &getAllStolen, 10, "SQLiteConfigManager.GetAll");
+}
+
+void TryApplyGetJsonDataGroupHook() {
+    if (getJsonDataGroupHookApplied) return;
+    getJsonDataGroupHookApplied = true;
+    InstallStrArgHook(0x2E2A50, &GetJsonDataGroupTrampoline, &getJsonDataGroupStolen, 11, "SQLiteConfigManager.GetJsonDataGroup");
+}
+
+void TryApplyGetJsonStrByBytesHook() {
+    if (getJsonStrByBytesHookApplied) return;
+    getJsonStrByBytesHookApplied = true;
+    // DISABLED temporarily for isolation testing (may interact badly with new_sdk).
+    //InstallStrArgHook(0x2E2DC0, &GetJsonStrByBytesTrampoline, &getJsonStrByBytesStolen, 10, "SQLiteConfigManager.GetJsonStrByBytes");
+}
+
+void TryApplyAssetLoadAsyncHook() {
+    if (assetLoadAsyncHookApplied) return;
+    assetLoadAsyncHookApplied = true;
+    // DISABLED temporarily for isolation testing (may interact badly with new_sdk).
+    //InstallStrArgHook(0x28E790, &AssetLoadAsyncTrampoline, &assetLoadAsyncStolen, 11, "BabelTime.Res.AssetManager.LoadAsync");
 }
 
 void TryApplyCreatePartHook() {
@@ -2080,16 +4168,832 @@ bool PatchModule(HMODULE module) {
 
 }
 
+// Registered in InitializeHooks. Logs native crashes (access violations, illegal
+// instructions) with the exception code, faulting address and module+rva so the
+// bundle-unload crash can be located without a debugger. Always EXCEPTION_CONTINUE_SEARCH
+// so we never swallow the exception; also writes to the crash log without the mutex to
+// avoid deadlock if the crash happened while the logging mutex was held.
+LONG WINAPI CrashVectoredHandler(EXCEPTION_POINTERS* info) {
+    static volatile LONG counts[64] = {};
+    if (!info || !info->ExceptionRecord) return EXCEPTION_CONTINUE_SEARCH;
+    const auto rec = info->ExceptionRecord;
+    const auto code = rec->ExceptionCode;
+    // Benign first-chance exceptions that fire constantly and are handled by the app
+    // (OutputDebugString/debugger print, breakpoints, single-step, VEH/SEH notify).
+    if (code == 0x406D1388 || code == 0x40010006 || code == 0x40010007 ||
+        code == 0x80000003 || code == 0x80000004 || code == 0x40000001)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    const bool isCrash = code == 0xC0000005 || code == 0xC000001D || code == 0xC0000094 ||
+        code == 0xC00000FD || code == 0xC000000D || code == 0xC0000409 ||
+        code == 0xC0000374 || code == 0xC0000096 || code == 0xC0000026 ||
+        code == 0xC0000008 || code == 0xC0000006 || code == 0xE06D7363;
+    // Once the battle has started (data built), log EVERY exception reaching the VEH so a
+    // non-standard crash code (e.g. one bugly fabricates or a watchdog raise) is visible.
+    const bool afterBattle = gBattleStarted;
+    if (!isCrash && !afterBattle) return EXCEPTION_CONTINUE_SEARCH;
+
+    // A C++ exception (0xE06D7363) is normally caught by a runtime SEH frame (first chance,
+    // flags=1 NONCONTINUABLE). Only an ESCAPED one (second chance, flags includes UNWINDING
+    // 0x2, or a later pass) is a real crash. Count handled ones separately so login noise
+    // never suppresses an unhandled throw at the crash point.
+    const bool unhandledCxx = (code == 0xE06D7363) && ((rec->ExceptionFlags & 0x2) != 0);
+
+    const auto bucket = (static_cast<unsigned>(code) >> 4) & 63;
+    const auto n = InterlockedIncrement(&counts[bucket]);
+    if (n > 8 && !unhandledCxx && !afterBattle) return EXCEPTION_CONTINUE_SEARCH;
+    if (n > 64) return EXCEPTION_CONTINUE_SEARCH;
+    if (unhandledCxx && n > 32) return EXCEPTION_CONTINUE_SEARCH;
+
+    char buf[512]{};
+    auto m = 0;
+    m += sprintf_s(buf + m, sizeof(buf) - m, "CRASH#%ld code=0x%08X addr=0x%p flags=%u",
+        n, static_cast<unsigned>(code), rec->ExceptionAddress, static_cast<unsigned>(rec->ExceptionFlags));
+    if (rec->NumberParameters > 0) {
+        m += sprintf_s(buf + m, sizeof(buf) - m, " params=");
+        for (DWORD i = 0; i < rec->NumberParameters && i < 2; ++i)
+            m += sprintf_s(buf + m, sizeof(buf) - m, "%s0x%p", i ? "," : "", reinterpret_cast<void*>(rec->ExceptionInformation[i]));
+    }
+    if (info->ContextRecord)
+        m += sprintf_s(buf + m, sizeof(buf) - m, " eip=0x%lX eax=0x%lX ebx=0x%lX ecx=0x%lX edx=0x%lX esi=0x%lX edi=0x%lX ebp=0x%lX esp=0x%lX",
+            info->ContextRecord->Eip, info->ContextRecord->Eax, info->ContextRecord->Ebx,
+            info->ContextRecord->Ecx, info->ContextRecord->Edx, info->ContextRecord->Esi,
+            info->ContextRecord->Edi, info->ContextRecord->Ebp, info->ContextRecord->Esp);
+    m += sprintf_s(buf + m, sizeof(buf) - m, " caller=%s", DescribeCaller(rec->ExceptionAddress).c_str());
+    std::ofstream output(logPath, std::ios::app);
+    output << buf << '\n';
+    output.flush();
+    // A C++/managed exception (0xE06D7363, the IL2CPP dispatch for e.g. NullReferenceException)
+    // is normally caught by the game's own SEH before it escapes. Walk the throw site stack so
+    // the exact managed method (e.g. the MissionNode null-ref during battle init) is visible.
+    if (code == 0xE06D7363 && info->ContextRecord && rec->NumberParameters >= 2 &&
+        (afterBattle || unhandledCxx)) {
+        const auto esp = info->ContextRecord->Esp;
+        std::string trace = " throwEip=" + DescribeCaller(reinterpret_cast<void*>(info->ContextRecord->Eip));
+        const auto exceptObj = static_cast<uintptr_t>(rec->ExceptionInformation[1]);
+        if (exceptObj) {
+            const auto klass = ReadPtrSafe(exceptObj);
+            const auto className = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0x8)) : "";
+            const auto nameSpace = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0xC)) : "";
+            if (!className.empty()) trace += " type=" + nameSpace + "." + className;
+            const auto msgPtr = ReadPtrSafe(exceptObj + 0x8);
+            if (msgPtr) trace += " msg=" + ReadIl2CppString(reinterpret_cast<void*>(msgPtr));
+        }
+        auto found = 0;
+        for (DWORD off = 0; off < 0x2000 && found < 48; off += 4) {
+            const auto addr = ReadPtrSafe(esp + off);
+            const auto desc = DescribeCaller(reinterpret_cast<void*>(addr));
+            if (desc.find("unknown") == std::string::npos) {
+                trace += " " + desc;
+                found++;
+            }
+        }
+        Log("CXXSTACK" + trace);
+    }
+    // Stack overflow: walk the stack upward from esp, logging any dword that resolves into
+    // a module as a return address. This reveals the recursive call chain.
+    if (code == 0xC00000FD && info->ContextRecord) {
+        const auto esp = info->ContextRecord->Esp;
+        std::string trace;
+        auto found = 0;
+        for (DWORD off = 0; off < 0x4000 && found < 40; off += 4) {
+            const auto addr = ReadPtrSafe(esp + off);
+            const auto desc = DescribeCaller(reinterpret_cast<void*>(addr));
+            if (desc.find("unknown") == std::string::npos) {
+                trace += " " + desc;
+                found++;
+            }
+        }
+        Log("STACKTRACE esp=0x" + std::to_string(esp) + trace);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// Inline hook for dbghelp!MiniDumpWriteDump. The bugly/bt_dump crash reporter calls this
+// with the REAL MINIDUMP_EXCEPTION_INFORMATION (genuine EXCEPTION_POINTERS), even though
+// the minidump it writes has a synthetic context. Capturing the parameter here gives us the
+// true faulting address / thread / registers for the bundle-unload crash.
+using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, DWORD,
+    const void*, const void*, const void*);
+MiniDumpWriteDumpFn originalMiniDumpWriteDump = nullptr;
+
+struct MiniDumpExceptionInfo32 {
+    DWORD ThreadId;
+    void* ExceptionPointers;
+    BOOL ClientPointers;
+};
+
+BOOL WINAPI HookMiniDumpWriteDump(HANDLE hProcess, DWORD processId, HANDLE hFile, DWORD dumpType,
+    const void* exceptionParam, const void* userStreamParam, const void* callbackParam) {
+    if (exceptionParam) {
+        const auto info = static_cast<const MiniDumpExceptionInfo32*>(exceptionParam);
+        const auto ep = reinterpret_cast<EXCEPTION_POINTERS*>(info->ExceptionPointers);
+        char buf[1024]{};
+        auto m = 0;
+        m += sprintf_s(buf + m, sizeof(buf) - m, "MINIDUMP thread=%lu", info->ThreadId);
+        if (ep && ep->ExceptionRecord) {
+            const auto er = ep->ExceptionRecord;
+            m += sprintf_s(buf + m, sizeof(buf) - m, " code=0x%08X addr=0x%p flags=%u params=%lu",
+                static_cast<unsigned>(er->ExceptionCode), er->ExceptionAddress,
+                static_cast<unsigned>(er->ExceptionFlags),
+                static_cast<unsigned long>(er->NumberParameters));
+            // _invalid_parameter passes wchar_t* (expression, function, file) as the first
+            // three ExceptionInformation args - read them in-process as wide strings.
+            for (DWORD i = 0; i < er->NumberParameters && i < 4; ++i) {
+                const auto p = er->ExceptionInformation[i];
+                m += sprintf_s(buf + m, sizeof(buf) - m, " p%lu=0x%p", i, reinterpret_cast<void*>(p));
+                if (p && (p >> 16) != 0) {
+                    const auto ws = ReadWideCStr(p);
+                    if (!ws.empty())
+                        m += sprintf_s(buf + m, sizeof(buf) - m, "(\"%s\")", ws.c_str());
+                }
+            }
+            m += sprintf_s(buf + m, sizeof(buf) - m, " caller=%s", DescribeCaller(er->ExceptionAddress).c_str());
+        }
+        if (ep && ep->ContextRecord)
+            m += sprintf_s(buf + m, sizeof(buf) - m, " eip=0x%lX eax=0x%lX ebx=0x%lX ecx=0x%lX edx=0x%lX esi=0x%lX edi=0x%lX ebp=0x%lX esp=0x%lX",
+                ep->ContextRecord->Eip, ep->ContextRecord->Eax, ep->ContextRecord->Ebx,
+                ep->ContextRecord->Ecx, ep->ContextRecord->Edx, ep->ContextRecord->Esi,
+                ep->ContextRecord->Edi, ep->ContextRecord->Ebp, ep->ContextRecord->Esp);
+        std::ofstream output(logPath, std::ios::app);
+        output << buf << '\n';
+        output.flush();
+        // Walk the real stack from the captured context (esp/ebp) to expose the call chain.
+        if (ep && ep->ContextRecord && ep->ContextRecord->Esp) {
+            const auto esp = ep->ContextRecord->Esp;
+            std::string trace;
+            auto found = 0;
+            for (DWORD off = 0; off < 0x4000 && found < 40; off += 4) {
+                const auto addr = ReadPtrSafe(esp + off);
+                const auto desc = DescribeCaller(reinterpret_cast<void*>(addr));
+                if (desc.find("unknown") == std::string::npos) {
+                    trace += " " + desc;
+                    found++;
+                }
+            }
+            if (!trace.empty()) {
+                std::ofstream o2(logPath, std::ios::app);
+                o2 << "MINIDUMP_STACK esp=0x" << std::hex << esp << std::dec << trace << '\n';
+                o2.flush();
+            }
+        }
+    }
+    if (!originalMiniDumpWriteDump) return FALSE;
+    return originalMiniDumpWriteDump(hProcess, processId, hFile, dumpType,
+        exceptionParam, userStreamParam, callbackParam);
+}
+
+void TryApplyMiniDumpWriteDumpHook() {
+    static bool applied = false;
+    if (applied) return;
+    applied = true;
+    auto dbghelp = GetModuleHandleW(L"dbghelp.dll");
+    if (!dbghelp) dbghelp = LoadLibraryW(L"dbghelp.dll");
+    if (!dbghelp) return;
+    auto fn = reinterpret_cast<unsigned char*>(GetProcAddress(dbghelp, "MiniDumpWriteDump"));
+    if (!fn) return;
+    // Build a trampoline that replays the stolen 5 bytes then jumps back to fn+5,
+    // so originalMiniDumpWriteDump calls the REAL function (not the hooked entry).
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 5);                                  // stolen prologue
+    const auto backRel = static_cast<int32_t>(
+        (reinterpret_cast<uintptr_t>(fn) + 5) - (reinterpret_cast<uintptr_t>(tramp) + 10));
+    tramp[5] = 0xE9;                                       // jmp back to fn+5
+    memcpy(tramp + 6, &backRel, 4);
+    originalMiniDumpWriteDump = reinterpret_cast<MiniDumpWriteDumpFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookMiniDumpWriteDump);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        originalMiniDumpWriteDump = nullptr;
+        return;
+    }
+    memcpy(fn, jump, 5);
+    VirtualProtect(fn, 5, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+    Log("MiniDumpWriteDump hook applied");
+}
+
+// CRT _invalid_parameter / _invalid_parameter_noinfo: the source of STATUS_INVALID_PARAMETER
+// (0xC000000D) raised during the bundle-unload crash. Hook these exports in the CRT dll to
+// capture the exact expression/function/file and the caller that passed a bad argument.
+using InvalidParameterFn = void(__cdecl*)(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t);
+using InvalidParameterNoInfoFn = void(__cdecl*)(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t);
+InvalidParameterFn originalInvalidParameter = nullptr;
+InvalidParameterNoInfoFn originalInvalidParameterNoInfo = nullptr;
+
+void LogInvalidParameter(const wchar_t* expression, const wchar_t* function, const wchar_t* file, unsigned line) {
+    char buf[1024]{};
+    auto m = 0;
+    auto wcopy = [](char* dst, size_t cap, const wchar_t* src) {
+        if (!src) { dst[0] = 0; return; }
+        WideCharToMultiByte(CP_UTF8, 0, src, -1, dst, static_cast<int>(cap), nullptr, nullptr);
+    };
+    m += sprintf_s(buf + m, sizeof(buf) - m, "INVALID_PARAM line=%u caller=%s", line, DescribeCaller(_ReturnAddress()).c_str());
+    char e[256]{}, f[256]{}, fl[256]{};
+    wcopy(e, sizeof(e), expression);
+    wcopy(f, sizeof(f), function);
+    wcopy(fl, sizeof(fl), file);
+    m += sprintf_s(buf + m, sizeof(buf) - m, " expr=%s func=%s file=%s", e, f, fl);
+    std::ofstream output(logPath, std::ios::app);
+    output << buf << '\n';
+    output.flush();
+}
+
+void __cdecl HookInvalidParameter(const wchar_t* expression, const wchar_t* function, const wchar_t* file,
+    unsigned line, uintptr_t reserved) {
+    LogInvalidParameter(expression, function, file, line);
+    if (originalInvalidParameter)
+        originalInvalidParameter(expression, function, file, line, reserved);
+}
+
+void __cdecl HookInvalidParameterNoInfo(const wchar_t* expression, const wchar_t* function, const wchar_t* file,
+    unsigned line, uintptr_t reserved) {
+    LogInvalidParameter(expression, function, file, line);
+    if (originalInvalidParameterNoInfo)
+        originalInvalidParameterNoInfo(expression, function, file, line, reserved);
+}
+
+bool InstallCrtExportHook(HMODULE crt, const char* name, void* replacement, void** originalOut) {
+    auto fn = reinterpret_cast<unsigned char*>(GetProcAddress(crt, name));
+    if (!fn) return false;
+    // msvcr100 exports have a recognizable prologue; install a 5-byte jmp.
+    const auto target = reinterpret_cast<uintptr_t>(replacement);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+    memcpy(fn, jump, 5);
+    VirtualProtect(fn, 5, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+    Log(std::string("CRT hook applied: ") + name);
+    return true;
+}
+
+void TryApplyInvalidParameterHook() {
+    static bool applied = false;
+    if (applied) return;
+    applied = true;
+    // Hook BOTH CRT copies' _invalid_parameter_noinfo (the crash uses the SYSTEM ucrtbase
+    // internal path). Do NOT return after the first success - hook every loaded copy.
+    std::vector<HMODULE> crts;
+    auto sys = GetModuleHandleW(L"ucrtbase.dll");
+    if (sys) crts.push_back(sys);
+    auto msvcr = GetModuleHandleW(L"msvcr100.dll");
+    if (msvcr) crts.push_back(msvcr);
+    for (auto crt : crts) {
+        InstallCrtExportHook(crt, "_invalid_parameter",
+            reinterpret_cast<void*>(&HookInvalidParameter),
+            reinterpret_cast<void**>(&originalInvalidParameter));
+        InstallCrtExportHook(crt, "_invalid_parameter_noinfo",
+            reinterpret_cast<void*>(&HookInvalidParameterNoInfo),
+            reinterpret_cast<void**>(&originalInvalidParameterNoInfo));
+    }
+    Log("InvalidParameterHooks configured");
+}
+
+// Hook RaiseException in kernelbase to log the actual STATUS_INVALID_PARAMETER raise with
+// its argument pointers (CRT passes expression/function/file pointers as ExceptionInformation)
+// and the caller that triggered it. This bypasses the fabrications of the bugly reporter.
+using RaiseExceptionFn = void(WINAPI*)(DWORD, DWORD, DWORD, const ULONG_PTR*);
+RaiseExceptionFn originalRaiseException = nullptr;
+
+void WINAPI HookRaiseException(DWORD dwExceptionCode, DWORD dwExceptionFlags,
+    DWORD nNumberOfArguments, const ULONG_PTR* lpArguments) {
+    if (dwExceptionCode == 0xC000000D || dwExceptionCode == 0xC0000005 ||
+        dwExceptionCode == 0xE06D7363 || dwExceptionCode == 0xC00000FD) {
+        char buf[512]{};
+        auto m = 0;
+        m += sprintf_s(buf + m, sizeof(buf) - m, "RAISE code=0x%08X flags=0x%X nargs=%lu caller=%s",
+            static_cast<unsigned>(dwExceptionCode), static_cast<unsigned>(dwExceptionFlags),
+            static_cast<unsigned long>(nNumberOfArguments),
+            DescribeCaller(_ReturnAddress()).c_str());
+        for (DWORD i = 0; i < nNumberOfArguments && i < 4; ++i) {
+            m += sprintf_s(buf + m, sizeof(buf) - m, " a%lu=0x%p", i,
+                reinterpret_cast<void*>(lpArguments ? lpArguments[i] : 0));
+            if (lpArguments && lpArguments[i] && (lpArguments[i] >> 16) != 0) {
+                const auto s = ReadAsciiCStr(lpArguments[i]);
+                if (s.find("<") == std::string::npos)
+                    m += sprintf_s(buf + m, sizeof(buf) - m, "(\"%s\")", s.c_str());
+            }
+        }
+        std::ofstream output(logPath, std::ios::app);
+        output << buf << '\n';
+        output.flush();
+    }
+    if (originalRaiseException)
+        originalRaiseException(dwExceptionCode, dwExceptionFlags, nNumberOfArguments, lpArguments);
+}
+
+void TryApplyRaiseExceptionHook() {
+    static bool applied = false;
+    if (applied) return;
+    applied = true;
+    auto kernelbase = GetModuleHandleW(L"KERNELBASE.dll");
+    if (!kernelbase) kernelbase = LoadLibraryW(L"KERNELBASE.dll");
+    if (!kernelbase) return;
+    auto fn = reinterpret_cast<unsigned char*>(GetProcAddress(kernelbase, "RaiseException"));
+    if (!fn) return;
+    // Trampoline replaying stolen 5 bytes then jumping back to fn+5.
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 5);
+    const auto backRel = static_cast<int32_t>(
+        (reinterpret_cast<uintptr_t>(fn) + 5) - (reinterpret_cast<uintptr_t>(tramp) + 10));
+    tramp[5] = 0xE9;
+    memcpy(tramp + 6, &backRel, 4);
+    originalRaiseException = reinterpret_cast<RaiseExceptionFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookRaiseException);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        originalRaiseException = nullptr;
+        VirtualFree(tramp, 0, MEM_RELEASE);
+        return;
+    }
+    memcpy(fn, jump, 5);
+    VirtualProtect(fn, 5, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+    Log("RaiseException hook applied");
+}
+
+// UnhandledExceptionFilter receives the REAL EXCEPTION_POINTERS when an exception escapes
+// every handler. This is where bugly decides to dump - capture the true faulting address.
+using UnhandledFilterFn = LONG(WINAPI*)(EXCEPTION_POINTERS*);
+UnhandledFilterFn originalUnhandledExceptionFilter = nullptr;
+
+LONG WINAPI HookUnhandledExceptionFilter(EXCEPTION_POINTERS* info) {
+    char buf[512]{};
+    auto m = 0;
+    if (info && info->ExceptionRecord) {
+        const auto rec = info->ExceptionRecord;
+        m += sprintf_s(buf + m, sizeof(buf) - m, "UNHANDLED code=0x%08X addr=0x%p flags=%u nargs=%lu caller=%s",
+            static_cast<unsigned>(rec->ExceptionCode), rec->ExceptionAddress,
+            static_cast<unsigned>(rec->ExceptionFlags),
+            static_cast<unsigned long>(rec->NumberParameters),
+            DescribeCaller(rec->ExceptionAddress).c_str());
+        for (DWORD i = 0; i < rec->NumberParameters && i < 3; ++i) {
+            m += sprintf_s(buf + m, sizeof(buf) - m, " a%lu=0x%p", i,
+                reinterpret_cast<void*>(rec->ExceptionInformation[i]));
+            if (rec->ExceptionInformation[i] && (rec->ExceptionInformation[i] >> 16) != 0) {
+                const auto s = ReadAsciiCStr(rec->ExceptionInformation[i]);
+                if (s.find("<") == std::string::npos)
+                    m += sprintf_s(buf + m, sizeof(buf) - m, "(\"%s\")", s.c_str());
+            }
+        }
+    }
+    if (info && info->ContextRecord)
+        m += sprintf_s(buf + m, sizeof(buf) - m, " eip=0x%lX eax=0x%lX ebx=0x%lX ecx=0x%lX edx=0x%lX esi=0x%lX edi=0x%lX ebp=0x%lX esp=0x%lX",
+            info->ContextRecord->Eip, info->ContextRecord->Eax, info->ContextRecord->Ebx,
+            info->ContextRecord->Ecx, info->ContextRecord->Edx, info->ContextRecord->Esi,
+            info->ContextRecord->Edi, info->ContextRecord->Ebp, info->ContextRecord->Esp);
+    std::ofstream output(logPath, std::ios::app);
+    output << buf << '\n';
+    output.flush();
+    if (originalUnhandledExceptionFilter) return originalUnhandledExceptionFilter(info);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+void TryApplyUnhandledExceptionFilterHook() {
+    static bool applied = false;
+    if (applied) return;
+    applied = true;
+    auto kernelbase = GetModuleHandleW(L"KERNELBASE.dll");
+    if (!kernelbase) kernelbase = LoadLibraryW(L"KERNELBASE.dll");
+    if (!kernelbase) return;
+    auto fn = reinterpret_cast<unsigned char*>(GetProcAddress(kernelbase, "UnhandledExceptionFilter"));
+    if (!fn) return;
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 5);
+    const auto backRel = static_cast<int32_t>(
+        (reinterpret_cast<uintptr_t>(fn) + 5) - (reinterpret_cast<uintptr_t>(tramp) + 10));
+    tramp[5] = 0xE9;
+    memcpy(tramp + 6, &backRel, 4);
+    originalUnhandledExceptionFilter = reinterpret_cast<UnhandledFilterFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookUnhandledExceptionFilter);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        originalUnhandledExceptionFilter = nullptr;
+        VirtualFree(tramp, 0, MEM_RELEASE);
+        return;
+    }
+    memcpy(fn, jump, 5);
+    VirtualProtect(fn, 5, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+    Log("UnhandledExceptionFilter hook applied");
+}
+
+// TerminateProcess hook: capture deliberate termination (the game/SDK may end the process
+// without raising an exception). Logs the caller and exit code.
+using TerminateProcessFn = BOOL(WINAPI*)(HANDLE, UINT);
+TerminateProcessFn originalTerminateProcess = nullptr;
+
+BOOL WINAPI HookTerminateProcess(HANDLE hProcess, UINT uExitCode) {
+    char buf[256]{};
+    sprintf_s(buf, sizeof(buf), "TERMINATE exit=%u caller=%s",
+        static_cast<unsigned>(uExitCode), DescribeCaller(_ReturnAddress()).c_str());
+    std::ofstream output(logPath, std::ios::app);
+    output << buf << '\n';
+    output.flush();
+    if (originalTerminateProcess) return originalTerminateProcess(hProcess, uExitCode);
+    return FALSE;
+}
+
+void TryApplyTerminateProcessHook() {
+    static bool applied = false;
+    if (applied) return;
+    applied = true;
+    auto kernel32 = GetModuleHandleW(L"kernel32.dll");
+    if (!kernel32) return;
+    auto fn = reinterpret_cast<unsigned char*>(GetProcAddress(kernel32, "TerminateProcess"));
+    if (!fn) return;
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 5);
+    const auto backRel = static_cast<int32_t>(
+        (reinterpret_cast<uintptr_t>(fn) + 5) - (reinterpret_cast<uintptr_t>(tramp) + 10));
+    tramp[5] = 0xE9;
+    memcpy(tramp + 6, &backRel, 4);
+    originalTerminateProcess = reinterpret_cast<TerminateProcessFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookTerminateProcess);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        originalTerminateProcess = nullptr;
+        VirtualFree(tramp, 0, MEM_RELEASE);
+        return;
+    }
+    memcpy(fn, jump, 5);
+    VirtualProtect(fn, 5, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+    Log("TerminateProcess hook applied");
+}
+
+// KiUserExceptionDispatcher hook: ntdll entry for EVERY user-mode exception dispatch
+// (hardware faults and software raises). bugly loads later and registers its own VEH in
+// front of ours, so it swallows the real exception before our VEH runs; this hook sees the
+// true exception record regardless. Signature: void(DISPATCHER_CONTEXT*), args on stack:
+// [esp+4]=PEXCEPTION_RECORD, [esp+8]=PCONTEXT.
+using KiDispatchFn = void(__stdcall*)(void*);
+KiDispatchFn originalKiUserExceptionDispatcher = nullptr;
+
+void LogKiExceptionRecord(void* record);
+
+void __declspec(naked) HookKiUserExceptionDispatcherTrampoline() {
+    __asm {
+        push ebp
+        mov ebp, esp
+        pushad
+        // Entry stack: [esp]=PEXCEPTION_RECORD, [esp+4]=PCONTEXT.
+        // After push ebp: [ebp]=old ebp, [ebp+4]=PEXCEPTION_RECORD, [ebp+8]=PCONTEXT.
+        mov eax, dword ptr [ebp + 4]    // PEXCEPTION_RECORD
+        push eax
+        call LogKiExceptionRecord
+        add esp, 4
+        popad
+        pop ebp
+        jmp dword ptr [originalKiUserExceptionDispatcher]
+    }
+}
+
+void LogKiExceptionRecord(void* record) {
+    if (!record) return;
+    const auto rec = static_cast<EXCEPTION_RECORD*>(record);
+    const auto code = rec->ExceptionCode;
+    // Skip benign/constant exceptions.
+    if (code == 0x406D1388 || code == 0x40010006 || code == 0x40010007 ||
+        code == 0x80000003 || code == 0x80000004 || code == 0x40000001)
+        return;
+    const bool crash = code == 0xC0000005 || code == 0xC000001D || code == 0xC0000094 ||
+        code == 0xC00000FD || code == 0xC000000D || code == 0xC0000409 ||
+        code == 0xC0000374 || code == 0xC0000096 || code == 0xC0000026 ||
+        code == 0xC0000008 || code == 0xC0000006 || code == 0xE06D7363;
+    // After battle start log every dispatch (limit per code); before, only crash codes.
+    if (!gBattleStarted && !crash) return;
+    static volatile LONG dispCount[64] = {};
+    const auto bucket = (static_cast<unsigned>(code) >> 4) & 63;
+    if (InterlockedIncrement(&dispCount[bucket]) > 64) return;
+    char buf[512]{};
+    auto m = 0;
+    m += sprintf_s(buf + m, sizeof(buf) - m, "DISPATCH code=0x%08X addr=0x%p flags=%u nargs=%lu",
+        static_cast<unsigned>(code), rec->ExceptionAddress,
+        static_cast<unsigned>(rec->ExceptionFlags),
+        static_cast<unsigned long>(rec->NumberParameters));
+    for (DWORD i = 0; i < rec->NumberParameters && i < 3; ++i) {
+        m += sprintf_s(buf + m, sizeof(buf) - m, " a%lu=0x%p", i,
+            reinterpret_cast<void*>(rec->ExceptionInformation[i]));
+        if (rec->ExceptionInformation[i] && (rec->ExceptionInformation[i] >> 16) != 0) {
+            const auto s = ReadAsciiCStr(rec->ExceptionInformation[i]);
+            if (s.find("<") == std::string::npos)
+                m += sprintf_s(buf + m, sizeof(buf) - m, "(\"%s\")", s.c_str());
+        }
+    }
+    m += sprintf_s(buf + m, sizeof(buf) - m, " caller=%s", DescribeCaller(rec->ExceptionAddress).c_str());
+    std::ofstream output(logPath, std::ios::app);
+    output << buf << '\n';
+    output.flush();
+}
+
+void TryApplyKiUserExceptionDispatcherHook() {
+    static bool applied = false;
+    if (applied) return;
+    applied = true;
+    auto ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) return;
+    auto fn = reinterpret_cast<unsigned char*>(GetProcAddress(ntdll, "KiUserExceptionDispatcher"));
+    if (!fn) return;
+    auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+    if (!tramp) return;
+    memcpy(tramp, fn, 5);
+    const auto backRel = static_cast<int32_t>(
+        (reinterpret_cast<uintptr_t>(fn) + 5) - (reinterpret_cast<uintptr_t>(tramp) + 10));
+    tramp[5] = 0xE9;
+    memcpy(tramp + 6, &backRel, 4);
+    originalKiUserExceptionDispatcher = reinterpret_cast<KiDispatchFn>(tramp);
+    const auto target = reinterpret_cast<uintptr_t>(&HookKiUserExceptionDispatcherTrampoline);
+    const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+    unsigned char jump[5];
+    jump[0] = 0xE9;
+    memcpy(jump + 1, &rel, 4);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        originalKiUserExceptionDispatcher = nullptr;
+        VirtualFree(tramp, 0, MEM_RELEASE);
+        return;
+    }
+    memcpy(fn, jump, 5);
+    VirtualProtect(fn, 5, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+    Log("KiUserExceptionDispatcher hook applied");
+}
+
+// ExitProcess / NtTerminateProcess hooks: capture deliberate process exit (the crash does
+// NOT go through exception dispatch after battle starts - something calls ExitProcess or
+// terminates the process directly).
+using ExitProcessFn = void(WINAPI*)(UINT);
+void DumpStackTrace(const char* tag);
+using NtTerminateProcessFn = LONG(WINAPI*)(void*, LONG);
+ExitProcessFn originalExitProcess = nullptr;
+NtTerminateProcessFn originalNtTerminateProcess = nullptr;
+
+void WINAPI HookExitProcess(UINT uExitCode) {
+    char buf[256]{};
+    sprintf_s(buf, sizeof(buf), "EXITPROCESS code=%u caller=%s",
+        static_cast<unsigned>(uExitCode), DescribeCaller(_ReturnAddress()).c_str());
+    std::ofstream output(logPath, std::ios::app);
+    output << buf << '\n';
+    output.flush();
+    DumpStackTrace("EXITPROCESS_STACK");
+    // Raw stack scan from the current esp: _wassert is noreturn so CaptureStackBackTrace
+    // cannot see the real game frames. Scan a large window for any module return address.
+    {
+        uintptr_t esp = 0;
+        __asm { mov esp, esp } // placeholder; use _AddressOfReturnAddress
+        esp = reinterpret_cast<uintptr_t>(_AddressOfReturnAddress());
+        std::string trace;
+        auto found = 0;
+        for (DWORD off = 0; off < 0x20000 && found < 60; off += 4) {
+            const auto addr = ReadPtrSafe(esp + off);
+            const auto desc = DescribeCaller(reinterpret_cast<void*>(addr));
+            if (desc.find("unknown") == std::string::npos && desc.find("BlueOath.Payload") == std::string::npos) {
+                trace += " " + desc;
+                found++;
+            }
+        }
+        std::ofstream o2(logPath, std::ios::app);
+        o2 << "EXITPROCESS_RAWSTACK" << trace << '\n';
+        o2.flush();
+    }
+    if (originalExitProcess) originalExitProcess(uExitCode);
+}
+
+LONG WINAPI HookNtTerminateProcess(void* handle, LONG exitCode) {
+    char buf[256]{};
+    sprintf_s(buf, sizeof(buf), "NTTERMINATE handle=0x%p exit=%ld caller=%s",
+        handle, exitCode, DescribeCaller(_ReturnAddress()).c_str());
+    std::ofstream output(logPath, std::ios::app);
+    output << buf << '\n';
+    output.flush();
+    if (originalNtTerminateProcess) return originalNtTerminateProcess(handle, exitCode);
+    return 0xC0000022L;
+}
+
+void TryApplyExitHooks() {
+    static bool applied = false;
+    if (applied) return;
+    applied = true;
+    auto kernel32 = GetModuleHandleW(L"kernel32.dll");
+    if (kernel32) {
+        if (auto fn = reinterpret_cast<unsigned char*>(GetProcAddress(kernel32, "ExitProcess"))) {
+            auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+            if (tramp) {
+                memcpy(tramp, fn, 5);
+                const auto backRel = static_cast<int32_t>(
+                    (reinterpret_cast<uintptr_t>(fn) + 5) - (reinterpret_cast<uintptr_t>(tramp) + 10));
+                tramp[5] = 0xE9;
+                memcpy(tramp + 6, &backRel, 4);
+                originalExitProcess = reinterpret_cast<ExitProcessFn>(tramp);
+                const auto target = reinterpret_cast<uintptr_t>(&HookExitProcess);
+                const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+                unsigned char jump[5];
+                jump[0] = 0xE9;
+                memcpy(jump + 1, &rel, 4);
+                DWORD oldProtect = 0;
+                if (VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+                    memcpy(fn, jump, 5);
+                    VirtualProtect(fn, 5, oldProtect, &oldProtect);
+                    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+                    Log("ExitProcess hook applied");
+                } else { originalExitProcess = nullptr; VirtualFree(tramp, 0, MEM_RELEASE); }
+            }
+        }
+    }
+    auto ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll) {
+        if (auto fn = reinterpret_cast<unsigned char*>(GetProcAddress(ntdll, "NtTerminateProcess"))) {
+            auto tramp = static_cast<unsigned char*>(VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+            if (tramp) {
+                memcpy(tramp, fn, 5);
+                const auto backRel = static_cast<int32_t>(
+                    (reinterpret_cast<uintptr_t>(fn) + 5) - (reinterpret_cast<uintptr_t>(tramp) + 10));
+                tramp[5] = 0xE9;
+                memcpy(tramp + 6, &backRel, 4);
+                originalNtTerminateProcess = reinterpret_cast<NtTerminateProcessFn>(tramp);
+                const auto target = reinterpret_cast<uintptr_t>(&HookNtTerminateProcess);
+                const auto rel = static_cast<int32_t>(target - (reinterpret_cast<uintptr_t>(fn) + 5));
+                unsigned char jump[5];
+                jump[0] = 0xE9;
+                memcpy(jump + 1, &rel, 4);
+                DWORD oldProtect = 0;
+                if (VirtualProtect(fn, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+                    memcpy(fn, jump, 5);
+                    VirtualProtect(fn, 5, oldProtect, &oldProtect);
+                    FlushInstructionCache(GetCurrentProcess(), fn, 5);
+                    Log("NtTerminateProcess hook applied");
+                } else { originalNtTerminateProcess = nullptr; VirtualFree(tramp, 0, MEM_RELEASE); }
+            }
+        }
+    }
+}
+
+// abort / _wassert / _invalid_parameter_noinfo_noreturn hooks: the crash terminates via
+// ucrtbase!ExitProcess right after _wassert - an assertion or CRT fatal check failed.
+// Capture the caller chain to find which game code tripped it.
+using AbortFn = void(__cdecl*)(void);
+using WassertFn = void(__cdecl*)(const wchar_t*, const wchar_t*, unsigned);
+using InvParamNoRetFn = void(__cdecl*)(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t);
+AbortFn originalAbort = nullptr;
+WassertFn originalWassert = nullptr;
+InvParamNoRetFn originalInvParamNoRet = nullptr;
+
+void DumpStackTrace(const char* tag) {
+    unsigned long frames[32]{};
+    const auto nf = CaptureStackBackTrace(0, 32, reinterpret_cast<void**>(frames), nullptr);
+    std::string trace;
+    for (DWORD i = 0; i < nf; ++i) {
+        const auto desc = DescribeCaller(reinterpret_cast<void*>(frames[i]));
+        if (desc.find("unknown") == std::string::npos) { trace += " " + desc; }
+    }
+    std::ofstream output(logPath, std::ios::app);
+    output << tag << trace << '\n';
+    output.flush();
+}
+
+void __cdecl HookAbort() {
+    Log("ABORT called caller=" + DescribeCaller(_ReturnAddress()));
+    DumpStackTrace("ABORT_STACK");
+    // abort is noreturn; ALWAYS terminate so the process does not continue in a corrupted
+    // stack and cascade into access violations. Fall back to ExitProcess if trampoline lost.
+    if (originalAbort) originalAbort();
+    ExitProcess(3);
+}
+
+// _purecall hook: captures the FULL call chain at the pure-virtual call site (the purecall
+// handler runs with the real stack intact, unlike abort which is noreturn).
+void __cdecl HookPurecall() {
+    Log("PURECALL caller=" + DescribeCaller(_ReturnAddress()));
+    DumpStackTrace("PURECALL_STACK");
+    ExitProcess(3);
+}
+
+void __cdecl HookWassert(const wchar_t* expr, const wchar_t* file, unsigned line) {
+    char buf[512]{};
+    auto m = 0;
+    m += sprintf_s(buf + m, sizeof(buf) - m, "WASSERT line=%u caller=%s", line, DescribeCaller(_ReturnAddress()).c_str());
+    if (expr) {
+        char e[256]{};
+        WideCharToMultiByte(CP_UTF8, 0, expr, -1, e, sizeof(e), nullptr, nullptr);
+        m += sprintf_s(buf + m, sizeof(buf) - m, " expr=%s", e);
+    }
+    if (file) {
+        char f[256]{};
+        WideCharToMultiByte(CP_UTF8, 0, file, -1, f, sizeof(f), nullptr, nullptr);
+        m += sprintf_s(buf + m, sizeof(buf) - m, " file=%s", f);
+    }
+    std::ofstream output(logPath, std::ios::app);
+    output << buf << '\n';
+    output.flush();
+    DumpStackTrace("WASSERT_STACK");
+    if (originalWassert) originalWassert(expr, file, line);
+}
+
+void __cdecl HookInvParamNoRet(const wchar_t* expr, const wchar_t* func, const wchar_t* file, unsigned line, uintptr_t res) {
+    char buf[512]{};
+    auto m = 0;
+    m += sprintf_s(buf + m, sizeof(buf) - m, "INVPPARAM_NORET line=%u caller=%s", line, DescribeCaller(_ReturnAddress()).c_str());
+    if (func) {
+        char e[256]{};
+        WideCharToMultiByte(CP_UTF8, 0, func, -1, e, sizeof(e), nullptr, nullptr);
+        m += sprintf_s(buf + m, sizeof(buf) - m, " func=%s", e);
+    }
+    std::ofstream output(logPath, std::ios::app);
+    output << buf << '\n';
+    output.flush();
+    DumpStackTrace("INVPPARAM_STACK");
+    if (originalInvParamNoRet) originalInvParamNoRet(expr, func, file, line, res);
+}
+
+void TryApplyCrtFatalHooks() {
+    static bool applied = false;
+    if (applied) return;
+    applied = true;
+    // Hook BOTH the system ucrtbase and the client-private copy (the game loads a bundled
+    // ucrtbase.dll; the crash may come from either instance).
+    std::vector<HMODULE> crts;
+    HMODULE exe = GetModuleHandleW(nullptr);
+    if (exe) {
+        wchar_t exePath[MAX_PATH]{};
+        GetModuleFileNameW(exe, exePath, MAX_PATH);
+        auto priv = std::filesystem::path(exePath).parent_path() / L"ucrtbase.dll";
+        auto h = LoadLibraryW(priv.c_str());
+        if (h) {
+            crts.push_back(h);
+            Log("CrtFatalHooks: private ucrtbase loaded");
+        }
+    }
+    auto sys = GetModuleHandleW(L"ucrtbase.dll");
+    if (sys) crts.push_back(sys);
+    for (auto ucrt : crts) {
+        if (!originalAbort)
+            InstallCrtExportHook(ucrt, "abort", reinterpret_cast<void*>(&HookAbort),
+                reinterpret_cast<void**>(&originalAbort));
+        if (!originalWassert)
+            InstallCrtExportHook(ucrt, "_wassert", reinterpret_cast<void*>(&HookWassert),
+                reinterpret_cast<void**>(&originalWassert));
+        if (!originalInvParamNoRet)
+            InstallCrtExportHook(ucrt, "_invalid_parameter_noinfo_noreturn",
+                reinterpret_cast<void*>(&HookInvParamNoRet),
+                reinterpret_cast<void**>(&originalInvParamNoRet));
+    }
+    // VCRUNTIME140!__purecall: pure-virtual call -> abort. Hook it directly to capture the
+    // FULL caller chain before abort unwinds the stack (abort itself is noreturn and the
+    // stack trace there only shows our payload).
+    auto vcruntime = GetModuleHandleW(L"VCRUNTIME140.dll");
+    if (vcruntime) {
+        InstallCrtExportHook(vcruntime, "_purecall", reinterpret_cast<void*>(&HookPurecall),
+            reinterpret_cast<void**>(nullptr));
+    }
+    Log("CrtFatalHooks configured (" + std::to_string(crts.size()) + " ucrtbase copies)");
+}
+
 void InitializeHooks(HMODULE module) {
     wchar_t modulePath[MAX_PATH]{};
     GetModuleFileNameW(module, modulePath, MAX_PATH);
     const auto directory = std::filesystem::path(modulePath).parent_path();
     logPath = directory / L"BlueOath.Payload.log";
+
+    // Vectored exception handler + ExitProcess/NtTerminateProcess hooks re-enabled to capture
+    // the EXACT crash site during battle frame init / scene teardown. The raw stack scan at
+    // ExitProcess reveals the real caller chain (CaptureStackBackTrace is unreliable here).
+    AddVectoredExceptionHandler(1, &CrashVectoredHandler);
+    TryApplyExitHooks();
+    TryApplyInvalidParameterHook();
+    Log("diagnostic crash hooks enabled");
+
     const auto config = (directory / L"bootstrap.ini").wstring();
     redirectEnabled = GetPrivateProfileIntW(L"redirect", L"enabled", 0, config.c_str()) != 0;
     redirectPort = static_cast<unsigned short>(GetPrivateProfileIntW(L"redirect", L"port", 0, config.c_str()));
     httpRedirectPort = static_cast<unsigned short>(GetPrivateProfileIntW(L"redirect", L"http_port", 0, config.c_str()));
     allowUntrusted = GetPrivateProfileIntW(L"trust", L"allow_untrusted", 0, config.c_str()) != 0;
+    captureBugly = GetPrivateProfileIntW(L"redirect", L"capture_bugly", 0, config.c_str()) != 0;
+    capturePort = static_cast<unsigned short>(GetPrivateProfileIntW(L"redirect", L"capture_port", 9887, config.c_str()));
 
     wchar_t trustPath[MAX_PATH]{};
     GetPrivateProfileStringW(L"trust", L"certificate", L"", trustPath, MAX_PATH, config.c_str());
@@ -2146,6 +5050,7 @@ void InitializeHooks(HMODULE module) {
         }
         TryApplyUnityTlsPatch();
         TryApplySdkTlsPatches();
+        TryApplyNewSdkReportHooks();
         TryApplyPageOpenHook();
         TryApplyBoxContentHook();
         TryApplyOpenCustomWebViewHook();
@@ -2156,10 +5061,35 @@ void InitializeHooks(HMODULE module) {
         TryApplyNetSocketReceivedPacketHook();
         TryApplyStageGotoHook();
         TryApplyGameSceneChangeHook();
+        TryApplyMessageHelperUnpackHook();
+        TryApplyGetQucikConditionsHook();
+        TryApplyCxxThrowHook();
+        TryApplyRaiseHelperHook();
+        TryApplyConfigLookupHook();
+        TryApplyCtorRaiseHook();
+        TryApplyAddResHook();
+        TryApplySceneLoadStartHook();
+        TryApplySceneLoadResolveHook();
+        TryApplyStartLoadHook();
+        TryApplyStartLoadPriorHook();
+        TryApplyChangeSceneHook();
+        TryApplySceneLookupHook();
+        TryApplyDelayGotoHook();
+        TryApplyOnStageStartFinHook();
+        TryApplyPVEStartDataCtorHook();
+        TryApplyInitBattleHook();
+        TryApplyStageBeginHook();
+        TryApplyLoadingTickHook();
+        TryApplyInitBattleFrameHook();
+        TryApplyCreateBattleFrameHook();
+        TryApplyShipPBConvertHook();
         TryApplyUIShipProxyLoadModelHook();
         TryApplyUIShipProxyCtorHook();
         TryApplyGetJsonDataHook();
         TryApplyGetAllHook();
+        TryApplyGetJsonDataGroupHook();
+        TryApplyGetJsonStrByBytesHook();
+        TryApplyAssetLoadAsyncHook();
         TryApplyCreatePartHook();
         TryApplyGetRedDotListHook();
         TryApplyPlayMusicHook();
@@ -2172,6 +5102,7 @@ void InitializeHooks(HMODULE module) {
         TryApplyLogExceptionHook();
         TryApplyLogError2Hook();
         TryApplyLogException2Hook();
+        TryApplyInternalLogExceptionHook();
         TryApplyGetComponentsNeedHook();
         TryApplyLuaPcallKHook();
         TryApplySdkLoginHook();

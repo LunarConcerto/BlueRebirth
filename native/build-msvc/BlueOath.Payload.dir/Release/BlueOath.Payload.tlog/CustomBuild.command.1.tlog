@@ -1,0 +1,10 @@
+^E:\逆向工程\苍蓝誓约项目\NATIVE\CMAKELISTS.TXT
+setlocal
+C:\Users\LunarConcerto\scoop\apps\cmake\current\bin\cmake.exe -SE:/逆向工程/苍蓝誓约项目/native -BE:/逆向工程/苍蓝誓约项目/native/build-msvc --check-stamp-file E:/逆向工程/苍蓝誓约项目/native/build-msvc/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

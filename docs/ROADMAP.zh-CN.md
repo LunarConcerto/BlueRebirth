@@ -229,7 +229,7 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 
 | # | 模块 | 文件数 | 关键 proto 消息 | 依赖 |
 |---|------|--------|----------------|------|
-| 1.1 | **编队 (Fleet)** | 9 | `FleetInfo` 推送 | 第二梯队完成 |
+| 1.1 | **编队 (Fleet)** | 9 | `FleetInfo` 推送 | ✅ 已完成 |
 | 1.2 | **关卡 (Copy)** | 29 | `CopyInfo`，`CopyRecord`，敌方数据 | 编队完成 |
 | 1.3 | **战斗 (Battle)** | 4 (工具) | `BattleParams`，`InitActorInfo`，`InitSkillInfo` | 编队+关卡完成 |
 
@@ -652,3 +652,143 @@ user.UserLogin 响应 → LuaEvent.LoginOk → LoginStage:_LoginOk
 1. **统一档案更新模式**：`BuildUserProfileUpdateAsync(field)` 统一处理所有档案更新，`DecodeVarintField`/`DecodeStringField` 按字段号解码，灵活可扩展。
 2. **`NewHeadUnlockedList` 动态生成**：从船坞 `Heroes` 推导 `sf_id = (TemplateId - 1) / 10`，去重后推送。
 3. **`MedalAcquiredTime` 不编码**：protobuf `default_value={}`，不编码时客户端解出空表，`GetMedalIdTab` 返回空数组。
+
+---
+
+## 会话记录：2026-08-19 — 舰娘升级 + HP 修复
+
+### 核心成果
+
+**舰娘 HP 修复为满血，升级系统打通**。GM 商店获取强化素材 → 舰娘详情页使用素材升级 → 经验条/等级正确更新。
+
+### HP 修复
+
+- `HP_COEFFICIENT = 10000000000`（100亿），`CurHp` 需等于此值才满血。
+- `Hero.CurHp` 类型从 `int` 改为 `long`（10亿超出 int 范围）。
+- 默认秘书舰和抽卡新舰娘 `CurHp` 均设为 `HpCoefficient`。
+
+### 升级系统
+
+- `hero.AddExp`：`THeroAddExp{HeroId(1), ItemList(2, repeated TItem{Id=2, Num=3})}`
+- 服务端从 `config_ship_exp_item.db` 加载每件素材 exp，从 `config_ship_levelup.db` 加载每级所需 exp
+- 扣除仓库素材 → 计算总经验 → 循环升级 → 落盘 → 返回 `THeroAddExp` → 推送 hero + bag
+
+### 改动文件
+
+- `PlayerEntities.cs`：`Hero.CurHp` 改为 `long`，新增 `HpCoefficient` 常量
+- `PlayerDataCodec.cs`：`HeroGrid.CurHp` 改为 `long`
+- `GameLoginMessageHandler.cs`：`ShipLevelupLoader`（SQLite 读 config）、`BuildAddExpRetAsync`、`DecodeHeroAddExp`、`EncodeHeroAddExpRet`
+- `GameLoginSession.cs`：`hero.AddExp` 后推送 hero + bag
+
+### 关键知识点
+
+1. **`CurHp` 满血值 = 100 亿**：`shiplogic.lua` 中 `HP_COEFFICIENT = 10000000000`，`GetHeroHp` 计算 `CurHp / HP_COEFFICIENT * maxHp`。`CurHp` 需用 `long` 类型（超出 int32 范围）。
+2. **升级素材从 config_ship_exp_item.db 读取**：`ShipLevelupLoader` 启动时读取 SQLite 配置表，按 itemId 获取 exp 值。
+
+---
+
+## 会话记录：2026-08-19 — 编队系统打通
+
+### 核心成果
+
+**编队页面无报错打开**。修复 `tactic.GetHerosTactic` 协议未处理导致的 `exHeroInfo` nil 崩溃，支持编队数据读写。
+
+### 根因
+
+- `fleetlogic.lua:612`（`GetFleetHeroId`）：`if #fleetInfo[i].exHeroInfo then` — `exHeroInfo` 为 nil 时 `#nil` 崩溃
+- 连锁：服务器未处理 `tactic.GetHerosTactic` → `FleetData:SetData` 从未被调用 → `FleetInfo[FleetType.Normal]` 为 nil → `GetFleetData()` 回退到 `GetGuildWarFleetData()` → 该回退创建的编队无 `exHeroInfo` 字段
+- `FleetData:SetData` 本身有守卫 `if info.exHeroInfo == nil then info.exHeroInfo = {} end`，但守卫从未被执行
+
+### 协议
+
+- `TSelfTactis{tactics(repeated TTactic), MaxPower, MinPower, IsSkip}`
+- `TTactic{tacticName(1), heroInfo(2,repeated), modeId(3), strategyId(4), formationId(5), type(6), exHeroInfo(7,repeated)}`
+- 登录时推送 `tactic.GetHerosTactic` 初始化 5 个空编队（modeId 1-5, type=1=Normal）
+- 客户端发送 `tactic.GetHerosTactic`（nil arg）请求编队数据
+- 客户端发送 `tactic.SetHerosTactic`（TSelfTactis arg）保存编队修改
+
+### 改动文件
+
+- `PlayerEntities.cs`：新增 `FleetEntry`、`PlayerFleet` 实体；`PlayerAccount` 新增 `Fleet` 字段；`PlayerAccountFactory.DefaultFleet()` 创建 5 个空编队
+- `GameLoginMessageHandler.cs`：
+  - `EncodeFleet()` — 编码 TSelfTactis protobuf
+  - `DecodeSetHerosTactic()` — 解码编队修改请求
+  - `BuildGetHerosTacticAsync()` — 返回编队数据
+  - `BuildSetHerosTacticAsync()` — 保存编队并落盘
+  - `BuildSyncPushesAsync` — 登录时推送编队数据
+
+### 关键知识点
+
+1. **编队数据是推送驱动的**：客户端打开编队页面时不发送请求，从 `Data.fleetData:GetFleetData()` 读缓存，必须在登录时推送 `tactic.GetHerosTactic` 完成初始化。
+2. **`exHeroInfo` 是潜艇位**：每个编队有 6 个主力位（heroInfo）和 3 个潜艇位（exHeroInfo），即使为空也必须初始化为 `{}`。
+
+---
+
+## 会话记录：2026-08-20 — WPF 图形化启动器
+
+### 核心成果
+
+**创建了 WPF 图形化启动器 `BlueOath.Launcher.Wpf`，替代 `run-game.bat` 和 `start-client.bat` 脚本。**
+
+### 新增项目
+
+`src/BlueOath.Launcher.Wpf/` — .NET 8.0 WPF 项目，`BlueOath.Local.sln` 第 10 个项目。
+
+### 功能清单
+
+| 功能 | 实现 |
+|------|------|
+| 启动页 | 左侧公告面板（数据驱动 `announcements.json`）+ 右侧大号启动按钮 + 小号调试启动按钮 |
+| 正常启动 | 完整复制 `debug-game.ps1` 流程：WMI 清理残留进程 → TLS 证书生成 → 服务器启动 → 代理启动 → 注入游戏 |
+| 调试启动 | 跳过服务器启动，仅启动代理 + 客户端，连接已运行服务器（默认端口 7080） |
+| 进程守护 | 实时显示服务器/代理/游戏客户端进程状态（绿点/红点，PID） |
+| 日志控制台 | 4 个子分页：服务器 / 代理 / 客户端 / 系统，实时输出各进程 stdout/stderr |
+| 自动滚动 | 日志新增时自动 `ScrollIntoView` 到最新行 |
+| 进程清理 | 使用 `System.Management` WMI 查询 `Win32_Process` 命令行，精确匹配 `BlueOath.Server.dll` 并强杀 |
+| 嵌入图标 | 游戏原始图标 `uipic_ui_common_im_icon_100.png` → `app.ico` 嵌入 EXE 和窗口标题栏 |
+
+### 技术架构
+
+| 层 | 组件 |
+|----|------|
+| Models | `Announcement`、`LogEntry`、`LaunchConfig` |
+| ViewModels | `MainViewModel`（分页管理）、`LaunchViewModel`（启动逻辑）、`GuardianViewModel`（进程守护+日志） |
+| Views | `MainWindow`（导航栏+内容区）、`LaunchPage`、`GuardianPage` |
+| Services | `ProcessManager`（核心：进程生命周期、日志重定向、payload 文件监控）、`AnnouncementService` |
+| Styles | `App.xaml` 集中定义所有颜色/画笔/按钮/文本样式 |
+
+### 关键踩坑
+
+1. **`ResourceDictionary.MergedDictionaries` 路径解析失败**：WPF 编译后 `Source` 相对路径在运行时无法解析，改为将所有样式资源直接定义在 `App.xaml` 的 `Application.Resources` 中。
+
+2. **`CommandParameter` 类型不匹配**：XAML 中 `CommandParameter="0"` 传递的是字符串，`RelayCommand<int>` 的 `parameter is int` 始终为 false，命令从未执行。改为 `RelayCommand<object>` + `Convert.ToInt32(param)`。
+
+3. **`_selectedPageIndex` 默认值 0 导致首帧不渲染**：`SetProperty` 检测到初始值等于目标值时返回 false，`CurrentPage` 从未被赋值。初始化为 -1 解决。
+
+4. **stdout/stderr 顺序读取死锁**：`ReadToEndAsync()` 顺序调用会在进程 stderr 缓冲区满时死锁。改为 `Task.WhenAll` 并行读取。
+
+5. **`Dispatcher.Invoke` 导致日志卡顿**：所有日志添加改为 `Dispatcher.BeginInvoke(..., DispatcherPriority.Background)`，UI 更新自动合并批处理。
+
+6. **`ListBox` 虚拟化 + 回收模式**：启用 `VirtualizingPanel.IsVirtualizing="True"` + `VirtualizationMode="Recycling"` + `IsDeferredScrollingEnabled="True"`，仅渲染可见行，万级日志不卡顿。
+
+7. **TabControl 多余 Label**：`TabControl` 默认渲染选中项的 `ToString()`。设置 `ContentTemplate="{x:Null}"` 消除。
+
+### 文件索引
+
+| 文件 | 作用 |
+|------|------|
+| `BlueOath.Launcher.Wpf.csproj` | 项目文件（`net8.0-windows`，`UseWPF`，`System.Management`） |
+| `App.xaml` / `App.xaml.cs` | 应用入口，`StartupUri="MainWindow.xaml"`，集中定义所有样式资源 |
+| `MainWindow.xaml` / `MainWindow.xaml.cs` | 主窗口，导航栏 + 内容区，`FindRoot()` 定位项目根目录 |
+| `Views/LaunchPage.xaml` / `.cs` | 启动页（公告面板 + 启动按钮） |
+| `Views/GuardianPage.xaml` / `.cs` | 守护页（进程状态 + 日志控制台 + 自动滚动） |
+| `ViewModels/MainViewModel.cs` | 分页管理，`RelayCommand<T>` 通用命令 |
+| `ViewModels/LaunchViewModel.cs` | 启动逻辑，状态文本映射 |
+| `ViewModels/GuardianViewModel.cs` | 进程守护，日志分页管理 |
+| `Services/ProcessManager.cs` | 核心引擎：5 阶段启动流程，WMI 清理，进程输出重定向，payload 日志文件监控 |
+| `Services/AnnouncementService.cs` | 从嵌入资源加载公告 JSON |
+| `Resources/announcements.json` | 公告数据（4 条中文公告） |
+| `Resources/app.ico` | 游戏图标（PNG→ICO 转换） |
+| `Converters/ValueConverters.cs` | `BooleanToVisibilityConverter`、`BooleanInvertConverter` |
+| `Views/Styles/*.xaml` | 样式参考文件（已不加载，实际样式在 App.xaml） |
+| `BlueOath.Launcher.lnk` | 项目根目录快捷方式，双击启动 |

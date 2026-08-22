@@ -100,13 +100,13 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock Text="苍蓝誓约"
+                    <TextBlock Text="苍蓝誓约重生版"
                                Style="{StaticResource TitleTextStyle}"
                                FontSize="48"
                                HorizontalAlignment="Center"
                                Foreground="{StaticResource PrimaryBrush}" />
 
-                    <TextBlock Text="本地离线启动器"
+                    <TextBlock Text="唯一指定QQ群：701619932"
                                Style="{StaticResource SubtitleTextStyle}"
                                FontSize="20"
                                HorizontalAlignment="Center"

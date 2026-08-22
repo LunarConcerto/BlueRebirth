@@ -21,6 +21,14 @@ Copy-Item -LiteralPath (Join-Path $root 'native\bootstrap.ini') -Destination (Jo
 $config = Join-Path $native 'bootstrap.ini'
 $enabled = if ($Redirect) { 1 } else { 0 }
 $configLines = @('[redirect]',"enabled=$enabled","port=$Port","http_port=$HttpPort")
+$srcConfig = Join-Path $root 'native\bootstrap.ini'
+if (Test-Path -LiteralPath $srcConfig) {
+  $srcLines = @(Get-Content -LiteralPath $srcConfig -Encoding Unicode)
+  $captureBugly = ($srcLines | Where-Object { $_ -match '^\s*capture_bugly\s*=\s*(\d+)' } | ForEach-Object { $Matches[1] } | Select-Object -First 1)
+  $capturePort = ($srcLines | Where-Object { $_ -match '^\s*capture_port\s*=\s*(\d+)' } | ForEach-Object { $Matches[1] } | Select-Object -First 1)
+  if ($captureBugly) { $configLines += "capture_bugly=$captureBugly" }
+  if ($capturePort) { $configLines += "capture_port=$capturePort" }
+}
 if ($TrustCertificate) {
   $resolvedTrust = (Resolve-Path -LiteralPath $TrustCertificate).Path
   $configLines += @('[trust]',"certificate=$resolvedTrust")

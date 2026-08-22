@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:BlueOath.Launcher.Wpf.ViewModels"
         xmlns:views="clr-namespace:BlueOath.Launcher.Wpf.Views"
-        Title="BlueOath "
+        Title="BlueOath Rebirth 启动器"
+        Icon="Resources/app.ico"
         Width="1100"
         Height="720"
         MinWidth="900"
@@ -32,8 +33,8 @@
             <Grid>
                 <StackPanel Orientation="Horizontal"
                             VerticalAlignment="Center">
-                    <TextBlock Text="苍蓝誓约"
-                               FontSize="16"
+                    <TextBlock Text="BlueOath Rebirth"
+                               FontSize="14"
                                FontWeight="Bold"
                                Foreground="{StaticResource PrimaryBrush}"
                                VerticalAlignment="Center"

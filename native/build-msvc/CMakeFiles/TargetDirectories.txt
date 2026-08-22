@@ -1,0 +1,4 @@
+E:/逆向工程/苍蓝誓约项目/native/build-msvc/CMakeFiles/BlueOath.Injector.dir
+E:/逆向工程/苍蓝誓约项目/native/build-msvc/CMakeFiles/BlueOath.Payload.dir
+E:/逆向工程/苍蓝誓约项目/native/build-msvc/CMakeFiles/ALL_BUILD.dir
+E:/逆向工程/苍蓝誓约项目/native/build-msvc/CMakeFiles/ZERO_CHECK.dir

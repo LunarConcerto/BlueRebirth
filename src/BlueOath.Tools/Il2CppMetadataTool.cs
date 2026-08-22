@@ -106,7 +106,8 @@ static class Il2CppMetadataTool
             "C2SProtocol.Pack", "C2SProtocol.Unpack", "S2CProtocol.Pack", "S2CProtocol.Unpack",
             "SocketService.Login", "BabelTimeSDKManager.GetServiceList",
             "BabelTimeSDKManager.SelectService", "BabelTimeSDKManager.GetLastServiceList",
-            "BabelTimeSDKManager.CallWebFunction", "BabelTimeSDKManager.CallUniversalWebFunction"
+            "BabelTimeSDKManager.CallWebFunction", "BabelTimeSDKManager.CallUniversalWebFunction",
+            "NetLogic.RegisterMessageHandler", "Launcher.__InitNet", "Launcher.Init",
         };
         foreach (var method in indexed.Select(x => x.Method).Where(x =>
                      x.TypeName is "BabelTimeSDKManager" or "SDKConfigGetter" or "PlatformWrapper"))
@@ -123,7 +124,7 @@ static class Il2CppMetadataTool
                     checked((int)(x.Va - image.ImageBase)), length, Convert.ToHexString(bytes),
                     ScanControlFlow(image, x.Va, bytes, methodsByVa));
             }).ToList();
-        var registerVa = indexed.FirstOrDefault(x => x.Method.TypeName == "LogicSocketClient" &&
+        var registerVa = indexed.FirstOrDefault(x => x.Method.TypeName == "NetLogic" &&
             x.Method.Name == "RegisterMessageHandler")?.Va ?? 0;
         return new
         {

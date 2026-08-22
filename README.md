@@ -53,7 +53,53 @@ dotnet run --project .\src\BlueOath.Server\BlueOath.Server.csproj -- --port=0 --
 
 服务只监听 `127.0.0.1`，启动时输出 JSON 健康信息和实际端口。协议当前使用长度前缀 JSON 作为可测试的临时 wire format；`ProtocolProfile` 为替换为真实 protobuf/KCP 适配器预留边界。
 
-## 客户端启动
+## WPF 图形化启动器
+
+`src/BlueOath.Launcher.Wpf` 提供了一个可视化的 WPF 启动器，替代原有的 `run-game.bat` 和 `start-client.bat` 脚本。
+
+### 快速启动
+
+双击项目根目录下的 `BlueOath.Launcher.lnk` 快捷方式，或运行：
+
+```powershell
+dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
+```
+
+### 功能
+
+| 功能 | 说明 |
+|------|------|
+| 启动页 | 公告面板（数据驱动 `announcements.json`）+ 启动按钮 |
+| 正常启动 | 完整流程：清理残留进程 → TLS 证书 → 服务器 → 代理 → 注入游戏 |
+| 调试启动 | 仅启动代理 + 客户端，连接已运行的服务器（默认端口 7080） |
+| 进程守护 | 实时显示服务器/代理/游戏客户端进程状态（绿点/红点） |
+| 日志控制台 | 4 个子分页：服务器 / 代理 / 客户端 / 系统 |
+| 自动滚动 | 日志新增时自动滚动到最新行 |
+| WMI 进程清理 | 通过 WMI 查询命令行，精确匹配并清理残留的 `BlueOath.Server.dll` 进程 |
+| 游戏图标 | 嵌入游戏原始图标 `uipic_ui_common_im_icon_100.png` |
+
+### 架构
+
+```
+src/BlueOath.Launcher.Wpf/
+├── Models/          # Announcement, LogEntry, LaunchConfig
+├── ViewModels/      # MainViewModel, LaunchViewModel, GuardianViewModel
+├── Views/           # MainWindow, LaunchPage, GuardianPage + Styles
+├── Services/        # ProcessManager (核心), AnnouncementService
+├── Converters/      # BooleanToVisibility, BooleanInvert
+└── Resources/       # announcements.json, app.ico
+```
+
+样式集中定义在 `App.xaml` 的 `Application.Resources` 中，后续替换样式只需编辑该文件。
+
+### 技术栈
+
+- **WPF on .NET 8.0**（`net8.0-windows`）
+- **MVVM** 模式（手写基类，无额外 NuGet 依赖）
+- `System.Management`（WMI 进程清理）
+- `System.Diagnostics.Process`（进程生命周期管理）
+
+## 客户端启动（控制台）
 
 ```powershell
 dotnet run --project .\src\BlueOath.Launcher\BlueOath.Launcher.csproj -- --region=jp --original

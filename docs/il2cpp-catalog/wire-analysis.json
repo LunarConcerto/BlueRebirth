@@ -57,6 +57,239 @@
         "ControlFlow": []
       },
       {
+        "TypeName": "Launcher",
+        "Name": "Init",
+        "Rva": 1395152,
+        "Length": 416,
+        "Hex": "803DF64CD411007515FF355CA18411E8BC864B0183C404C605F64CD411018B0D306FD311538B1D2C45D211568B415C57837804007533FF35C40CD3118B353094D111E8F9E34E016A00568BF86A0057E8DCDEFDFF8B0D306FD31183C4148B495C8979048B0D306FD3118B415C6A00FF70046A00536A00E835E614008B0D306FD31183C4148B1D5845D2118B415C837808007533FF35C40CD3118B354494D111E89CE34E016A00568BF86A0057E87FDEFDFF8B0D306FD31183C4148B495C8979088B0D306FD3118B415C6A00FF70086A00536A00E8D8E514008B0D306FD31183C4148B1D7445D2118B415C83780C007533FF35C40CD3118B355C94D111E83FE34E016A00568BF86A0057E822DEFDFF8B0D306FD31183C4148B495C89790C8B0D306FD3118B415C6A00FF700C6A00536A00E87BE514008B0D306FD31183C4148B1D8045D2118B415C837810007533FF35C40CD3118B358C94D111E8E2E24E016A00568BF86A0057E8C5DDFDFF8B0D306FD31183C4148B495C8979108B0D306FD3118B415C6A00FF70106A00536A00E81EE5140083C4145F5E5BC3CCCCCCCCCCCCCC",
+        "ControlFlow": [
+          {
+            "Kind": "call",
+            "SourceRva": 1395167,
+            "TargetRva": 23122080,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "803DF64CD411007515FF355CA18411E8BC864B01"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395218,
+            "TargetRva": 23342608,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "4CD411018B0D306FD311538B1D2C45D211568B415C57837804007533FF35C40CD3118B353094D111E8F9E34E01"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395231,
+            "TargetRva": 1255680,
+            "Targets": [
+              "Swapper..ctor",
+              "AsyncCallback..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "ReadDelegate..ctor",
+              "WriteDelegate..ctor",
+              "AddEventAdapter..ctor",
+              "GetterAdapter..ctor",
+              "RenewalDelegate..ctor",
+              "CallbackHandler..ctor",
+              "PrimalityTest..ctor",
+              "MemberFilter..ctor",
+              "ModuleResolveEventHandler..ctor",
+              "TypeFilter..ctor",
+              "CrossContextDelegate..ctor",
+              "HeaderHandler..ctor",
+              "ParameterizedThreadStart..ctor",
+              "SendOrPostCallback..ctor",
+              "ThreadStart..ctor",
+              "TimerCallback..ctor"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "2C45D211568B415C57837804007533FF35C40CD3118B353094D111E8F9E34E016A00568BF86A0057E8DCDEFDFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395270,
+            "TargetRva": 2764928,
+            "Targets": [
+              "NetLogic.RegisterMessageHandler"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "57E8DCDEFDFF8B0D306FD31183C4148B495C8979048B0D306FD3118B415C6A00FF70046A00536A00E835E61400"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395311,
+            "TargetRva": 23342608,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "35E614008B0D306FD31183C4148B1D5845D2118B415C837808007533FF35C40CD3118B354494D111E89CE34E01"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395324,
+            "TargetRva": 1255680,
+            "Targets": [
+              "Swapper..ctor",
+              "AsyncCallback..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "ReadDelegate..ctor",
+              "WriteDelegate..ctor",
+              "AddEventAdapter..ctor",
+              "GetterAdapter..ctor",
+              "RenewalDelegate..ctor",
+              "CallbackHandler..ctor",
+              "PrimalityTest..ctor",
+              "MemberFilter..ctor",
+              "ModuleResolveEventHandler..ctor",
+              "TypeFilter..ctor",
+              "CrossContextDelegate..ctor",
+              "HeaderHandler..ctor",
+              "ParameterizedThreadStart..ctor",
+              "SendOrPostCallback..ctor",
+              "ThreadStart..ctor",
+              "TimerCallback..ctor"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "8B1D5845D2118B415C837808007533FF35C40CD3118B354494D111E89CE34E016A00568BF86A0057E87FDEFDFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395363,
+            "TargetRva": 2764928,
+            "Targets": [
+              "NetLogic.RegisterMessageHandler"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "57E87FDEFDFF8B0D306FD31183C4148B495C8979088B0D306FD3118B415C6A00FF70086A00536A00E8D8E51400"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395404,
+            "TargetRva": 23342608,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "D8E514008B0D306FD31183C4148B1D7445D2118B415C83780C007533FF35C40CD3118B355C94D111E83FE34E01"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395417,
+            "TargetRva": 1255680,
+            "Targets": [
+              "Swapper..ctor",
+              "AsyncCallback..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "ReadDelegate..ctor",
+              "WriteDelegate..ctor",
+              "AddEventAdapter..ctor",
+              "GetterAdapter..ctor",
+              "RenewalDelegate..ctor",
+              "CallbackHandler..ctor",
+              "PrimalityTest..ctor",
+              "MemberFilter..ctor",
+              "ModuleResolveEventHandler..ctor",
+              "TypeFilter..ctor",
+              "CrossContextDelegate..ctor",
+              "HeaderHandler..ctor",
+              "ParameterizedThreadStart..ctor",
+              "SendOrPostCallback..ctor",
+              "ThreadStart..ctor",
+              "TimerCallback..ctor"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "8B1D7445D2118B415C83780C007533FF35C40CD3118B355C94D111E83FE34E016A00568BF86A0057E822DEFDFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395456,
+            "TargetRva": 2764928,
+            "Targets": [
+              "NetLogic.RegisterMessageHandler"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "57E822DEFDFF8B0D306FD31183C4148B495C89790C8B0D306FD3118B415C6A00FF700C6A00536A00E87BE51400"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395497,
+            "TargetRva": 23342608,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "7BE514008B0D306FD31183C4148B1D8045D2118B415C837810007533FF35C40CD3118B358C94D111E8E2E24E01"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395510,
+            "TargetRva": 1255680,
+            "Targets": [
+              "Swapper..ctor",
+              "AsyncCallback..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "ReadDelegate..ctor",
+              "WriteDelegate..ctor",
+              "AddEventAdapter..ctor",
+              "GetterAdapter..ctor",
+              "RenewalDelegate..ctor",
+              "CallbackHandler..ctor",
+              "PrimalityTest..ctor",
+              "MemberFilter..ctor",
+              "ModuleResolveEventHandler..ctor",
+              "TypeFilter..ctor",
+              "CrossContextDelegate..ctor",
+              "HeaderHandler..ctor",
+              "ParameterizedThreadStart..ctor",
+              "SendOrPostCallback..ctor",
+              "ThreadStart..ctor",
+              "TimerCallback..ctor"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "8B1D8045D2118B415C837810007533FF35C40CD3118B358C94D111E8E2E24E016A00568BF86A0057E8C5DDFDFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1395549,
+            "TargetRva": 2764928,
+            "Targets": [
+              "NetLogic.RegisterMessageHandler"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "57E8C5DDFDFF8B0D306FD31183C4148B495C8979108B0D306FD3118B415C6A00FF70106A00536A00E81EE51400"
+          }
+        ]
+      },
+      {
         "TypeName": "BabelTimeSDKManager",
         "Name": "GetRunningPlatform",
         "Rva": 1483456,
@@ -124,6 +357,223 @@
               0
             ],
             "ContextHex": "0C85C07421807E340075188B4E2485C974146A00FF700C506A0251E89FAF180083C4145E5DC36A00E8426E4001"
+          }
+        ]
+      },
+      {
+        "TypeName": "NetLogic",
+        "Name": "RegisterMessageHandler",
+        "Rva": 2764928,
+        "Length": 464,
+        "Hex": "558BEC803D865BD411007515FF35D8B78611E809A0360183C404C605865BD41101803D7B5BD411007515FF3514B88611E8EB9F360183C404C6057B5BD41101A1C80BD311568B405C8B30A1E0A3D111F680C200000001740F83787000750950E84CC7370183C4046A006A00566A00E80DE0E00083C41084C00F84B000000057A1C80BD3118B405C8B3885FF0F842F0100008B7F1485FF0F84240100008B7F0885FF0F8419010000803D785BD411007515FF35B8B58611E8659F360183C404C605785BD41101837F1400751FFF357C0BD311E8BAFC3901FF356C1AD1118BF056E89C51400083C40C8977146A00FF750C57E80BE7FFFF83C40C85C074358A4D108848088B481085C90F84B3000000C74108000000008B401085C00F84A10000006A00FF751450E8262F000083C40C5F5E5DC353FF35940BD311E853FC390183C4048BD8803D655BD411007515FF3500458611E8CA9E360183C404C605655BD41101FF35B40AD311E825FC39018BF06A0056E82BF7E8FF6A0053897310E820F7E8FF8B450C83C41489430C8A45108843088B431085C0742A6A00FF751450E8AF2E00008B471483C40C85C07415FF358C1AD1115350E80873190183C40C5B5F5E5DC36A00E8A90B3901CCCCCCCCCCCCCCCCCC",
+        "ControlFlow": [
+          {
+            "Kind": "call",
+            "SourceRva": 2764946,
+            "TargetRva": 23122080,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "558BEC803D865BD411007515FF35D8B78611E809A03601"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2764976,
+            "TargetRva": 23122080,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "11007515FF35D8B78611E809A0360183C404C605865BD41101803D7B5BD411007515FF3514B88611E8EB9F3601"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765023,
+            "TargetRva": 23197744,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "04C6057B5BD41101A1C80BD311568B405C8B30A1E0A3D111F680C200000001740F83787000750950E84CC73701"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765038,
+            "TargetRva": 17502464,
+            "Targets": [
+              "Object.op_Inequality"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "405C8B30A1E0A3D111F680C200000001740F83787000750950E84CC7370183C4046A006A00566A00E80DE0E000"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765110,
+            "TargetRva": 23122080,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "0100008B7F1485FF0F84240100008B7F0885FF0F8419010000803D785BD411007515FF35B8B58611E8659F3601"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765137,
+            "TargetRva": 23342608,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "785BD411007515FF35B8B58611E8659F360183C404C605785BD41101837F1400751FFF357C0BD311E8BAFC3901"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765151,
+            "TargetRva": 6980352,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "659F360183C404C605785BD41101837F1400751FFF357C0BD311E8BAFC3901FF356C1AD1118BF056E89C514000"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765168,
+            "TargetRva": 2758784,
+            "Targets": [
+              "NetCore.FindMessageHandler"
+            ],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "00751FFF357C0BD311E8BAFC3901FF356C1AD1118BF056E89C51400083C40C8977146A00FF750C57E80BE7FFFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765221,
+            "TargetRva": 2777296,
+            "Targets": [
+              "Notifier.Add"
+            ],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "4D108848088B481085C90F84B3000000C74108000000008B401085C00F84A10000006A00FF751450E8262F0000"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765240,
+            "TargetRva": 23342608,
+            "Targets": [],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "000000008B401085C00F84A10000006A00FF751450E8262F000083C40C5F5E5DC353FF35940BD311E853FC3901"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765265,
+            "TargetRva": 23122080,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "0083C40C5F5E5DC353FF35940BD311E853FC390183C4048BD8803D655BD411007515FF3500458611E8CA9E3601"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765286,
+            "TargetRva": 23342608,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "C4048BD8803D655BD411007515FF3500458611E8CA9E360183C404C605655BD41101FF35B40AD311E825FC3901"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765296,
+            "TargetRva": 1255712,
+            "Targets": [
+              "Object..ctor",
+              "Object.Finalize",
+              "Object.FieldGetter",
+              "Object.FieldSetter",
+              "Array.Initialize",
+              "MarshalByRefObject..ctor",
+              "X509Extension.Decode",
+              "SecurityParser.OnStartParsing",
+              "SecurityParser.OnProcessingInstruction",
+              "SecurityParser.OnIgnorableWhitespace",
+              "SecurityParser.OnEndParsing",
+              "CollectionBase.OnClear",
+              "CollectionBase.OnClearComplete",
+              "CollectionBase.OnInsert",
+              "CollectionBase.OnInsertComplete",
+              "CollectionBase.OnRemove",
+              "CollectionBase.OnRemoveComplete",
+              "CollectionBase.OnSet",
+              "CollectionBase.OnSetComplete",
+              "Debugger.Log"
+            ],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "007515FF3500458611E8CA9E360183C404C605655BD41101FF35B40AD311E825FC39018BF06A0056E82BF7E8FF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765307,
+            "TargetRva": 1255712,
+            "Targets": [
+              "Object..ctor",
+              "Object.Finalize",
+              "Object.FieldGetter",
+              "Object.FieldSetter",
+              "Array.Initialize",
+              "MarshalByRefObject..ctor",
+              "X509Extension.Decode",
+              "SecurityParser.OnStartParsing",
+              "SecurityParser.OnProcessingInstruction",
+              "SecurityParser.OnIgnorableWhitespace",
+              "SecurityParser.OnEndParsing",
+              "CollectionBase.OnClear",
+              "CollectionBase.OnClearComplete",
+              "CollectionBase.OnInsert",
+              "CollectionBase.OnInsertComplete",
+              "CollectionBase.OnRemove",
+              "CollectionBase.OnRemoveComplete",
+              "CollectionBase.OnSet",
+              "CollectionBase.OnSetComplete",
+              "Debugger.Log"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "9E360183C404C605655BD41101FF35B40AD311E825FC39018BF06A0056E82BF7E8FF6A0053897310E820F7E8FF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765340,
+            "TargetRva": 2777296,
+            "Targets": [
+              "Notifier.Add"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "FF6A0053897310E820F7E8FF8B450C83C41489430C8A45108843088B431085C0742A6A00FF751450E8AF2E0000"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765363,
+            "TargetRva": 21210432,
+            "Targets": [],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "108843088B431085C0742A6A00FF751450E8AF2E00008B471483C40C85C07415FF358C1AD1115350E808731901"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 2765378,
+            "TargetRva": 23281136,
+            "Targets": [],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "1450E8AF2E00008B471483C40C85C07415FF358C1AD1115350E80873190183C40C5B5F5E5DC36A00E8A90B3901"
           }
         ]
       },
@@ -14964,11 +15414,76 @@
     ],
     "RegisterMessageHandlerCallSites": [
       {
-        "Rva": 2283047,
-        "ContextHex": "50894508E8E852F0FF83C44085DB74326A00FF75086A0553E824A81800",
+        "Rva": 1395270,
+        "ContextHex": "495C8979048B0D306FD3118B415C6A00FF70046A00536A00E835E61400",
         "PushImmediates": [
           0,
-          5
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 1395363,
+        "ContextHex": "495C8979088B0D306FD3118B415C6A00FF70086A00536A00E8D8E51400",
+        "PushImmediates": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 1395456,
+        "ContextHex": "495C89790C8B0D306FD3118B415C6A00FF700C6A00536A00E87BE51400",
+        "PushImmediates": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 1395549,
+        "ContextHex": "495C8979108B0D306FD3118B415C6A00FF70106A00536A00E81EE51400",
+        "PushImmediates": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 5819796,
+        "ContextHex": "0056FF75088BF857E8775BBAFF8B75E86A00576A01566A00E8E762D1FF",
+        "PushImmediates": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "Rva": 5820015,
+        "ContextHex": "016A00568BF85357E89C5ABAFF8B75FC6A00576A00566A00E80C62D1FF",
+        "PushImmediates": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 5821129,
+        "ContextHex": "0056FF75088BF857E84256BAFF8B75FC6A00576A01566A00E8B25DD1FF",
+        "PushImmediates": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "Rva": 5822418,
+        "ContextHex": "00568B75088BF85657E83851BAFF6A00576A00FF75DC6A00E8A958D1FF",
+        "PushImmediates": [
+          0,
+          0,
+          0
         ]
       }
     ]
@@ -15037,6 +15552,239 @@
         "Length": 16,
         "Hex": "B803000000C3CCCCCCCCCCCCCCCCCCCC",
         "ControlFlow": []
+      },
+      {
+        "TypeName": "Launcher",
+        "Name": "Init",
+        "Rva": 1843392,
+        "Length": 416,
+        "Hex": "803DD9AACF11007515FF3524807C11E81CDF440183C404C605D9AACF11018B0D2CC3CE11538B1D4061CD11568B415C57837804007533FF35A863CE118B354CD4CC11E8393C48016A00568BF86A0057E89CF6FBFF8B0D2CC3CE1183C4148B495C8979048B0D2CC3CE118B415C6A00FF70046A00536A00E8F5C925008B0D2CC3CE1183C4148B1D6061CD118B415C837808007533FF35A863CE118B356CD4CC11E8DC3B48016A00568BF86A0057E83FF6FBFF8B0D2CC3CE1183C4148B495C8979088B0D2CC3CE118B415C6A00FF70086A00536A00E898C925008B0D2CC3CE1183C4148B1D8061CD118B415C83780C007533FF35A863CE118B3580D4CC11E87F3B48016A00568BF86A0057E8E2F5FBFF8B0D2CC3CE1183C4148B495C89790C8B0D2CC3CE118B415C6A00FF700C6A00536A00E83BC925008B0D2CC3CE1183C4148B1DA061CD118B415C837810007533FF35A863CE118B35A8D4CC11E8223B48016A00568BF86A0057E885F5FBFF8B0D2CC3CE1183C4148B495C8979108B0D2CC3CE118B415C6A00FF70106A00536A00E8DEC8250083C4145F5E5BC3CCCCCCCCCCCCCC",
+        "ControlFlow": [
+          {
+            "Kind": "call",
+            "SourceRva": 1843407,
+            "TargetRva": 23134192,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "803DD9AACF11007515FF3524807C11E81CDF4401"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843458,
+            "TargetRva": 23354688,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "AACF11018B0D2CC3CE11538B1D4061CD11568B415C57837804007533FF35A863CE118B354CD4CC11E8393C4801"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843471,
+            "TargetRva": 1578928,
+            "Targets": [
+              "Swapper..ctor",
+              "AsyncCallback..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "ReadDelegate..ctor",
+              "WriteDelegate..ctor",
+              "AddEventAdapter..ctor",
+              "GetterAdapter..ctor",
+              "RenewalDelegate..ctor",
+              "CallbackHandler..ctor",
+              "PrimalityTest..ctor",
+              "MemberFilter..ctor",
+              "ModuleResolveEventHandler..ctor",
+              "TypeFilter..ctor",
+              "CrossContextDelegate..ctor",
+              "HeaderHandler..ctor",
+              "ParameterizedThreadStart..ctor",
+              "SendOrPostCallback..ctor",
+              "ThreadStart..ctor",
+              "TimerCallback..ctor"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "4061CD11568B415C57837804007533FF35A863CE118B354CD4CC11E8393C48016A00568BF86A0057E89CF6FBFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843510,
+            "TargetRva": 4320048,
+            "Targets": [
+              "NetLogic.RegisterMessageHandler"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "57E89CF6FBFF8B0D2CC3CE1183C4148B495C8979048B0D2CC3CE118B415C6A00FF70046A00536A00E8F5C92500"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843551,
+            "TargetRva": 23354688,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "F5C925008B0D2CC3CE1183C4148B1D6061CD118B415C837808007533FF35A863CE118B356CD4CC11E8DC3B4801"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843564,
+            "TargetRva": 1578928,
+            "Targets": [
+              "Swapper..ctor",
+              "AsyncCallback..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "ReadDelegate..ctor",
+              "WriteDelegate..ctor",
+              "AddEventAdapter..ctor",
+              "GetterAdapter..ctor",
+              "RenewalDelegate..ctor",
+              "CallbackHandler..ctor",
+              "PrimalityTest..ctor",
+              "MemberFilter..ctor",
+              "ModuleResolveEventHandler..ctor",
+              "TypeFilter..ctor",
+              "CrossContextDelegate..ctor",
+              "HeaderHandler..ctor",
+              "ParameterizedThreadStart..ctor",
+              "SendOrPostCallback..ctor",
+              "ThreadStart..ctor",
+              "TimerCallback..ctor"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "8B1D6061CD118B415C837808007533FF35A863CE118B356CD4CC11E8DC3B48016A00568BF86A0057E83FF6FBFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843603,
+            "TargetRva": 4320048,
+            "Targets": [
+              "NetLogic.RegisterMessageHandler"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "57E83FF6FBFF8B0D2CC3CE1183C4148B495C8979088B0D2CC3CE118B415C6A00FF70086A00536A00E898C92500"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843644,
+            "TargetRva": 23354688,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "98C925008B0D2CC3CE1183C4148B1D8061CD118B415C83780C007533FF35A863CE118B3580D4CC11E87F3B4801"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843657,
+            "TargetRva": 1578928,
+            "Targets": [
+              "Swapper..ctor",
+              "AsyncCallback..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "ReadDelegate..ctor",
+              "WriteDelegate..ctor",
+              "AddEventAdapter..ctor",
+              "GetterAdapter..ctor",
+              "RenewalDelegate..ctor",
+              "CallbackHandler..ctor",
+              "PrimalityTest..ctor",
+              "MemberFilter..ctor",
+              "ModuleResolveEventHandler..ctor",
+              "TypeFilter..ctor",
+              "CrossContextDelegate..ctor",
+              "HeaderHandler..ctor",
+              "ParameterizedThreadStart..ctor",
+              "SendOrPostCallback..ctor",
+              "ThreadStart..ctor",
+              "TimerCallback..ctor"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "8B1D8061CD118B415C83780C007533FF35A863CE118B3580D4CC11E87F3B48016A00568BF86A0057E8E2F5FBFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843696,
+            "TargetRva": 4320048,
+            "Targets": [
+              "NetLogic.RegisterMessageHandler"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "57E8E2F5FBFF8B0D2CC3CE1183C4148B495C89790C8B0D2CC3CE118B415C6A00FF700C6A00536A00E83BC92500"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843737,
+            "TargetRva": 23354688,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "3BC925008B0D2CC3CE1183C4148B1DA061CD118B415C837810007533FF35A863CE118B35A8D4CC11E8223B4801"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843750,
+            "TargetRva": 1578928,
+            "Targets": [
+              "Swapper..ctor",
+              "AsyncCallback..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "KeyGeneratedEventHandler..ctor",
+              "ReadDelegate..ctor",
+              "WriteDelegate..ctor",
+              "AddEventAdapter..ctor",
+              "GetterAdapter..ctor",
+              "RenewalDelegate..ctor",
+              "CallbackHandler..ctor",
+              "PrimalityTest..ctor",
+              "MemberFilter..ctor",
+              "ModuleResolveEventHandler..ctor",
+              "TypeFilter..ctor",
+              "CrossContextDelegate..ctor",
+              "HeaderHandler..ctor",
+              "ParameterizedThreadStart..ctor",
+              "SendOrPostCallback..ctor",
+              "ThreadStart..ctor",
+              "TimerCallback..ctor"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "8B1DA061CD118B415C837810007533FF35A863CE118B35A8D4CC11E8223B48016A00568BF86A0057E885F5FBFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 1843789,
+            "TargetRva": 4320048,
+            "Targets": [
+              "NetLogic.RegisterMessageHandler"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "57E885F5FBFF8B0D2CC3CE1183C4148B495C8979108B0D2CC3CE118B415C6A00FF70106A00536A00E8DEC82500"
+          }
+        ]
       },
       {
         "TypeName": "C2SProtocol",
@@ -17682,6 +18430,228 @@
               17944502
             ],
             "ContextHex": "D28111E8FC91300183C404C60568B6CF11018B157C7CCC11F682C2000000017415837A7000750F52E867B93101"
+          }
+        ]
+      },
+      {
+        "TypeName": "NetLogic",
+        "Name": "RegisterMessageHandler",
+        "Rva": 4320048,
+        "Length": 464,
+        "Hex": "558BEC803D7AC4CF11007515FF35C8258211E8A9141F0183C404C6057AC4CF1101803D6FC4CF11007515FF3504268211E88B141F0183C404C6056FC4CF1101A1B062CE11568B405C8B30A15404CD11F680C200000001740F83787000750950E8EC3B200183C4046A006A00566A00E86D68D20083C41084C00F84B000000057A1B062CE118B405C8B3885FF0F842F0100008B7F1485FF0F84240100008B7F0885FF0F8419010000803D6CC4CF11007515FF35A0238211E805141F0183C404C6056CC4CF1101837F1400751FFF356462CE11E83A712201FF352454CC118BF056E82C50340083C40C8977146A00FF750C57E80BE7FFFF83C40C85C074358A4D108848088B481085C90F84B3000000C74108000000008B401085C00F84A10000006A00FF751450E8162F000083C40C5F5E5DC353FF358862CE11E8D370220183C4048BD8803D59C4CF11007515FF3508B38111E86A131F0183C404C60559C4CF1101FF35A461CE11E8A57022018BF06A0056E89B28D1FF6A0053897310E89028D1FF8B450C83C41489430C8A45108843088B431085C0742A6A00FF751450E89F2E00008B471483C40C85C07415FF354454CC115350E8F861050183C40C5B5F5E5DC36A00E819802101CCCCCCCCCCCCCCCCCC",
+        "ControlFlow": [
+          {
+            "Kind": "call",
+            "SourceRva": 4320066,
+            "TargetRva": 23134192,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "558BEC803D7AC4CF11007515FF35C8258211E8A9141F01"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320096,
+            "TargetRva": 23134192,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "11007515FF35C8258211E8A9141F0183C404C6057AC4CF1101803D6FC4CF11007515FF3504268211E88B141F01"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320143,
+            "TargetRva": 23209856,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "04C6056FC4CF1101A1B062CE11568B405C8B30A15404CD11F680C200000001740F83787000750950E8EC3B2001"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320158,
+            "TargetRva": 18109456,
+            "Targets": [
+              "Object.op_Inequality"
+            ],
+            "PushImmediates": [
+              0,
+              0,
+              0
+            ],
+            "ContextHex": "405C8B30A15404CD11F680C200000001740F83787000750950E8EC3B200183C4046A006A00566A00E86D68D200"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320230,
+            "TargetRva": 23134192,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "0100008B7F1485FF0F84240100008B7F0885FF0F8419010000803D6CC4CF11007515FF35A0238211E805141F01"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320257,
+            "TargetRva": 23354688,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "6CC4CF11007515FF35A0238211E805141F0183C404C6056CC4CF1101837F1400751FFF356462CE11E83A712201"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320271,
+            "TargetRva": 7748672,
+            "Targets": [],
+            "PushImmediates": [],
+            "ContextHex": "05141F0183C404C6056CC4CF1101837F1400751FFF356462CE11E83A712201FF352454CC118BF056E82C503400"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320288,
+            "TargetRva": 4313904,
+            "Targets": [
+              "NetCore.FindMessageHandler"
+            ],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "00751FFF356462CE11E83A712201FF352454CC118BF056E82C50340083C40C8977146A00FF750C57E80BE7FFFF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320341,
+            "TargetRva": 4332400,
+            "Targets": [
+              "Notifier.Add"
+            ],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "4D108848088B481085C90F84B3000000C74108000000008B401085C00F84A10000006A00FF751450E8162F0000"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320360,
+            "TargetRva": 23354688,
+            "Targets": [],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "000000008B401085C00F84A10000006A00FF751450E8162F000083C40C5F5E5DC353FF358862CE11E8D3702201"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320385,
+            "TargetRva": 23134192,
+            "Targets": [],
+            "PushImmediates": [
+              19
+            ],
+            "ContextHex": "0083C40C5F5E5DC353FF358862CE11E8D370220183C4048BD8803D59C4CF11007515FF3508B38111E86A131F01"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320406,
+            "TargetRva": 23354688,
+            "Targets": [],
+            "PushImmediates": [
+              19
+            ],
+            "ContextHex": "C4048BD8803D59C4CF11007515FF3508B38111E86A131F0183C404C60559C4CF1101FF35A461CE11E8A5702201"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320416,
+            "TargetRva": 1250624,
+            "Targets": [
+              "Object..ctor",
+              "Object.Finalize",
+              "Object.FieldGetter",
+              "Object.FieldSetter",
+              "Array.Initialize",
+              "MarshalByRefObject..ctor",
+              "X509Extension.Decode",
+              "SecurityParser.OnStartParsing",
+              "SecurityParser.OnProcessingInstruction",
+              "SecurityParser.OnIgnorableWhitespace",
+              "SecurityParser.OnEndParsing",
+              "CollectionBase.OnClear",
+              "CollectionBase.OnClearComplete",
+              "CollectionBase.OnInsert",
+              "CollectionBase.OnInsertComplete",
+              "CollectionBase.OnRemove",
+              "CollectionBase.OnRemoveComplete",
+              "CollectionBase.OnSet",
+              "CollectionBase.OnSetComplete",
+              "Debugger.Log"
+            ],
+            "PushImmediates": [
+              19,
+              0
+            ],
+            "ContextHex": "007515FF3508B38111E86A131F0183C404C60559C4CF1101FF35A461CE11E8A57022018BF06A0056E89B28D1FF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320427,
+            "TargetRva": 1250624,
+            "Targets": [
+              "Object..ctor",
+              "Object.Finalize",
+              "Object.FieldGetter",
+              "Object.FieldSetter",
+              "Array.Initialize",
+              "MarshalByRefObject..ctor",
+              "X509Extension.Decode",
+              "SecurityParser.OnStartParsing",
+              "SecurityParser.OnProcessingInstruction",
+              "SecurityParser.OnIgnorableWhitespace",
+              "SecurityParser.OnEndParsing",
+              "CollectionBase.OnClear",
+              "CollectionBase.OnClearComplete",
+              "CollectionBase.OnInsert",
+              "CollectionBase.OnInsertComplete",
+              "CollectionBase.OnRemove",
+              "CollectionBase.OnRemoveComplete",
+              "CollectionBase.OnSet",
+              "CollectionBase.OnSetComplete",
+              "Debugger.Log"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "131F0183C404C60559C4CF1101FF35A461CE11E8A57022018BF06A0056E89B28D1FF6A0053897310E89028D1FF"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320460,
+            "TargetRva": 4332400,
+            "Targets": [
+              "Notifier.Add"
+            ],
+            "PushImmediates": [
+              0,
+              0
+            ],
+            "ContextHex": "FF6A0053897310E89028D1FF8B450C83C41489430C8A45108843088B431085C0742A6A00FF751450E89F2E0000"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320483,
+            "TargetRva": 21450464,
+            "Targets": [],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "108843088B431085C0742A6A00FF751450E89F2E00008B471483C40C85C07415FF354454CC115350E8F8610501"
+          },
+          {
+            "Kind": "call",
+            "SourceRva": 4320498,
+            "TargetRva": 23293200,
+            "Targets": [],
+            "PushImmediates": [
+              0
+            ],
+            "ContextHex": "1450E89F2E00008B471483C40C85C07415FF354454CC115350E8F861050183C40C5B5F5E5DC36A00E819802101"
           }
         ]
       },
@@ -31469,11 +32439,76 @@
     ],
     "RegisterMessageHandlerCallSites": [
       {
-        "Rva": 2079491,
-        "ContextHex": "8B0E83C43089480889701489781085DB747A6A00506A0553E858B0FEFF",
+        "Rva": 1843510,
+        "ContextHex": "495C8979048B0D2CC3CE118B415C6A00FF70046A00536A00E8F5C92500",
         "PushImmediates": [
           0,
-          5
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 1843603,
+        "ContextHex": "495C8979088B0D2CC3CE118B415C6A00FF70086A00536A00E898C92500",
+        "PushImmediates": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 1843696,
+        "ContextHex": "495C89790C8B0D2CC3CE118B415C6A00FF700C6A00536A00E83BC92500",
+        "PushImmediates": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 1843789,
+        "ContextHex": "495C8979108B0D2CC3CE118B415C6A00FF70106A00536A00E8DEC82500",
+        "PushImmediates": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 4691844,
+        "ContextHex": "0056FF75088BF857E83780D0FF8B75E86A00576A01566A00E8A753FAFF",
+        "PushImmediates": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "Rva": 4692063,
+        "ContextHex": "016A00568BF85357E85C7FD0FF8B75FC6A00576A00566A00E8CC52FAFF",
+        "PushImmediates": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "Rva": 4693177,
+        "ContextHex": "0056FF75088BF857E8027BD0FF8B75FC6A00576A01566A00E8724EFAFF",
+        "PushImmediates": [
+          0,
+          1,
+          0
+        ]
+      },
+      {
+        "Rva": 4694466,
+        "ContextHex": "00568B75088BF85657E8F875D0FF6A00576A00FF75DC6A00E86949FAFF",
+        "PushImmediates": [
+          0,
+          0,
+          0
         ]
       }
     ]

@@ -41,7 +41,8 @@ public sealed record PlayerCharacter(
     int MarriedNum = 0,
     int Head = 1021051,
     int HeadFrame = 0,
-    string Message = "");
+    string Message = "",
+    int PlotChapterId = 1);
 
 /// <summary>
 /// 船坞中的单个舰娘实例。对应 <c>hero.UpdateHeroBagData</c> 的 THeroGrid 字段。
@@ -108,7 +109,8 @@ public sealed record PlayerAccount(
     HeroDock Dock,
     PlayerBag? Bag = null,
     PlayerFashion? Fashion = null,
-    PlayerEquip? Equip = null);
+    PlayerEquip? Equip = null,
+    PlayerFleet? Fleet = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
@@ -159,7 +161,19 @@ public static class PlayerAccountFactory
         var bag = new PlayerBag([], BagSize: 100);
         var fashion = new PlayerFashion([]);
         var equip = new PlayerEquip([], EquipBagSize: 2000);
-        return new PlayerAccount(profileId, character, dock, bag, fashion, equip);
+        var fleet = DefaultFleet();
+        return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet);
+    }
+
+    /// <summary>创建默认5个空编队（Normal type=1, modeId 1-5）。</summary>
+    public static PlayerFleet DefaultFleet()
+    {
+        var tactics = new List<FleetEntry>(5);
+        for (int i = 1; i <= 5; i++)
+        {
+            tactics.Add(new FleetEntry(ModeId: i, Type: 1, TacticName: i == 1 ? "第一舰队" : ""));
+        }
+        return new PlayerFleet(tactics);
     }
 }
 
@@ -182,3 +196,20 @@ public sealed record BuildShipEntry(int TemplateId, int Weight);
 
 /// <summary>单个抽卡池配置（来自 config_build_ship）。</summary>
 public sealed record BuildShipPool(int PoolId, IReadOnlyList<BuildShipEntry> Ships);
+
+/// <summary>单个编队条目（TTactic）。</summary>
+public sealed record FleetEntry(
+    int ModeId,
+    int Type = 1,
+    string TacticName = "",
+    IReadOnlyList<int>? HeroInfo = null,
+    IReadOnlyList<int>? ExHeroInfo = null,
+    int StrategyId = 0,
+    int FormationId = 2);
+
+/// <summary>玩家编队集合（TSelfTactis）。</summary>
+public sealed record PlayerFleet(
+    IReadOnlyList<FleetEntry> Tactics,
+    int MaxPower = 0,
+    int MinPower = 0,
+    bool IsSkip = false);

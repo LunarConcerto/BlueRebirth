@@ -71,4 +71,8 @@ public class LogTab
         Header = header;
         Entries = entries;
     }
+
+    public override string ToString() {
+        return $"你正在查看{Header}的日志.";
+    }
 }

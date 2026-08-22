@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="E:\逆向工程\苍蓝誓约项目\native\build\CMakeFiles\79a92f7ad2819e6af87723bce48a407b\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{D264AB22-E767-3307-93FD-7178D6DCD6A3}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

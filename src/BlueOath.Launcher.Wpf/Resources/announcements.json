@@ -2,8 +2,22 @@
   {
     "id": "welcome",
     "title": "欢迎",
-    "content": "欢迎使用苍蓝誓约本地启动器。\n\n本工具可帮助你在本地 .NET 服务器上运行离线恢复的日服客户端 (v1.4.0)。\n\n点击「启动游戏」按钮即可启动完整服务（服务器 + 代理 + 游戏）。",
+    "content": "欢迎使用 BlueOath Rebirth 启动器，BlueOath Rebirth 是由粉丝制作的对原《苍蓝誓约》游戏的本地复原版本，仅供交流学习使用，请勿二次分发、或用于商业用途。\n\n 点击「启动游戏」按钮即可一键启动。 \n\n 游玩过程中请勿关闭任意后台服务，否则可能导致不可预见的后果。",
     "severity": "info",
+    "version": "1.0.0"
+  },
+  {
+    "id": "author",
+    "title": "信息",
+    "content": "本版本作者为 LunarConcerto . \n BiliBili : https://space.bilibili.com/2184731 \n QQ资源群 : 701619932 \n QQ聊天群 : 1049326482",
+    "severity": "warning",
+    "version": "1.0.0"
+  }, 
+  {
+    "id": "tech",
+    "title": "技术细节",
+    "content": "关于本版本的技术细节。\n 本版本使用了 hook 来改写原游戏的 url，统一改为本地回环地址 127.0.0.1 ，再通过本地复原服务端，即可实现单机化。",
+    "severity": "warning",
     "version": "1.0.0"
   },
   {
