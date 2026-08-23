@@ -92,11 +92,9 @@ internal sealed record GmBuildShipConfig(int TemplateId, int Weight);
 /// <summary>从 config_ship_exp_item.db 和 config_ship_levelup.db 加载升级所需数据。</summary>
 internal static class ShipLevelupLoader
 {
-    private const byte XorKey = 0x55;
-
     public static (Dictionary<int, int> ExpPerItem, Dictionary<int, int> ExpNeeded) Load(string dataRoot)
     {
-        var configDir = Path.GetFullPath(Path.Combine(dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
+        var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
         var expPerItem = new Dictionary<int, int>();
         var expNeeded = new Dictionary<int, int>();
         LoadExpItems(configDir, expPerItem);
@@ -108,23 +106,12 @@ internal static class ShipLevelupLoader
     {
         try
         {
-            var path = Path.Combine(configDir, "config_ship_exp_item.db");
-            if (!File.Exists(path)) return;
-            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-            c.Open();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
+            ConfigDbLoader.LoadRows(configDir, "config_ship_exp_item.db", (id, _, json) =>
             {
-                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-                if (id == 0) continue;
-                var bytes = ReadColumnBytes(r, 1);
-                var json = XorDecode(bytes);
                 using var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("exp", out var exp))
                     result[id] = exp.GetInt32();
-            }
+            });
         }
         catch { }
     }
@@ -133,39 +120,14 @@ internal static class ShipLevelupLoader
     {
         try
         {
-            var path = Path.Combine(configDir, "config_ship_levelup.db");
-            if (!File.Exists(path)) return;
-            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-            c.Open();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
+            ConfigDbLoader.LoadRows(configDir, "config_ship_levelup.db", (id, _, json) =>
             {
-                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-                if (id == 0) continue;
-                var bytes = ReadColumnBytes(r, 1);
-                var json = XorDecode(bytes);
                 using var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("exp", out var exp))
                     result[id] = exp.GetInt32();
-            }
+            });
         }
         catch { }
-    }
-
-    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal)) return [];
-        var value = reader.GetValue(ordinal);
-        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
-    }
-
-    private static string XorDecode(byte[] source)
-    {
-        var result = new byte[source.Length];
-        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
-        return Encoding.UTF8.GetString(result);
     }
 }
 
@@ -174,14 +136,12 @@ internal static class ShipLevelupLoader
 /// 供 copy.GetRandomFactors 协议与 StartBase 的 RandomFactors 字段使用。</summary>
 internal static class RandomFactorLoader
 {
-    private const byte XorKey = 0x55;
-
     public static Dictionary<int, List<int>> Load(string dataRoot)
     {
         var result = new Dictionary<int, List<int>>();
         try
         {
-            var configDir = ChapterCopyLoader.FindConfigDir(dataRoot);
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             var copyDisplay = new Dictionary<int, List<int>>();
             LoadTable(configDir, "config_copy_display.db", "random_factor_sets", copyDisplay);
             var factorSets = new Dictionary<int, List<int>>();
@@ -207,40 +167,15 @@ internal static class RandomFactorLoader
 
     private static void LoadTable(string configDir, string dbFile, string jsonProp, Dictionary<int, List<int>> result)
     {
-        var path = Path.Combine(configDir, dbFile);
-        if (!File.Exists(path)) return;
-        using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-        c.Open();
-        using var cmd = c.CreateCommand();
-        cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-        using var r = cmd.ExecuteReader();
-        while (r.Read())
+        ConfigDbLoader.LoadRows(configDir, dbFile, (id, _, json) =>
         {
-            var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-            if (id == 0) continue;
-            var bytes = ReadColumnBytes(r, 1);
-            var json = XorDecode(bytes);
             using var doc = JsonDocument.Parse(json);
-            if (!doc.RootElement.TryGetProperty(jsonProp, out var arr) || arr.ValueKind != JsonValueKind.Array) continue;
+            if (!doc.RootElement.TryGetProperty(jsonProp, out var arr) || arr.ValueKind != JsonValueKind.Array) return;
             var list = new List<int>();
             foreach (var item in arr.EnumerateArray())
                 if (item.TryGetInt32(out var v)) list.Add(v);
             result[id] = list;
-        }
-    }
-
-    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal)) return [];
-        var value = reader.GetValue(ordinal);
-        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
-    }
-
-    private static string XorDecode(byte[] source)
-    {
-        var result = new byte[source.Length];
-        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
-        return Encoding.UTF8.GetString(result);
+        });
     }
 }
 
@@ -261,7 +196,7 @@ internal static class CopyBattleLoader{
         if (_loaded) return;
         try
         {
-            var configDir = Path.GetFullPath(Path.Combine(dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             LoadCopyFleet(configDir);
             LoadFleetEnemies(configDir);
             LoadEnemyStats(configDir);
@@ -274,36 +209,23 @@ internal static class CopyBattleLoader{
     {
         try
         {
-            var path = Path.Combine(configDir, "config_copy.db");
-            if (!File.Exists(path)) return;
-            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-            c.Open();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-            using var r = cmd.ExecuteReader();
             var candidates = new Dictionary<int, (int fleetId, bool isDefault)>();
-            while (r.Read())
+            ConfigDbLoader.LoadRows(configDir, "config_copy.db", (id, _, json) =>
             {
-                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-                if (id == 0) continue;
-                var bytes = ReadColumnBytes(r, 1);
-                var json = XorDecode(bytes);
                 using var doc = JsonDocument.Parse(json);
-                if (!doc.RootElement.TryGetProperty("copy_id", out var copyIdProp)) continue;
-                if (!doc.RootElement.TryGetProperty("fleet_id", out var fleetIdProp)) continue;
+                if (!doc.RootElement.TryGetProperty("copy_id", out var copyIdProp)) return;
+                if (!doc.RootElement.TryGetProperty("fleet_id", out var fleetIdProp)) return;
                 var copyId = copyIdProp.GetInt32();
                 foreach (var item in fleetIdProp.EnumerateArray())
                 {
                     var fleetId = item.GetInt32();
-                    // 默认分支: blood_range_lower == -1 且 random_weight == 1000
                     var isDefault = doc.RootElement.TryGetProperty("blood_range_lower", out var brl) && brl.GetInt32() == -1
                         && doc.RootElement.TryGetProperty("random_weight", out var rw) && rw.GetInt32() == 1000;
                     if (!candidates.TryGetValue(copyId, out var cur) || (isDefault && !cur.isDefault))
                         candidates[copyId] = (fleetId, isDefault);
-                    // 记录默认分支对应的 config_copy DBObject id（客户端用该 id 查 config_copy）
                     if (isDefault) _copyConfigIdMap[copyId] = id;
                 }
-            }
+            });
             foreach (var (copyId, val) in candidates)
                 _copyFleetMap[copyId] = val.fleetId;
         }
@@ -314,26 +236,14 @@ internal static class CopyBattleLoader{
     {
         try
         {
-            var path = Path.Combine(configDir, "config_fleet.db");
-            if (!File.Exists(path)) return;
-            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-            c.Open();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
+            ConfigDbLoader.LoadRows(configDir, "config_fleet.db", (id, _, json) =>
             {
-                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-                if (id == 0) continue;
-                var bytes = ReadColumnBytes(r, 1);
-                var json = XorDecode(bytes);
                 using var doc = JsonDocument.Parse(json);
-                if (!doc.RootElement.TryGetProperty("copy_enemys", out var enemies)) continue;
+                if (!doc.RootElement.TryGetProperty("copy_enemys", out var enemies)) return;
                 var list = new List<int>();
                 foreach (var item in enemies.EnumerateArray())
                     list.Add(item.GetInt32());
                 _fleetEnemies[id] = list;
-                // copy_attacheds 结构为 [[attachedFleetId, formation], ...]
                 if (doc.RootElement.TryGetProperty("copy_attacheds", out var attached)
                     && attached.ValueKind == JsonValueKind.Array)
                 {
@@ -346,7 +256,7 @@ internal static class CopyBattleLoader{
                     }
                     _fleetHasAttached[id] = cnt > 0;
                 }
-            }
+            });
         }
         catch { }
     }
@@ -355,21 +265,10 @@ internal static class CopyBattleLoader{
     {
         try
         {
-            var path = Path.Combine(configDir, "config_ship_enemy.db");
-            if (!File.Exists(path)) return;
-            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-            c.Open();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
+            ConfigDbLoader.LoadRows(configDir, "config_ship_enemy.db", (id, _, json) =>
             {
-                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-                if (id == 0) continue;
-                var bytes = ReadColumnBytes(r, 1);
-                var json = XorDecode(bytes);
                 using var doc = JsonDocument.Parse(json);
-                if (!doc.RootElement.TryGetProperty("hp", out var hpProp)) continue;
+                if (!doc.RootElement.TryGetProperty("hp", out var hpProp)) return;
                 _enemyStats[id] = new EnemyStat(
                     hpProp.GetInt32(),
                     doc.RootElement.TryGetProperty("attack", out var atk) ? atk.GetInt32() : 0,
@@ -380,7 +279,7 @@ internal static class CopyBattleLoader{
                     doc.RootElement.TryGetProperty("dodge", out var dodge) ? dodge.GetInt32() : 0,
                     doc.RootElement.TryGetProperty("torpedo_attack", out var ta) ? ta.GetInt32() : 0,
                     doc.RootElement.TryGetProperty("torpedo_defense", out var td) ? td.GetInt32() : 0);
-            }
+            });
         }
         catch { }
     }
@@ -390,6 +289,12 @@ internal static class CopyBattleLoader{
 
     public static bool HasCopyAttacheds(int fleetId)
         => _fleetHasAttached.TryGetValue(fleetId, out var has) && has;
+
+
+    public static void GetMissionIdList(int copyId)
+    {
+        int copyConfigId = _copyConfigIdMap[copyId];
+    }
 
     /// <summary>敌人舰队锚点：直接返回 config_copy 查到的真实舰队 id。
     /// 不再因 copy_attacheds 为空回退到临时测试舰队 907（此前误判，导致所有关卡
@@ -406,20 +311,6 @@ internal static class CopyBattleLoader{
     public static EnemyStat? GetEnemyStat(int enemyId)
         => _enemyStats.TryGetValue(enemyId, out var stat) ? stat : null;
 
-    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal)) return [];
-        var value = reader.GetValue(ordinal);
-        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
-    }
-
-    private static string XorDecode(byte[] source)
-    {
-        const byte XorKey = 0x55;
-        var result = new byte[source.Length];
-        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
-        return Encoding.UTF8.GetString(result);
-    }
 }
 
 /// <summary>从 config_ship_main 加载玩家船基础属性（key = sm_id = 船的 TemplateId）。</summary>
@@ -433,32 +324,15 @@ internal static class ShipMainLoader
         if (_loaded) return;
         try
         {
-            var configDir = Path.GetFullPath(Path.Combine(
-                dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
-            var path = Path.Combine(configDir, "config_ship_main.db");
-            if (!File.Exists(path)) return;
-            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-            c.Open();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
-            {
-                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-                if (id == 0) continue;
-                try
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            ConfigDbLoader.LoadAll<ConfigShipMain>(configDir, "config_ship_main.db",
+                (id, cfg) =>
                 {
-                    var cfg = JsonSerializer.Deserialize<ConfigShipMain>(XorDecode(ReadColumnBytes(r, 1)));
-                    if (cfg is null) continue;
                     _ships[id] = cfg;
+                    // 双键索引：同时按 DB 行 id 与 sm_id（TemplateId）查找
                     if (cfg.SmId != 0)
                         _ships[checked((int)cfg.SmId)] = cfg;
-                }
-                catch
-                {
-                    // 个别坏行（如 id=nill 的无效 JSON）跳过，不影响整表加载。
-                }
-            }
+                });
         }
         catch { }
         _loaded = true;
@@ -470,21 +344,6 @@ internal static class ShipMainLoader
     /// <summary>属性等级成长：base + levelup × (level - 1)。</summary>
     public static long Leveled(long baseValue, long levelup, int level)
         => baseValue + levelup * Math.Max(0, level - 1);
-
-    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal)) return [];
-        var value = reader.GetValue(ordinal);
-        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
-    }
-
-    private static string XorDecode(byte[] source)
-    {
-        const byte XorKey = 0x55;
-        var result = new byte[source.Length];
-        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
-        return Encoding.UTF8.GetString(result);
-    }
 }
 
 /// <summary>从 config_assist_ship_info 加载临时/支援舰船（key = assist_ship_info id = HeroId）。</summary>
@@ -498,27 +357,10 @@ internal static class AssistShipLoader
         if (_loaded) return;
         try
         {
-            var configDir = Path.GetFullPath(Path.Combine(
-                dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
-            var path = Path.Combine(configDir, "config_assist_ship_info.db");
-            if (!File.Exists(path)) return;
-            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-            c.Open();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
-            {
-                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-                if (id == 0) continue;
-                try
-                {
-                    var cfg = JsonSerializer.Deserialize<ConfigAssistShipInfo>(XorDecode(ReadColumnBytes(r, 1)));
-                    if (cfg is null) continue;
-                    _ships[id] = cfg;
-                }
-                catch { }
-            }
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _ships.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigAssistShipInfo>(configDir, "config_assist_ship_info.db"))
+                _ships[id] = cfg;
         }
         catch { }
         _loaded = true;
@@ -526,21 +368,6 @@ internal static class AssistShipLoader
 
     public static ConfigAssistShipInfo? Get(int id)
         => _ships.TryGetValue(id, out var cfg) ? cfg : null;
-
-    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal)) return [];
-        var value = reader.GetValue(ordinal);
-        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
-    }
-
-    private static string XorDecode(byte[] source)
-    {
-        const byte XorKey = 0x55;
-        var result = new byte[source.Length];
-        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
-        return Encoding.UTF8.GetString(result);
-    }
 }
 
 /// <summary>从 config_equip 加载装备模板（key = e_id），用于构造出战船只的装备数据。</summary>
@@ -554,27 +381,10 @@ internal static class EquipLoader
         if (_loaded) return;
         try
         {
-            var configDir = Path.GetFullPath(Path.Combine(
-                dataRoot, "..", "..", "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config"));
-            var path = Path.Combine(configDir, "config_equip.db");
-            if (!File.Exists(path)) return;
-            using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-            c.Open();
-            using var cmd = c.CreateCommand();
-            cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-            using var r = cmd.ExecuteReader();
-            while (r.Read())
-            {
-                var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-                if (id == 0) continue;
-                try
-                {
-                    var cfg = JsonSerializer.Deserialize<ConfigEquip>(XorDecode(ReadColumnBytes(r, 1)));
-                    if (cfg is null) continue;
-                    _equips[id] = cfg;
-                }
-                catch { }
-            }
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _equips.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquip>(configDir, "config_equip.db"))
+                _equips[id] = cfg;
         }
         catch { }
         _loaded = true;
@@ -582,21 +392,6 @@ internal static class EquipLoader
 
     public static ConfigEquip? Get(int id)
         => _equips.TryGetValue(id, out var cfg) ? cfg : null;
-
-    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal)) return [];
-        var value = reader.GetValue(ordinal);
-        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
-    }
-
-    private static string XorDecode(byte[] source)
-    {
-        const byte XorKey = 0x55;
-        var result = new byte[source.Length];
-        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
-        return Encoding.UTF8.GetString(result);
-    }
 }
 
 /// <summary>从 config_chapter 加载章节 → 关卡列表映射。</summary>
@@ -614,27 +409,16 @@ internal static class EquipLoader
          if (_loaded) return;
          try
          {
-             var configDir = FindConfigDir(dataRoot);
-             var path = Path.Combine(configDir, "config_chapter.db");
-             if (!File.Exists(path)) return;
-             using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
-             c.Open();
-             using var cmd = c.CreateCommand();
-             cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
-             using var r = cmd.ExecuteReader();
-             while (r.Read())
+             var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+             ConfigDbLoader.LoadRows(configDir, "config_chapter.db", (id, _, json) =>
              {
-                 var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
-                 if (id == 0) continue;
-                 var bytes = ReadColumnBytes(r, 1);
-                 var json = XorDecode(bytes);
                  using var doc = JsonDocument.Parse(json);
-                 if (!doc.RootElement.TryGetProperty("level_list", out var levelList)) continue;
-                 if (!doc.RootElement.TryGetProperty("class_type", out var classType)) continue;
+                 if (!doc.RootElement.TryGetProperty("level_list", out var levelList)) return;
+                 if (!doc.RootElement.TryGetProperty("class_type", out var classType)) return;
                  var copies = new List<int>();
                  foreach (var item in levelList.EnumerateArray())
                      copies.Add(item.GetInt32());
-                 if (copies.Count == 0) continue;
+                 if (copies.Count == 0) return;
                  var ct = classType.GetInt32();
                  if (ct == 1) // PlotCopy
                  {
@@ -650,7 +434,7 @@ internal static class EquipLoader
                          _seaFirstCopyId = copies[0];
                      }
                  }
-             }
+             });
          }
          catch { }
          _loaded = true;
@@ -676,33 +460,4 @@ internal static class EquipLoader
 
      /// <summary>海域第 1 章第一关（用作 MaxCopyId，使 _getFarestId 落在第 1 章）。</summary>
      public static int GetSeaFirstCopyId() => _seaFirstCopyId;
-
-     /// <summary>从 dataRoot 向上逐级查找游戏配置目录
-     /// （blueoath/blueoath/blueoath_Data/StreamingAssets/config）。适配不同 --data 深度
-     /// （如 runtime/jp 下 dataRoot/../.. 即项目根，bin/Debug/net8.0/data 需向上 6 级）。</summary>
-     internal static string FindConfigDir(string dataRoot)
-     {
-         var dir = new DirectoryInfo(dataRoot);
-         for (var i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
-         {
-             var cand = Path.Combine(dir.FullName, "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config");
-             if (Directory.Exists(cand)) return cand;
-         }
-         return dataRoot;
-     }
-
-     private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
-     {
-         if (reader.IsDBNull(ordinal)) return [];
-         var value = reader.GetValue(ordinal);
-         return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
-     }
-
-     private static string XorDecode(byte[] source)
-     {
-         const byte XorKey = 0x55;
-         var result = new byte[source.Length];
-         for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
-         return Encoding.UTF8.GetString(result);
-     }
  }

@@ -230,7 +230,7 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         var copyId = _handler.DecodeStartBaseCopyIdPublic(request.Args ?? []);
                         var copyPush = TMessageCodec.EncodeResponse(new TResponse(
                             Method: "copy.StartBase",
-                            Ret: _handler.EncodeStartBaseRetDirect(copyId, heroes),
+                            Ret: _handler.EncodeStartBaseRetDirect(copyId, heroes, account.Character),
                             Time: now,
                             IsResponse: 0));
                         await NetSocketFrameCodec.WriteAsync(stream, copyPush, NetSocketFrameCodec.TypeData, ct);
