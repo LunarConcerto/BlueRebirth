@@ -1056,8 +1056,6 @@ void* stageGotoStolen = nullptr;
 bool stageGotoHookApplied = false;
 uintptr_t stageMgrInstance = 0;
 bool forcedMainStage = false;
-void* gameSceneChangeStolen = nullptr;
-bool gameSceneChangeHookApplied = false;
 void* debugLogStolen = nullptr;
 bool debugLogHookApplied = false;
 void* debugLogErrorStolen = nullptr;
@@ -1306,8 +1304,6 @@ void LogStageGoto(void* self, int nextStateType, void* enterParam) {
         }
     }
 }
-
-void LogGameSceneChange(void* resPath) { LogIl2CppString("GameSceneManager.ChangeScene", resPath); }
 
 void LogUIShipProxyLoadModel(void* self, void* tabParam) {
     Log("UIShipProxy.LoadModel called self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
@@ -2380,16 +2376,34 @@ __declspec(naked) void StageGotoTrampoline() {
     }
 }
 
-__declspec(naked) void GameSceneChangeTrampoline() {
-    __asm {
-        pushad
-        mov eax, dword ptr [esp + 40]
-        push eax
-        call LogGameSceneChange
-        add esp, 4
-        popad
-        jmp dword ptr [gameSceneChangeStolen]
+// GameSceneManager.ChangeScene (0x5431C0) - 记录场景加载是否成功（返回 GameObject）。
+using GameSceneChangeFn = void* (__cdecl*)(void*, void*, bool);
+GameSceneChangeFn originalGameSceneChangeFn = nullptr;
+bool gameSceneChangeReturnHookApplied = false;
+void* __cdecl HookGameSceneChange(void* self, void* resPath, bool refresh) {
+    std::string path = ReadIl2CppString(resPath);
+    {
+        std::lock_guard<std::mutex> guard(logMutex);
+        std::ofstream output(logPath, std::ios::app);
+        output << "GameSceneManager.ChangeScene: " << path << " ENTER self=0x" << std::hex
+            << reinterpret_cast<uintptr_t>(self) << std::dec << " refresh=" << (refresh ? 1 : 0) << '\n';
+        output.flush();
     }
+    void* ret = originalGameSceneChangeFn(self, resPath, refresh);
+    {
+        std::lock_guard<std::mutex> guard(logMutex);
+        std::ofstream output(logPath, std::ios::app);
+        output << "GameSceneManager.ChangeScene: " << path << " DONE ret=0x" << std::hex
+            << reinterpret_cast<uintptr_t>(ret) << std::dec << '\n';
+        output.flush();
+    }
+    return ret;
+}
+void TryApplyGameSceneChangeHook() {
+    if (gameSceneChangeReturnHookApplied) return;
+    gameSceneChangeReturnHookApplied = true;
+    // prologue: 55 8B EC 51 80 3D AE 78 D4 11 00 = push ebp(1) mov ebp,esp(2) push ecx(1) cmp byte[disp],0(7) = 11
+    InstallReturnHook(0x5431C0, &HookGameSceneChange, &originalGameSceneChangeFn, 11, "GameSceneManager.ChangeScene");
 }
 
 __declspec(naked) void UIShipProxyLoadModelTrampoline() {
@@ -3577,34 +3591,56 @@ void LogLoadingTick(void* self) {
     const auto mStartData = ReadPtrSafe(s + 0x2C);
     const auto mSingleFrame = ReadPtrSafe(s + 0x30);
     static int loadingTickCount = 0;
+    static uintptr_t lastLoadingSelf = 0;
+    if (lastLoadingSelf != s) { lastLoadingSelf = s; loadingTickCount = 0; }
     if (loadingTickCount < 8) {
         char tmp[64];
         std::string extra;
         uintptr_t ga = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"GameAssembly.dll"));
-        uintptr_t loader = ga ? ReadPtrSafe(ga + 0x1D2C350) : 0;
-        uintptr_t mid = loader ? ReadPtrSafe(loader + 0x5C) : 0;
-        uintptr_t obj = mid ? ReadPtrSafe(mid + 0x4) : 0;
+        uintptr_t ctrl2 = ReadPtrSafe(s + 0x8);           // BattleCtrl
+        uintptr_t rlm = ReadPtrSafe(ctrl2 + 0x24);        // 真正的 ResourceLoadManager 对象
+        uintptr_t mid = 0;
+        uintptr_t obj = 0;
         int f19 = -1, f1a = -1;
         int f25 = -1;
-        if (obj) {
-            MEMORY_BASIC_INFORMATION m{};
-            if (VirtualQuery(reinterpret_cast<void*>(obj + 0x19), &m, sizeof(m)) &&
-                m.State == MEM_COMMIT && !(m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
-                f19 = *reinterpret_cast<unsigned char*>(obj + 0x19);
-                f1a = *reinterpret_cast<unsigned char*>(obj + 0x1A);
+        // rlm 结构 dump：+0x0..+0x100
+        if (rlm) {
+            const uintptr_t r = rlm;
+            char tmpR[420];
+            sprintf_s(tmpR, " rlm0=%d,%d,%d,%d,%d,%d,%d,%d rlm2=%d,%d,%d,%d,%d,%d,%d,%d rlm4=%d,%d,%d,%d,%d,%d,%d,%d",
+                ReadPtrSafe(r + 0x0), ReadPtrSafe(r + 0x4), ReadPtrSafe(r + 0x8), ReadPtrSafe(r + 0xC),
+                ReadPtrSafe(r + 0x10), ReadPtrSafe(r + 0x14), ReadPtrSafe(r + 0x18), ReadPtrSafe(r + 0x1C),
+                ReadPtrSafe(r + 0x20), ReadPtrSafe(r + 0x24), ReadPtrSafe(r + 0x28), ReadPtrSafe(r + 0x2C),
+                ReadPtrSafe(r + 0x30), ReadPtrSafe(r + 0x34), ReadPtrSafe(r + 0x38), ReadPtrSafe(r + 0x3C),
+                ReadPtrSafe(r + 0x40), ReadPtrSafe(r + 0x44), ReadPtrSafe(r + 0x48), ReadPtrSafe(r + 0x4C),
+                ReadPtrSafe(r + 0x50), ReadPtrSafe(r + 0x54), ReadPtrSafe(r + 0x58), ReadPtrSafe(r + 0x5C));
+            extra += tmpR;
+            char tmpR2[420];
+            sprintf_s(tmpR2, " rlm6=%d,%d,%d,%d,%d,%d,%d,%d rlm8=%d,%d,%d,%d,%d,%d,%d,%d rlmA=%d,%d,%d,%d,%d,%d,%d,%d",
+                ReadPtrSafe(r + 0x60), ReadPtrSafe(r + 0x64), ReadPtrSafe(r + 0x68), ReadPtrSafe(r + 0x6C),
+                ReadPtrSafe(r + 0x70), ReadPtrSafe(r + 0x74), ReadPtrSafe(r + 0x78), ReadPtrSafe(r + 0x7C),
+                ReadPtrSafe(r + 0x80), ReadPtrSafe(r + 0x84), ReadPtrSafe(r + 0x88), ReadPtrSafe(r + 0x8C),
+                ReadPtrSafe(r + 0x90), ReadPtrSafe(r + 0x94), ReadPtrSafe(r + 0x98), ReadPtrSafe(r + 0x9C),
+                ReadPtrSafe(r + 0xA0), ReadPtrSafe(r + 0xA4), ReadPtrSafe(r + 0xA8), ReadPtrSafe(r + 0xAC),
+                ReadPtrSafe(r + 0xB0), ReadPtrSafe(r + 0xB4), ReadPtrSafe(r + 0xB8), ReadPtrSafe(r + 0xBC));
+            extra += tmpR2;
+            char tmpR3[420];
+            sprintf_s(tmpR3, " rlmC=%d,%d,%d,%d,%d,%d,%d,%d",
+                ReadPtrSafe(r + 0xC0), ReadPtrSafe(r + 0xC4), ReadPtrSafe(r + 0xC8), ReadPtrSafe(r + 0xCC),
+                ReadPtrSafe(r + 0xD0), ReadPtrSafe(r + 0xD4), ReadPtrSafe(r + 0xD8), ReadPtrSafe(r + 0xDC));
+            extra += tmpR3;
+            // 扫描 rlm 各偏移指针指向的 Il2CppString
+            for (int off = 0; off <= 0x100; off += 4) {
+                uintptr_t p = ReadPtrSafe(r + off);
+                if (p < 0x10000 || p > 0x7FFFFFFF) continue;
+                std::string name = ReadIl2CppString(reinterpret_cast<void*>(p));
+                if (!name.empty() && name != "<null>" && name != "<unreadable>") {
+                    char ts[160];
+                    sprintf_s(ts, " rlm+0x%X=\"%s\"", off, name.c_str());
+                    extra += ts;
+                }
             }
         }
-        if (mid) {
-            MEMORY_BASIC_INFORMATION m{};
-            if (VirtualQuery(reinterpret_cast<void*>(mid + 0x25), &m, sizeof(m)) &&
-                m.State == MEM_COMMIT && !(m.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
-                f25 = *reinterpret_cast<unsigned char*>(mid + 0x25);
-            }
-        }
-        sprintf_s(tmp, " loader=0x%X mid=0x%X obj=0x%X f19=%d f1a=%d mid25=%d",
-            static_cast<unsigned>(loader), static_cast<unsigned>(mid),
-            static_cast<unsigned>(obj), f19, f1a, f25);
-        extra = tmp;
         if (mSingleFrame) {
             MEMORY_BASIC_INFORMATION m{};
             int fin18 = -1, fin19 = -1;
@@ -3623,6 +3659,17 @@ void LogLoadingTick(void* self) {
             " changeState=" + std::to_string(changeState) +
             " mBattleFrame=" + std::to_string(mBattleFrame) +
             " mStartData=" + std::to_string(mStartData) +
+            " sd_copyType=" + std::to_string(ReadPtrSafe(mStartData + 0x18)) +
+            " sd_copyDictId=" + std::to_string(ReadPtrSafe(mStartData + 0xC)) +
+            " sd_battleMode=" + std::to_string(ReadPtrSafe(mStartData + 0x98)) +
+            " sd_animMode=" + std::to_string(ReadPtrSafe(mStartData + 0x9C)) +
+            " sd_weather=" + std::to_string(ReadPtrSafe(mStartData + 0xA0)) +
+            " sd_enemyFleetId0=" + std::to_string(mStartData ? ReadPtrSafe(ReadPtrSafe(mStartData + 0x94)) : 0) +
+            " sd_allFactors0=" + std::to_string(mStartData ? ReadPtrSafe(ReadPtrSafe(mStartData + 0x80)) : 0) +
+            " sd_allFactors1=" + std::to_string(mStartData ? ReadPtrSafe(ReadPtrSafe(mStartData + 0x80) + 4) : 0) +
+            " sd_configDatas=" + std::to_string(mStartData ? ReadPtrSafe(mStartData + 0xA4) : 0) +
+            " sd_enemys0=" + std::to_string(mStartData ? ReadPtrSafe(ReadPtrSafe(mStartData + 0x3C)) : 0) +
+            " sd_copyRess0=" + std::to_string(mStartData ? ReadPtrSafe(ReadPtrSafe(mStartData + 0x70)) : 0) +
             " mSingleFrame=" + std::to_string(mSingleFrame) +
             " ctrl=0x" + std::to_string(ReadPtrSafe(s + 0x8)) +
             " ctrlLoading=" + std::to_string(ReadPtrSafe(ReadPtrSafe(s + 0x8) + 0x18)) +
@@ -3649,6 +3696,862 @@ void TryApplyLoadingTickHook() {
     if (loadingTickHookApplied) return;
     loadingTickHookApplied = true;
     InstallStrArgHook(0x1EF290, &LoadingTickTrampoline, &loadingTickStolen, 7, "StageSimpleBattle.LoadingTick");
+}
+
+// SearchRightMap.Init (0x3A1AE0) - 索敌右图 UI 初始化。海域 BattlePage 卡在索敌子 UI。
+using SearchRightMapInitFn = void (__cdecl*)(void*, void*, float);
+SearchRightMapInitFn originalSearchRightMapInit = nullptr;
+bool searchRightMapInitHookApplied = false;
+void __cdecl HookSearchRightMapInit(void* self, void* root, float rightPercent) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "SearchRightMap.Init ENTER self=0x" << std::hex
+        << reinterpret_cast<uintptr_t>(self) << " root=0x" << reinterpret_cast<uintptr_t>(root)
+        << std::dec << " rightPercent=" << std::to_string(rightPercent) << '\n';
+    output.flush();
+    originalSearchRightMapInit(self, root, rightPercent);
+    std::lock_guard<std::mutex> guard2(logMutex);
+    std::ofstream output2(logPath, std::ios::app);
+    output2 << "SearchRightMap.Init DONE self=0x" << std::hex
+        << reinterpret_cast<uintptr_t>(self) << std::dec << '\n';
+    output2.flush();
+}
+void TryApplySearchRightMapInitHook() {
+    if (searchRightMapInitHookApplied) return;
+    searchRightMapInitHookApplied = true;
+    // prologue: 55 8B EC 83 EC 48 80 3D 24 68 D4 11 00 = push ebp(1) mov ebp,esp(2) sub esp,0x48(3) cmp byte[disp],0(7) = 13
+    InstallReturnHook(0x3A1AE0, &HookSearchRightMapInit, &originalSearchRightMapInit, 13, "SearchRightMap.Init");
+}
+
+// BattlePage.DoLoad (0x2C1230) - 战斗页面加载。海域 BattlePage prefab 加载卡（mid=BattlePage）。
+using BattlePageDoLoadFn = void (__cdecl*)(void*);
+BattlePageDoLoadFn originalBattlePageDoLoad = nullptr;
+bool battlePageDoLoadHookApplied = false;
+void __cdecl HookBattlePageDoLoad(void* self) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "BattlePage.DoLoad ENTER self=0x" << std::hex << reinterpret_cast<uintptr_t>(self) << std::dec << '\n';
+    output.flush();
+    originalBattlePageDoLoad(self);
+    std::lock_guard<std::mutex> guard2(logMutex);
+    std::ofstream output2(logPath, std::ios::app);
+    output2 << "BattlePage.DoLoad DONE self=0x" << std::hex << reinterpret_cast<uintptr_t>(self) << std::dec << '\n';
+    output2.flush();
+}
+void TryApplyBattlePageDoLoadHook() {
+    if (battlePageDoLoadHookApplied) return;
+    battlePageDoLoadHookApplied = true;
+    // prologue: 55 8B EC 80 3D E4 5C D4 11 00 = push ebp(1) mov ebp,esp(2) cmp byte[disp],0(7) = 10
+    InstallReturnHook(0x2C1230, &HookBattlePageDoLoad, &originalBattlePageDoLoad, 10, "BattlePage.DoLoad");
+}
+
+// ---- 战斗初始化流程追踪（海域 vs 剧情差异定位）----
+// StageBattleBaseEx.StageEnterImpl (0x1EA8C0) - stage 进入
+using StageEnterImplFn = void (__cdecl*)(void*, void*);
+StageEnterImplFn originalStageEnterImplFn = nullptr;
+bool stageEnterImplHookApplied = false;
+void __cdecl HookStageEnterImpl(void* self, void* enterParam) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "StageBattleBaseEx.StageEnterImpl ENTER self=0x" << std::hex
+        << reinterpret_cast<uintptr_t>(self) << " enterParam=0x" << reinterpret_cast<uintptr_t>(enterParam)
+        << std::dec << '\n';
+    output.flush();
+    originalStageEnterImplFn(self, enterParam);
+    std::lock_guard<std::mutex> guard2(logMutex);
+    std::ofstream output2(logPath, std::ios::app);
+    output2 << "StageBattleBaseEx.StageEnterImpl DONE self=0x" << std::hex
+        << reinterpret_cast<uintptr_t>(self) << std::dec << '\n';
+    output2.flush();
+}
+void TryApplyStageEnterImplHook() {
+    if (stageEnterImplHookApplied) return;
+    stageEnterImplHookApplied = true;
+    // prologue: 55 8B EC 51 80 3D 6C 53 D4 11 00 = push ebp(1) mov ebp,esp(2) push ecx(1) cmp byte[disp],0(7) = 11
+    InstallReturnHook(0x1EA8C0, &HookStageEnterImpl, &originalStageEnterImplFn, 11, "StageEnterImpl");
+}
+
+// BattleManager.InitBattle (0x299640) - 战斗初始化（InstallStrArgHook 安全版）
+void* battleManagerInitBattleStolen = nullptr;
+bool battleManagerInitBattleHookApplied = false;
+void LogBattleManagerInitBattle(void* self) {
+    Log("BattleManager.InitBattle self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void BattleManagerInitBattleTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogBattleManagerInitBattle
+        add esp, 4
+        popad
+        jmp dword ptr [battleManagerInitBattleStolen]
+    }
+}
+void TryApplyBattleManagerInitBattleHook() {
+    if (battleManagerInitBattleHookApplied) return;
+    battleManagerInitBattleHookApplied = true;
+    // prologue: 55 8B EC 80 3D 5E 5C D4 11 00 = push ebp(1) mov ebp,esp(2) cmp byte[disp],0(7) = 10
+    InstallStrArgHook(0x299640, &BattleManagerInitBattleTrampoline, &battleManagerInitBattleStolen, 10, "BattleManager.InitBattle");
+}
+
+// BattleManager.Run (0x299B10) - 用 InstallStrArgHook 安全追踪
+void* battleManagerRunStolen = nullptr;
+bool battleManagerRunHookApplied = false;
+void LogBattleManagerRun(void* self, void* registerRes) {
+    Log("BattleManager.Run self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " registerRes=" + std::to_string(reinterpret_cast<uintptr_t>(registerRes)));
+}
+__declspec(naked) void BattleManagerRunTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        mov ecx, dword ptr [esp + 40]
+        push ecx
+        push eax
+        call LogBattleManagerRun
+        add esp, 8
+        popad
+        jmp dword ptr [battleManagerRunStolen]
+    }
+}
+void TryApplyBattleManagerRunHook() {
+    if (battleManagerRunHookApplied) return;
+    battleManagerRunHookApplied = true;
+    // prologue: 55 8B EC 80 3D 58 5C D4 11 00 = 10
+    InstallStrArgHook(0x299B10, &BattleManagerRunTrampoline, &battleManagerRunStolen, 10, "BattleManager.Run");
+}
+
+// BattleFrameBase.Init (0x308EF0) - 战斗帧初始化（索敌初始化在其中）
+void* battleFrameInitStolen = nullptr;
+bool battleFrameInitHookApplied = false;
+void LogBattleFrameInit(void* self) {
+    Log("BattleFrameBase.Init self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void BattleFrameInitTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogBattleFrameInit
+        add esp, 4
+        popad
+        jmp dword ptr [battleFrameInitStolen]
+    }
+}
+void TryApplyBattleFrameInitHook() {
+    if (battleFrameInitHookApplied) return;
+    battleFrameInitHookApplied = true;
+    // prologue: 55 8B EC 51 80 3D A6 60 D4 11 00 = push ebp(1) mov ebp,esp(2) push ecx(1) cmp byte[disp],0(7) = 11
+    InstallStrArgHook(0x308EF0, &BattleFrameInitTrampoline, &battleFrameInitStolen, 11, "BattleFrameBase.Init");
+}
+
+// BattleFrameBase.initBattleLogic (0x30A210) / initDisplay (0x30A2C0) / initNet (0x30A420)
+void* bfInitLogicStolen = nullptr; bool bfInitLogicApplied = false;
+void* bfInitDisplayStolen = nullptr; bool bfInitDisplayApplied = false;
+void* bfInitNetStolen = nullptr; bool bfInitNetApplied = false;
+void LogBFInitLogic(void* self) { Log("BattleFrame.initBattleLogic self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+void LogBFInitDisplay(void* self) { Log("BattleFrame.initDisplay self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+void LogBFInitNet(void* self) { Log("BattleFrame.initNet self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+__declspec(naked) void BFInitLogicTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogBFInitLogic
+        add esp, 4
+        popad
+        jmp dword ptr [bfInitLogicStolen]
+    }
+}
+__declspec(naked) void BFInitDisplayTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogBFInitDisplay
+        add esp, 4
+        popad
+        jmp dword ptr [bfInitDisplayStolen]
+    }
+}
+__declspec(naked) void BFInitNetTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogBFInitNet
+        add esp, 4
+        popad
+        jmp dword ptr [bfInitNetStolen]
+    }
+}
+void TryApplyBFInitLogicHook() { if (bfInitLogicApplied) return; bfInitLogicApplied = true; InstallStrArgHook(0x30A210, &BFInitLogicTrampoline, &bfInitLogicStolen, 10, "BattleFrame.initBattleLogic"); }
+void TryApplyBFInitDisplayHook() { if (bfInitDisplayApplied) return; bfInitDisplayApplied = true; InstallStrArgHook(0x30A2C0, &BFInitDisplayTrampoline, &bfInitDisplayStolen, 10, "BattleFrame.initDisplay"); }
+void TryApplyBFInitNetHook() { if (bfInitNetApplied) return; bfInitNetApplied = true; InstallStrArgHook(0x30A420, &BFInitNetTrampoline, &bfInitNetStolen, 7, "BattleFrame.initNet"); }
+
+// BattleManager.ctor (0x299CA0) - 单例创建确认
+void* battleManagerCtorStolen = nullptr;
+bool battleManagerCtorApplied = false;
+void LogBattleManagerCtor(void* self) {
+    Log("BattleManager.ctor self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void BattleManagerCtorTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogBattleManagerCtor
+        add esp, 4
+        popad
+        jmp dword ptr [battleManagerCtorStolen]
+    }
+}
+void TryApplyBattleManagerCtorHook() {
+    if (battleManagerCtorApplied) return;
+    battleManagerCtorApplied = true;
+    // prologue: 55 8B EC 80 3D 54 5C D4 11 00 = 10
+    InstallStrArgHook(0x299CA0, &BattleManagerCtorTrampoline, &battleManagerCtorStolen, 10, "BattleManager.ctor");
+}
+
+// BattleFrame.Init 内部调用追踪（索敌初始化定位）
+struct BFInnerHook { void* stolen = nullptr; bool applied = false; const char* name; };
+static BFInnerHook g_bf354c30{nullptr, false, "BF.c354c30"};
+static BFInnerHook g_bf6f05f0{nullptr, false, "BF.c6f05f0"};
+static BFInnerHook g_bf586750{nullptr, false, "BF.c586750"};
+static BFInnerHook g_bf58c800{nullptr, false, "BF.c58c800"};
+static BFInnerHook g_bf585460{nullptr, false, "BF.c585460"};
+static void LogBFInner0(void* self) {
+    const auto s = reinterpret_cast<uintptr_t>(self);
+    std::string extra = "BFInner.354c30 self=" + std::to_string(s);
+    // CoreLogic vtable 槽位（ctor 内 [ebx+0xec]/[ebx+0xfc]/[ebx+0x11c] 调用）
+    const auto vt = ReadPtrSafe(s);
+    const auto ga = reinterpret_cast<uintptr_t>(GetModuleHandleW(L"GameAssembly.dll"));
+    if (vt && ga) {
+        char tmp[360];
+        sprintf_s(tmp, " gaBase=0x%X vtEc=0x%X(ra=0x%X) vtFc=0x%X(ra=0x%X) vt11c=0x%X(ra=0x%X) vt124=0x%X(ra=0x%X)",
+            static_cast<unsigned>(ga),
+            static_cast<unsigned>(ReadPtrSafe(vt + 0xEC)),
+            static_cast<unsigned>(ReadPtrSafe(vt + 0xEC) - ga),
+            static_cast<unsigned>(ReadPtrSafe(vt + 0xFC)),
+            static_cast<unsigned>(ReadPtrSafe(vt + 0xFC) - ga),
+            static_cast<unsigned>(ReadPtrSafe(vt + 0x11C)),
+            static_cast<unsigned>(ReadPtrSafe(vt + 0x11C) - ga),
+            static_cast<unsigned>(ReadPtrSafe(vt + 0x124)),
+            static_cast<unsigned>(ReadPtrSafe(vt + 0x124) - ga));
+        extra += tmp;
+    }
+    Log(extra);
+}
+static void LogBFInner1(void* self) { Log("BFInner.6f05f0 self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+static void LogBFInner2(void* self) { Log("BFInner.586750 self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+static void LogBFInner3(void* self) { Log("BFInner.58c800 self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+static void LogBFInner4(void* self) { Log("BFInner.585460 self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+__declspec(naked) void BFInner0Trampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogBFInner0
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [g_bf354c30.stolen]
+}
+__declspec(naked) void BFInner1Trampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogBFInner1
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [g_bf6f05f0.stolen]
+}
+__declspec(naked) void BFInner2Trampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogBFInner2
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [g_bf586750.stolen]
+}
+__declspec(naked) void BFInner3Trampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogBFInner3
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [g_bf58c800.stolen]
+}
+__declspec(naked) void BFInner4Trampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogBFInner4
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [g_bf585460.stolen]
+}
+void TryApplyBFInnerHooks() {
+    if (g_bf354c30.applied) return;
+    g_bf354c30.applied = g_bf6f05f0.applied = g_bf586750.applied = g_bf58c800.applied = g_bf585460.applied = true;
+    InstallStrArgHook(0x354C30, &BFInner0Trampoline, &g_bf354c30.stolen, 10, "BF.c354c30");
+    InstallStrArgHook(0x6F05F0, &BFInner1Trampoline, &g_bf6f05f0.stolen, 7, "BF.c6f05f0");
+    InstallStrArgHook(0x586750, &BFInner2Trampoline, &g_bf586750.stolen, 6, "BF.c586750");
+    InstallStrArgHook(0x58C800, &BFInner3Trampoline, &g_bf58c800.stolen, 10, "BF.c58c800");
+    InstallStrArgHook(0x585460, &BFInner4Trampoline, &g_bf585460.stolen, 10, "BF.c585460");
+}
+
+// CoreLogic._InitCoreAPI (0x3549F0) / _InitCoreSystem (0x354AE0) / _InitCoreLogic (0x354A90)
+void* clInitApiStolen = nullptr; bool clInitApiApplied = false;
+void* clInitSysStolen = nullptr; bool clInitSysApplied = false;
+void* clInitLogicStolen = nullptr; bool clInitLogicApplied = false;
+void LogCLInitApi(void* self) { Log("CoreLogic._InitCoreAPI self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+void LogCLInitSys(void* self) { Log("CoreLogic._InitCoreSystem self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+void LogCLInitLogic(void* self) { Log("CoreLogic._InitCoreLogic self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+__declspec(naked) void CLInitApiTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogCLInitApi
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [clInitApiStolen]
+}
+__declspec(naked) void CLInitSysTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogCLInitSys
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [clInitSysStolen]
+}
+__declspec(naked) void CLInitLogicTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogCLInitLogic
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [clInitLogicStolen]
+}
+void TryApplyCLInitHooks() {
+    if (clInitApiApplied) return;
+    clInitApiApplied = clInitSysApplied = clInitLogicApplied = true;
+    InstallStrArgHook(0x3549F0, &CLInitApiTrampoline, &clInitApiStolen, 10, "CoreLogic._InitCoreAPI");
+    InstallStrArgHook(0x354AE0, &CLInitSysTrampoline, &clInitSysStolen, 10, "CoreLogic._InitCoreSystem");
+    InstallStrArgHook(0x354A90, &CLInitLogicTrampoline, &clInitLogicStolen, 10, "CoreLogic._InitCoreLogic");
+}
+
+// 0x10956450 - PveCoreCreator 用的 config 查询（copyDictId → config_copy_display）
+void* cfgQueryStolen = nullptr;
+bool cfgQueryApplied = false;
+void LogCfgQuery(void* self, void* copyDictId) {
+    Log("CfgQuery.10956450 self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " copyDictId=" + std::to_string(reinterpret_cast<uintptr_t>(copyDictId)));
+}
+__declspec(naked) void CfgQueryTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm mov ecx, dword ptr [esp + 40]
+    __asm push ecx
+    __asm push eax
+    __asm call LogCfgQuery
+    __asm add esp, 8
+    __asm popad
+    __asm jmp dword ptr [cfgQueryStolen]
+}
+void TryApplyCfgQueryHook() {
+    if (cfgQueryApplied) return;
+    cfgQueryApplied = true;
+    InstallStrArgHook(0x956450, &CfgQueryTrampoline, &cfgQueryStolen, 10, "CfgQuery.10956450");
+}
+
+// InitWithStartData (0x300690) 与基类 (0x2fbe40) 追踪
+void* iwsdStolen = nullptr; bool iwsdApplied = false;
+void* iwsdBaseStolen = nullptr; bool iwsdBaseApplied = false;
+void LogIWSD(void* self) {
+    Log("InitWithStartData.300690 self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+void LogIWSDBase(void* self) {
+    const auto s = reinterpret_cast<uintptr_t>(self);
+    Log("InitWithStartData.2fbe40 self=" + std::to_string(s) +
+        " +0x14=" + std::to_string(ReadPtrSafe(s + 0x14)) +
+        " +0x3c=" + std::to_string(ReadPtrSafe(s + 0x3C)));
+}
+__declspec(naked) void IWSDTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogIWSD
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [iwsdStolen]
+}
+__declspec(naked) void IWSDBaseTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogIWSDBase
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [iwsdBaseStolen]
+}
+void TryApplyIWSDHooks() {
+    if (iwsdApplied) return;
+    iwsdApplied = iwsdBaseApplied = true;
+    InstallStrArgHook(0x300690, &IWSDTrampoline, &iwsdStolen, 10, "InitWithStartData");
+    InstallStrArgHook(0x2FBE40, &IWSDBaseTrampoline, &iwsdBaseStolen, 5, "InitWithStartData.base");
+}
+
+// 0x104fba20 - InitWithStartData 基类的虚方法调用点（索敌核心初始化）
+void* fbA20Stolen = nullptr; bool fbA20Applied = false;
+void LogFB_A20(void* self) {
+    Log("FB.A20 self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void FB_A20Trampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogFB_A20
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [fbA20Stolen]
+}
+void TryApplyFB_A20Hook() {
+    if (fbA20Applied) return;
+    fbA20Applied = true;
+    InstallStrArgHook(0x4FBA20, &FB_A20Trampoline, &fbA20Stolen, 8, "FB.A20");
+}
+
+// LogicCore.ctor (0x104FDAB0) - 索敌核心构造
+void* logicCoreCtorStolen = nullptr; bool logicCoreCtorApplied = false;
+void LogLogicCoreCtor(void* self) { Log("LogicCore.ctor self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+__declspec(naked) void LogicCoreCtorTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogLogicCoreCtor
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [logicCoreCtorStolen]
+}
+void TryApplyLogicCoreCtorHook() {
+    if (logicCoreCtorApplied) return;
+    logicCoreCtorApplied = true;
+    InstallStrArgHook(0x4FDAB0, &LogicCoreCtorTrampoline, &logicCoreCtorStolen, 10, "LogicCore.ctor");
+}
+
+// 0x2fbe40 返回追踪（InstallReturnHook 版）
+using IWSDBaseRetFn = void (__cdecl*)(void*, void*);
+IWSDBaseRetFn originalIWSDBaseRetFn = nullptr;
+bool iwsdBaseRetApplied = false;
+void __cdecl HookIWSDBaseRet(void* self, void* startDataRef) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "IWSDBase.RET ENTER self=" << std::to_string(reinterpret_cast<uintptr_t>(self)) << '\n';
+    output.flush();
+    originalIWSDBaseRetFn(self, startDataRef);
+    std::lock_guard<std::mutex> guard2(logMutex);
+    std::ofstream output2(logPath, std::ios::app);
+    output2 << "IWSDBase.RET DONE self=" << std::to_string(reinterpret_cast<uintptr_t>(self)) << '\n';
+    output2.flush();
+}
+void TryApplyIWSDBaseRetHook() {
+    if (iwsdBaseRetApplied) return;
+    iwsdBaseRetApplied = true;
+    InstallReturnHook(0x2FBE40, &HookIWSDBaseRet, &originalIWSDBaseRetFn, 6, "IWSDBase.RET");
+}
+
+// PveCoreCreator.InitWithStartData (0x5004C0) / _InitWithStartDataCore (0x500530) - 海域索敌核心
+void* pveCoreStolen = nullptr; bool pveCoreApplied = false;
+void* pveCoreInnerStolen = nullptr; bool pveCoreInnerApplied = false;
+void LogPveCore(void* self) { Log("PveCore.InitWithStartData self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+void LogPveCoreInner(void* self) { Log("PveCore._InitWithStartDataCore self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+__declspec(naked) void PveCoreTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogPveCore
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [pveCoreStolen]
+}
+__declspec(naked) void PveCoreInnerTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogPveCoreInner
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [pveCoreInnerStolen]
+}
+void TryApplyPveCoreHooks() {
+    if (pveCoreApplied) return;
+    pveCoreApplied = pveCoreInnerApplied = true;
+    InstallStrArgHook(0x5004C0, &PveCoreTrampoline, &pveCoreStolen, 10, "PveCore.InitWithStartData");
+    InstallStrArgHook(0x500530, &PveCoreInnerTrampoline, &pveCoreInnerStolen, 6, "PveCore._InitWithStartDataCore");
+}
+
+// IslandInterface.InitIslandData (0x52A170) - 索敌岛屿初始化
+void* islandInitStolen = nullptr; bool islandInitApplied = false;
+void LogIslandInit(void* self) { Log("IslandInterface.InitIslandData self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+__declspec(naked) void IslandInitTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogIslandInit
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [islandInitStolen]
+}
+void TryApplyIslandInitHook() {
+    if (islandInitApplied) return;
+    islandInitApplied = true;
+    InstallStrArgHook(0x52A170, &IslandInitTrampoline, &islandInitStolen, 13, "IslandInterface.InitIslandData");
+}
+
+// PveCore._InitWithStartDataCore 内部调用追踪（批量简单 hook）
+void* g_pveAStolen = nullptr;
+void* g_pveBStolen = nullptr;
+void* g_pveCStolen = nullptr;
+void* g_pveDStolen = nullptr;
+void* g_pveEStolen = nullptr;
+static void PveLogA(void* s) { Log("PveInner.675b20 self=" + std::to_string(reinterpret_cast<uintptr_t>(s))); }
+static void PveLogB(void* s) { Log("PveInner.675bd0 self=" + std::to_string(reinterpret_cast<uintptr_t>(s))); }
+static void PveLogC(void* s) { Log("PveInner.167e200 self=" + std::to_string(reinterpret_cast<uintptr_t>(s))); }
+static void PveLogD(void* s) { Log("PveInner.5254b0 self=" + std::to_string(reinterpret_cast<uintptr_t>(s))); }
+static void PveLogE(void* s) { Log("PveInner.1696b50 self=" + std::to_string(reinterpret_cast<uintptr_t>(s))); }
+#define PVE_INNER_TRAMP(id, logfn, stolenVar) \
+__declspec(naked) void PveInner##id##Tramp() { \
+    __asm pushad \
+    __asm mov eax, dword ptr [esp + 36] \
+    __asm push eax \
+    __asm call logfn \
+    __asm add esp, 4 \
+    __asm popad \
+    __asm jmp dword ptr [stolenVar] \
+}
+PVE_INNER_TRAMP(A, PveLogA, g_pveAStolen)
+PVE_INNER_TRAMP(B, PveLogB, g_pveBStolen)
+PVE_INNER_TRAMP(C, PveLogC, g_pveCStolen)
+PVE_INNER_TRAMP(D, PveLogD, g_pveDStolen)
+PVE_INNER_TRAMP(E, PveLogE, g_pveEStolen)
+bool g_pveInnerApplied = false;
+void TryApplyPveInnerHooks() {
+    if (g_pveInnerApplied) return;
+    g_pveInnerApplied = true;
+    InstallStrArgHook(0x675B20, &PveInnerATramp, &g_pveAStolen, 7, "PveInner.675b20");
+    InstallStrArgHook(0x675BD0, &PveInnerBTramp, &g_pveBStolen, 7, "PveInner.675bd0");
+    InstallStrArgHook(0x167E200, &PveInnerCTramp, &g_pveCStolen, 10, "PveInner.167e200");
+    InstallStrArgHook(0x5254B0, &PveInnerDTramp, &g_pveDStolen, 8, "PveInner.5254b0");
+    InstallStrArgHook(0x1696B50, &PveInnerETramp, &g_pveEStolen, 6, "PveInner.1696b50");
+}
+
+// FogInterface.InitFogData (0x5254B0) / InitResPoint (0x1696B50) - 索敌迷雾/资源点
+void* fogInitStolen = nullptr; bool fogInitApplied = false;
+void* resPointStolen = nullptr; bool resPointApplied = false;
+void LogFogInit(void* self) { Log("Fog.InitFogData self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+void LogResPoint(void* self, void* dictCopy, void* resList, void* arg4) {
+    const auto rl = reinterpret_cast<uintptr_t>(resList);
+    Log("InitResPoint self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " dictCopy=" + std::to_string(reinterpret_cast<uintptr_t>(dictCopy)) +
+        " resList=" + std::to_string(rl) +
+        " len=" + std::to_string(ReadPtrSafe(rl + 0xC)) +
+        " data0=" + std::to_string(ReadPtrSafe(ReadPtrSafe(rl + 0x10))));
+}
+__declspec(naked) void FogInitTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogFogInit
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [fogInitStolen]
+}
+__declspec(naked) void ResPointTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm mov ecx, dword ptr [esp + 40]
+    __asm mov edx, dword ptr [esp + 44]
+    __asm mov ebx, dword ptr [esp + 48]
+    __asm push ebx
+    __asm push edx
+    __asm push ecx
+    __asm push eax
+    __asm call LogResPoint
+    __asm add esp, 16
+    __asm popad
+    __asm jmp dword ptr [resPointStolen]
+}
+void TryApplyFogResPointHooks() {
+    if (fogInitApplied) return;
+    fogInitApplied = resPointApplied = true;
+    InstallStrArgHook(0x5254B0, &FogInitTrampoline, &fogInitStolen, 8, "Fog.InitFogData");
+    InstallStrArgHook(0x1696B50, &ResPointTrampoline, &resPointStolen, 6, "InitResPoint");
+}
+
+// BfTimeInterface.Init (0x65F200) / __InitDayNightData (0x65F770) - 索敌限时初始化
+void* bfTimeInitStolen = nullptr; bool bfTimeInitApplied = false;
+void* bfDayNightStolen = nullptr; bool bfDayNightApplied = false;
+void LogBfTimeInit(void* self, void* dictCopy) {
+    const auto dc = reinterpret_cast<uintptr_t>(dictCopy);
+    Log("BfTime.Init self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " dictCopy=" + std::to_string(reinterpret_cast<uintptr_t>(dictCopy)) +
+        " battle_time=" + std::to_string(ReadPtrSafe(dc + 0x1C)));
+}
+void LogBfDayNight(void* self) {
+    Log("BfTime.__InitDayNightData self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void BfTimeInitTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm mov ecx, dword ptr [esp + 40]
+    __asm push ecx
+    __asm push eax
+    __asm call LogBfTimeInit
+    __asm add esp, 8
+    __asm popad
+    __asm jmp dword ptr [bfTimeInitStolen]
+}
+__declspec(naked) void BfDayNightTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogBfDayNight
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [bfDayNightStolen]
+}
+void TryApplyBfTimeHooks() {
+    if (bfTimeInitApplied) return;
+    bfTimeInitApplied = bfDayNightApplied = true;
+    InstallStrArgHook(0x65F200, &BfTimeInitTrampoline, &bfTimeInitStolen, 7, "BfTime.Init");
+    InstallStrArgHook(0x65F770, &BfDayNightTrampoline, &bfDayNightStolen, 13, "BfTime.__InitDayNightData");
+}
+
+// BfTimeInterface.LastTime (0x65F370) - 索敌剩余时间（InstallReturnHook 记录返回）
+using BfLastTimeFn = int (__cdecl*)(void*);
+BfLastTimeFn originalBfLastTimeFn = nullptr;
+bool bfLastTimeApplied = false;
+int __cdecl HookBfLastTime(void* self) {
+    int ret = originalBfLastTimeFn(self);
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "BfTime.LastTime self=" << std::to_string(reinterpret_cast<uintptr_t>(self))
+        << " ret=" << std::to_string(ret) << '\n';
+    output.flush();
+    return ret;
+}
+void TryApplyBfLastTimeHook() {
+    if (bfLastTimeApplied) return;
+    bfLastTimeApplied = true;
+    InstallReturnHook(0x65F370, &HookBfLastTime, &originalBfLastTimeFn, 7, "BfTime.LastTime");
+}
+
+// BattleTimeInterface.SetStageTime (0x65ED60) - 战斗限时初始化
+void* setStageTimeStolen = nullptr; bool setStageTimeApplied = false;
+void LogSetStageTime(void* self, void* battleMs, void* nightMs, void* longNightMs) {
+    Log("BattleTime.SetStageTime self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " battleMs=" + std::to_string(reinterpret_cast<uintptr_t>(battleMs)) +
+        " nightMs=" + std::to_string(reinterpret_cast<uintptr_t>(nightMs)) +
+        " longNightMs=" + std::to_string(reinterpret_cast<uintptr_t>(longNightMs)));
+}
+__declspec(naked) void SetStageTimeTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm mov ecx, dword ptr [esp + 40]
+    __asm mov edx, dword ptr [esp + 44]
+    __asm mov ebx, dword ptr [esp + 48]
+    __asm push ebx
+    __asm push edx
+    __asm push ecx
+    __asm push eax
+    __asm call LogSetStageTime
+    __asm add esp, 16
+    __asm popad
+    __asm jmp dword ptr [setStageTimeStolen]
+}
+void TryApplySetStageTimeHook() {
+    if (setStageTimeApplied) return;
+    setStageTimeApplied = true;
+    InstallStrArgHook(0x65ED60, &SetStageTimeTrampoline, &setStageTimeStolen, 7, "BattleTime.SetStageTime");
+}
+
+// 索敌→战斗转换：StateBattleReady.__EnterBattleFromSearch (0x510670) / MultiPveCoreCreator (0x4FFF70) / GetJoinBattleFleetUidList (0x52B650)
+void* sbrSearchStolen = nullptr; bool sbrSearchApplied = false;
+void* mpcSearchStolen = nullptr; bool mpcSearchApplied = false;
+void* joinUidStolen = nullptr; bool joinUidApplied = false;
+void LogSBRSearch(void* self) { Log("EnterBattleFromSearch.StateBattleReady self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+void LogMPCSearch(void* self) { Log("EnterBattleFromSearch.MultiPve self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+void LogJoinUid(void* self) { Log("GetJoinBattleFleetUidList self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+__declspec(naked) void SBRSearchTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogSBRSearch
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [sbrSearchStolen]
+}
+__declspec(naked) void MPCSearchTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogMPCSearch
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [mpcSearchStolen]
+}
+__declspec(naked) void JoinUidTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogJoinUid
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [joinUidStolen]
+}
+void TryApplySearchToBattleHooks() {
+    if (sbrSearchApplied) return;
+    sbrSearchApplied = mpcSearchApplied = joinUidApplied = true;
+    InstallStrArgHook(0x510670, &SBRSearchTrampoline, &sbrSearchStolen, 10, "EnterBattleFromSearch.StateBattleReady");
+    InstallStrArgHook(0x4FFF70, &MPCSearchTrampoline, &mpcSearchStolen, 8, "EnterBattleFromSearch.MultiPve");
+    InstallStrArgHook(0x52B650, &JoinUidTrampoline, &joinUidStolen, 7, "GetJoinBattleFleetUidList");
+}
+
+// StateBattleReady.__EnterBattleFromSearch (0x510670) - 索敌→战斗转换（单个 hook）
+void* sbrSearchOnlyStolen = nullptr; bool sbrSearchOnlyApplied = false;
+void LogSBRSearchOnly(void* self) { Log("EnterBattleFromSearch.StateBattleReady self=" + std::to_string(reinterpret_cast<uintptr_t>(self))); }
+__declspec(naked) void SBRSearchOnlyTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm push eax
+    __asm call LogSBRSearchOnly
+    __asm add esp, 4
+    __asm popad
+    __asm jmp dword ptr [sbrSearchOnlyStolen]
+}
+void TryApplySBRSearchOnlyHook() {
+    if (sbrSearchOnlyApplied) return;
+    sbrSearchOnlyApplied = true;
+    InstallStrArgHook(0x510670, &SBRSearchOnlyTrampoline, &sbrSearchOnlyStolen, 10, "EnterBattleFromSearch.StateBattleReady");
+}
+
+// SetBattleTimeOfWeather (0x156F30) / BattleTimeInterface.InitTime (0x65EAB0) - 战斗限时另一路径
+void* setWeatherStolen = nullptr; bool setWeatherApplied = false;
+void* initTimeStolen = nullptr; bool initTimeApplied = false;
+void LogSetWeather(void* self, void* weather) {
+    Log("SetBattleTimeOfWeather self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " weather=" + std::to_string(reinterpret_cast<uintptr_t>(weather)));
+}
+void LogInitTime(void* self, void* time, void* weather) {
+    Log("BattleTime.InitTime self=" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " time=" + std::to_string(reinterpret_cast<uintptr_t>(time)) +
+        " weather=" + std::to_string(reinterpret_cast<uintptr_t>(weather)));
+}
+__declspec(naked) void SetWeatherTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm mov ecx, dword ptr [esp + 40]
+    __asm push ecx
+    __asm push eax
+    __asm call LogSetWeather
+    __asm add esp, 8
+    __asm popad
+    __asm jmp dword ptr [setWeatherStolen]
+}
+__declspec(naked) void InitTimeTrampoline() {
+    __asm pushad
+    __asm mov eax, dword ptr [esp + 36]
+    __asm mov ecx, dword ptr [esp + 40]
+    __asm mov edx, dword ptr [esp + 44]
+    __asm push edx
+    __asm push ecx
+    __asm push eax
+    __asm call LogInitTime
+    __asm add esp, 12
+    __asm popad
+    __asm jmp dword ptr [initTimeStolen]
+}
+void TryApplyBattleTimePathHooks() {
+    if (setWeatherApplied) return;
+    setWeatherApplied = initTimeApplied = true;
+    InstallStrArgHook(0x156F30, &SetWeatherTrampoline, &setWeatherStolen, 7, "SetBattleTimeOfWeather");
+    InstallStrArgHook(0x65EAB0, &InitTimeTrampoline, &initTimeStolen, 9, "BattleTime.InitTime");
+}
+
+// BattlePage.ctor (0x2C2CB0) - 战斗页面对象构造。
+void* battlePageCtorStolen = nullptr;
+bool battlePageCtorHookApplied = false;
+void LogBattlePageCtor(void* self) {
+    Log("BattlePage.ctor self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void BattlePageCtorTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogBattlePageCtor
+        add esp, 4
+        popad
+        jmp dword ptr [battlePageCtorStolen]
+    }
+}
+void TryApplyBattlePageCtorHook() {
+    if (battlePageCtorHookApplied) return;
+    battlePageCtorHookApplied = true;
+    // prologue: 55 8B EC 80 3D E3 5C D4 11 00 = push ebp(1) mov ebp,esp(2) cmp byte[disp],0(7) = 10
+    InstallStrArgHook(0x2C2CB0, &BattlePageCtorTrampoline, &battlePageCtorStolen, 10, "BattlePage.ctor");
+}
+
+// UIPageBase.Init (0x27C670) - 页面 prefab 加载发起。
+void* uiPageBaseInitStolen = nullptr;
+bool uiPageBaseInitHookApplied = false;
+void LogUIPageBaseInit(void* self) {
+    Log("UIPageBase.Init self=" + std::to_string(reinterpret_cast<uintptr_t>(self)));
+}
+__declspec(naked) void UIPageBaseInitTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 36]
+        push eax
+        call LogUIPageBaseInit
+        add esp, 4
+        popad
+        jmp dword ptr [uiPageBaseInitStolen]
+    }
+}
+void TryApplyUIPageBaseInitHook() {
+    if (uiPageBaseInitHookApplied) return;
+    uiPageBaseInitHookApplied = true;
+    // prologue: 55 8B EC 56 8B 75 08 = push ebp(1) mov ebp,esp(2) push esi(1) mov esi,[ebp+8](3) = 7
+    InstallStrArgHook(0x27C670, &UIPageBaseInitTrampoline, &uiPageBaseInitStolen, 7, "UIPageBase.Init");
+}
+
+// SearchRightMap.FirstOpen (0x3A0D80) - 索敌右图 UI 首次打开。
+using SearchRightMapFirstOpenFn = void (__cdecl*)(void*, void*);
+SearchRightMapFirstOpenFn originalSearchRightMapFirstOpen = nullptr;
+bool searchRightMapFirstOpenHookApplied = false;
+void __cdecl HookSearchRightMapFirstOpen(void* self, void* page) {
+    std::lock_guard<std::mutex> guard(logMutex);
+    std::ofstream output(logPath, std::ios::app);
+    output << "SearchRightMap.FirstOpen ENTER self=0x" << std::hex
+        << reinterpret_cast<uintptr_t>(self) << " page=0x" << reinterpret_cast<uintptr_t>(page) << std::dec << '\n';
+    output.flush();
+    originalSearchRightMapFirstOpen(self, page);
+    std::lock_guard<std::mutex> guard2(logMutex);
+    std::ofstream output2(logPath, std::ios::app);
+    output2 << "SearchRightMap.FirstOpen DONE self=0x" << std::hex
+        << reinterpret_cast<uintptr_t>(self) << std::dec << '\n';
+    output2.flush();
+}
+void TryApplySearchRightMapFirstOpenHook() {
+    if (searchRightMapFirstOpenHookApplied) return;
+    searchRightMapFirstOpenHookApplied = true;
+    // prologue: 55 8B EC 83 EC 18 80 3D 23 68 D4 11 00 = push ebp(1) mov ebp,esp(2) sub esp,0x18(3) cmp byte[disp],0(7) = 13
+    InstallReturnHook(0x3A0D80, &HookSearchRightMapFirstOpen, &originalSearchRightMapFirstOpen, 13, "SearchRightMap.FirstOpen");
 }
 
 // ---- ResLoadMgr.AddRes(self, type, res, userCB, maxNum) RVA 0x1E4B90 ----
@@ -4017,12 +4920,6 @@ void TryApplyStageGotoHook() {
     if (stageGotoHookApplied) return;
     stageGotoHookApplied = true;
     InstallStrArgHook(0x1ECD80, &StageGotoTrampoline, &stageGotoStolen, 11, "StageMgr.Goto");
-}
-
-void TryApplyGameSceneChangeHook() {
-    if (gameSceneChangeHookApplied) return;
-    gameSceneChangeHookApplied = true;
-    InstallStrArgHook(0x5431C0, &GameSceneChangeTrampoline, &gameSceneChangeStolen, 11, "GameSceneManager.ChangeScene");
 }
 
 void TryApplyUIShipProxyLoadModelHook() {
@@ -5223,18 +6120,20 @@ LONG WINAPI CrashVectoredHandler(EXCEPTION_POINTERS* info) {
     // A C++/managed exception (0xE06D7363, the IL2CPP dispatch for e.g. NullReferenceException)
     // is normally caught by the game's own SEH before it escapes. Walk the throw site stack so
     // the exact managed method (e.g. the MissionNode null-ref during battle init) is visible.
-    if (code == 0xE06D7363 && info->ContextRecord && rec->NumberParameters >= 2 &&
-        (afterBattle || unhandledCxx)) {
+    if ((code == 0xE06D7363 || code == 0xC0000005 || code == 0x4001000A) && info->ContextRecord &&
+        (code == 0xE06D7363 ? (rec->NumberParameters >= 2 && (afterBattle || unhandledCxx)) : true)) {
         const auto esp = info->ContextRecord->Esp;
         std::string trace = " throwEip=" + DescribeCaller(reinterpret_cast<void*>(info->ContextRecord->Eip));
-        const auto exceptObj = static_cast<uintptr_t>(rec->ExceptionInformation[1]);
-        if (exceptObj) {
-            const auto klass = ReadPtrSafe(exceptObj);
-            const auto className = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0x8)) : "";
-            const auto nameSpace = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0xC)) : "";
-            if (!className.empty()) trace += " type=" + nameSpace + "." + className;
-            const auto msgPtr = ReadPtrSafe(exceptObj + 0x8);
-            if (msgPtr) trace += " msg=" + ReadIl2CppString(reinterpret_cast<void*>(msgPtr));
+        if (code == 0xE06D7363) {
+            const auto exceptObj = static_cast<uintptr_t>(rec->ExceptionInformation[1]);
+            if (exceptObj) {
+                const auto klass = ReadPtrSafe(exceptObj);
+                const auto className = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0x8)) : "";
+                const auto nameSpace = klass ? ReadAsciiCStr(ReadPtrSafe(klass + 0xC)) : "";
+                if (!className.empty()) trace += " type=" + nameSpace + "." + className;
+                const auto msgPtr = ReadPtrSafe(exceptObj + 0x8);
+                if (msgPtr) trace += " msg=" + ReadIl2CppString(reinterpret_cast<void*>(msgPtr));
+            }
         }
         auto found = 0;
         for (DWORD off = 0; off < 0x2000 && found < 48; off += 4) {
@@ -6086,7 +6985,43 @@ void InitializeHooks(HMODULE module) {
         // TryApplyNreLocator();
         TryApplyInitBattleHook();
         TryApplyStageBeginHook();
+        TryApplyBattleFrameInitHook();
+        TryApplyBFInnerHooks();
+        // 海域索敌崩溃排查：回退 InitWithStartData/LogicCore 系列 hooks。
+        // TryApplyIWSDHooks();
+        // TryApplyFB_A20Hook();
+        // TryApplyLogicCoreCtorHook();
+        // 0x10956450 高频 config 查询，hook 导致启动崩溃，回退。
+        // TryApplyCfgQueryHook();
+        TryApplyCLInitHooks();
+        TryApplyPveCoreHooks();
+        TryApplyIslandInitHook();
+        TryApplyFogResPointHooks();
+        TryApplyBfTimeHooks();
+        TryApplySetStageTimeHook();
+        TryApplyBattleTimePathHooks();
+        TryApplySBRSearchOnlyHook();
+        // SearchToBattle hooks 导致崩溃，回退。
+        // TryApplySearchToBattleHooks();
+        // BfTime.LastTime InstallReturnHook 高频导致崩溃，回退。
+        // TryApplyBfLastTimeHook();
+        // PveInner hooks 导致 interp 崩溃，回退。
+        // TryApplyPveInnerHooks();
+        TryApplyBFInitLogicHook();
+        TryApplyBFInitDisplayHook();
+        TryApplyBFInitNetHook();
+        // 海域闪退排查：回退 StageEnterImpl（ENTER 后崩溃），保留安全 hook。
+        // TryApplyStageEnterImplHook();
+        TryApplyBattleManagerCtorHook();
+        TryApplyBattleManagerInitBattleHook();
+        TryApplyBattleManagerRunHook();
         TryApplyLoadingTickHook();
+        // 剧情闪退排查：回退 UI 生命周期诊断 hooks（BattlePage.DoLoad ENTER 后崩溃）。
+        // TryApplySearchRightMapInitHook();
+        // TryApplyBattlePageDoLoadHook();
+        // TryApplySearchRightMapFirstOpenHook();
+        // TryApplyBattlePageCtorHook();
+        // TryApplyUIPageBaseInitHook();
         TryApplyInitBattleFrameHook();
         TryApplyCreateBattleFrameHook();
         TryApplyShipPBConvertHook();

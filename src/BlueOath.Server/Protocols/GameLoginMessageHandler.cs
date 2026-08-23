@@ -27,6 +27,7 @@ internal sealed class GameLoginMessageHandler
     private readonly Dictionary<int, BuildShipPool> _buildPools;
     private readonly Dictionary<int, int> _expPerItem;
     private readonly Dictionary<int, int> _expNeeded;
+    private readonly Dictionary<int, List<int>> _copyRandomFactors;
     private readonly Random _rng = new();
 
     public GameLoginMessageHandler(SqliteGameRepository repo, ServerOptions options, ILoggerFactory loggerFactory)
@@ -40,6 +41,7 @@ internal sealed class GameLoginMessageHandler
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         _buildPools = GmBuildPoolLoader.Load(options.DataRoot);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
+        _copyRandomFactors = RandomFactorLoader.Load(options.DataRoot);
         ChapterCopyLoader.Load(options.DataRoot);
         CopyBattleLoader.Load(options.DataRoot);
         ShipMainLoader.Load(options.DataRoot);
@@ -154,6 +156,10 @@ internal sealed class GameLoginMessageHandler
         else if (request.Method == "copy.QuitBase")
         {
             ret = BuildQuitBaseRet(request.Args);
+        }
+        else if (request.Method == "copy.GetRandomFactors")
+        {
+            ret = EncodeGetRandomFactors(request.Args);
         }
         else
         {
@@ -1177,14 +1183,14 @@ internal sealed class GameLoginMessageHandler
         {
             var account = await GetOrCreateAccountAsync(profileId, ct);
             var args = request.Args ?? [];
-            var (copyId, deployHeroIds) = DecodeStartBaseArg(args);
-            _fileLogger.LogInformation("copy.StartBase argsLen={Len} hex={Hex} copyId={CopyId} deployHeroIds={Deploy}",
+            var (copyId, deployHeroIds, isRunningFight, battleMode, matchType) = DecodeStartBaseArg(args);
+            _fileLogger.LogInformation("copy.StartBase argsLen={Len} hex={Hex} copyId={CopyId} deployHeroIds={Deploy} isRunningFight={IsRunning}",
                 args.Length, Convert.ToHexString(args), copyId,
-                deployHeroIds is null ? "<null>" : string.Join(",", deployHeroIds));
+                deployHeroIds is null ? "<null>" : string.Join(",", deployHeroIds), isRunningFight);
             var heroList = account.Dock.Heroes.ToList();
             // 关卡出战舰队必须回环客户端请求里的 HeroList（剧情关限制），
             // 而不是从玩家编队猜。请求未带时回退到全部船。
-            return EncodeStartBaseRet(copyId, heroList, deployHeroIds);
+            return EncodeStartBaseRet(copyId, heroList, deployHeroIds, isRunningFight, battleMode, matchType);
         }
         catch (Exception ex)
         {
@@ -1210,7 +1216,8 @@ internal sealed class GameLoginMessageHandler
         return EncodeStartBaseRet(copyId, heroes, null);
     }
 
-    private static byte[] EncodeStartBaseRet(int copyId, List<Hero> heroes, IReadOnlyList<int>? deployHeroIds = null)
+    private static byte[] EncodeStartBaseRet(int copyId, List<Hero> heroes, IReadOnlyList<int>? deployHeroIds = null,
+        bool isRunningFight = false, int battleMode = 1, int matchType = 0)
     {
         // 本关真实敌舰队 id（config_copy → fleet_id），供 TStartBaseRet.EnemyFleet(字段5)
         // → BattleStartData.enemyFleetId 使用。
@@ -1380,21 +1387,48 @@ internal sealed class GameLoginMessageHandler
         WriteVarint(ms, 0x18); WriteVarint(ms, unchecked((ulong)copyRid));
         // CopyId (6) — 客户端用它在 config_copy_display 里查配置（键=显示 id，来自请求）
         WriteVarint(ms, 0x30); WriteVarint(ms, unchecked((ulong)copyId));
-        // CopyType (7) = 1 (PlotCopy)
-        WriteVarint(ms, 0x38); WriteVarint(ms, 1);
+        // CopyType (7)：剧情=1(PlotCopy)，海域=2(SeaCopy)。海域关卡战斗初始化按 CopyType 分支。
+        // 海域侦察任务按 SeaCopy(2) 走索敌 3D 玩法，是正常逻辑，不能绕开（绕开会失去索敌玩法意义）。
+        var isSeaCopy = ChapterCopyLoader.GetSeaLevels().Contains(copyId);
+        WriteVarint(ms, 0x38); WriteVarint(ms, isSeaCopy ? (ulong)2 : (ulong)1);
+        // RandomFactors (12) — 海域索敌/侦察场景初始化依赖。海域关卡 random_factor_sets=[61]，
+        // 服务端需下发 SetId=61 的随机因子，否则 BattlePage 索敌 UI 初始化卡加载。
+        if (isSeaCopy)
+        {
+            using var rf = new MemoryStream();
+            WriteVarint(rf, 0x08); WriteVarint(rf, 1);   // Factors[0]=1
+            WriteVarint(rf, 0x10); WriteVarint(rf, 61);  // GroupId(2)=61
+            WriteVarint(rf, 0x18); WriteVarint(rf, 61);  // SetId(3)=61
+            var rfb = rf.ToArray();
+            WriteVarint(ms, 0x62); WriteVarint(ms, (ulong)rfb.Length); ms.Write(rfb);
+        }
         // CopyPass (8) = false
         // BossProgress (9) = 0
-        // IsRunningFight (10) = false
+        // IsRunningFight (10) — 回环客户端请求的 IsRunningFight（请求/响应同名字段）
+        if (isRunningFight) { WriteVarint(ms, 0x50); WriteVarint(ms, 1); }
         // SafeLv (13) = 0
         WriteVarint(ms, 0x68); WriteVarint(ms, 0);
         // BattleMode (18) = Normal=1(普通)/Exercises=2(练习)/Memory=3(记忆)/Sweep=4(扫荡)
-        // 剧情普通关卡官方应为 Normal(1)；Memory(3) 是记忆回放，可能走额外加载路径。
-        WriteVarint(ms, 0x90); WriteVarint(ms, 1);
-        // MatchType (26) = 0
-        WriteVarint(ms, 0xD0); WriteVarint(ms, 0);
+        // 回环客户端请求的 BattleMode（请求 field 9）
+        WriteVarint(ms, 0x90); WriteVarint(ms, unchecked((ulong)(battleMode == 0 ? 1 : battleMode)));
+        // MatchType (26) = 0 — 回环客户端请求的 MatchType（请求 field 15）
+        if (matchType != 0) { WriteVarint(ms, 0xD0); WriteVarint(ms, unchecked((ulong)matchType)); }
+        // 海域索敌：补齐未编码字段（IsFinal/AnimMode/WeatherGroupId），索敌核心初始化可能检查。
+        if (isSeaCopy)
+        {
+            // IsFinal (19) = false
+            WriteVarint(ms, 0x98); WriteVarint(ms, 0);
+            // AnimMode (20) = 0
+            WriteVarint(ms, 0xA0); WriteVarint(ms, 0);
+            // WeatherGroupId (21) = 0
+            WriteVarint(ms, 0xA8); WriteVarint(ms, 0);
+        }
         // Token (16) = ""
         WriteString(ms, 0x82, "1111111111111111111111111111111111111");
-        // arrRes (4) — TCopyRes[]
+        // arrRes (4) — TCopyRes[]。海域索敌 InitResPoint 遍历 copyRess（=arrRes）用元素查
+        // battlefield_resource，海域 battlefield_resource[copyId] 缺失导致 GetDict null 卡死。
+        // 海域 arrRes 发空（copyRess 空 → InitResPoint 跳过资源点生成）。
+        if (!isSeaCopy)
         {
             using var cr = new MemoryStream();
             WriteVarint(cr, 0x08); WriteVarint(cr, unchecked((ulong)copyId)); // id
@@ -1454,6 +1488,22 @@ internal sealed class GameLoginMessageHandler
             var efb = ef.ToArray();
             WriteVarint(ms, 0xC2); WriteVarint(ms, (ulong)efb.Length); ms.Write(efb);
         }
+        // ConfigData (25) — repeated TPassEvaluate。protobuf-net 编码：每个 TPassEvaluate 是
+        // 独立 field25(len-delimited)，内容直接是字段（无子消息 tag），Value=默认(0)不序列化。
+        // PveCoreCreator._InitWithStartDataCore 用 ConfigDatas[52002(0xCB22)] 作为索敌限时（秒）
+        // 覆盖 battlefieldTime：ConfigDatas[52002]=v → 索敌限时=v*1000 ms。之前发 (52002,1) 导致
+        // 索敌限时 1 秒立即耗尽。删除 52002 → TryGetValue 失败回退 dictCopy.battle_time=180。
+        if (isSeaCopy)
+        {
+            foreach (var (t, v) in new[] { (50000, 1), (0, 1) })
+            {
+                using var ce = new MemoryStream();
+                if (t != 0) { WriteVarint(ce, 0x08); WriteVarint(ce, unchecked((ulong)t)); } // Type(1)
+                if (v != 0) { WriteVarint(ce, 0x10); WriteVarint(ce, unchecked((ulong)v)); } // Value(2)
+                var ceb = ce.ToArray();
+                WriteVarint(ms, 0xCA); WriteVarint(ms, (ulong)ceb.Length); ms.Write(ceb);
+            }
+        }
         return ms.ToArray();
     }
 
@@ -1477,17 +1527,29 @@ internal sealed class GameLoginMessageHandler
     ///  - 关卡出战舰队 HeroList(13) 中第一个 TStartBaseHeroList 的 HeroIdList(1, repeated uint32)
     /// 客户端在请求里已指定本关可出战的舰船（剧情关限制），服务端必须回环它而非自行猜测。
     /// </summary>
-    private static (int CopyId, List<int>? DeployHeroIds) DecodeStartBaseArg(byte[] args)
+    private static (int CopyId, List<int>? DeployHeroIds, bool IsRunningFight, int BattleMode, int MatchType) DecodeStartBaseArg(byte[] args)
     {
         var reader = new ProtoReader(args);
         int copyId = 0;
         List<int>? deployHeroIds = null;
+        bool isRunningFight = false;
+        int battleMode = 0;
+        int matchType = 0;
         while (reader.TryReadField(out var field, out var wire))
         {
             switch (field)
             {
                 case 2 when wire == 0:
                     copyId = checked((int)reader.ReadVarint());
+                    break;
+                case 3 when wire == 0:
+                    isRunningFight = reader.ReadVarint() != 0;
+                    break;
+                case 9 when wire == 0:
+                    battleMode = checked((int)reader.ReadVarint());
+                    break;
+                case 15 when wire == 0:
+                    matchType = checked((int)reader.ReadVarint());
                     break;
                 case 13 when wire == 2:
                     // TStartBaseHeroList: HeroIdList(1, repeated uint32) Index(2) StrategyId(3)
@@ -1505,7 +1567,7 @@ internal sealed class GameLoginMessageHandler
                     break;
             }
         }
-        return (copyId, deployHeroIds);
+        return (copyId, deployHeroIds, isRunningFight, battleMode, matchType);
     }
 
     private async Task<byte[]> BuildPassBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
@@ -1525,6 +1587,31 @@ internal sealed class GameLoginMessageHandler
         WriteVarint(ms, 0x50); WriteVarint(ms, 1);
         // PassTime (8) = 60
         WriteVarint(ms, 0x40); WriteVarint(ms, 60);
+        return ms.ToArray();
+    }
+
+    /// <summary>响应 copy.GetRandomFactors（TGetRandomFactorRet）。海域索敌/侦察关卡
+    /// 详情页请求随机因子，服务端按 copyId → config_copy_display.random_factor_sets
+    /// → config_random_factor_set.factor_groups → config_random_factor_group.factor 解析。</summary>
+    private byte[] EncodeGetRandomFactors(byte[]? args)
+    {
+        var reader = new ProtoReader(args ?? []);
+        int copyId = 0;
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            if (field == 1 && wire == 0) copyId = checked((int)reader.ReadVarint()); // CopyId(1)
+            else reader.Skip(wire);
+        }
+        using var ms = new MemoryStream();
+        if (_copyRandomFactors.TryGetValue(copyId, out var factors))
+        {
+            foreach (var f in factors)
+            {
+                // Factors(1) = repeated int32
+                WriteVarint(ms, 0x08); WriteVarint(ms, unchecked((ulong)f));
+            }
+        }
+        // LastRefreshTime(2)=0 / IsShowTips(3)=false 默认省略
         return ms.ToArray();
     }
 
@@ -2010,9 +2097,83 @@ internal static class ShipLevelupLoader
     }
 }
 
-/// <summary>从 config_copy / config_fleet / config_ship_enemy 加载战斗配置。</summary>
-internal static class CopyBattleLoader
+/// <summary>加载海域索敌随机因子：config_copy_display.random_factor_sets
+/// → config_random_factor_set.factor_groups → config_random_factor_group.factor。
+/// 供 copy.GetRandomFactors 协议与 StartBase 的 RandomFactors 字段使用。</summary>
+internal static class RandomFactorLoader
 {
+    private const byte XorKey = 0x55;
+
+    public static Dictionary<int, List<int>> Load(string dataRoot)
+    {
+        var result = new Dictionary<int, List<int>>();
+        try
+        {
+            var configDir = ChapterCopyLoader.FindConfigDir(dataRoot);
+            var copyDisplay = new Dictionary<int, List<int>>();
+            LoadTable(configDir, "config_copy_display.db", "random_factor_sets", copyDisplay);
+            var factorSets = new Dictionary<int, List<int>>();
+            LoadTable(configDir, "config_random_factor_set.db", "factor_groups", factorSets);
+            var factorGroups = new Dictionary<int, List<int>>();
+            LoadTable(configDir, "config_random_factor_group.db", "factor", factorGroups);
+            foreach (var (copyId, setIds) in copyDisplay)
+            {
+                var factors = new List<int>();
+                foreach (var setId in setIds)
+                {
+                    if (!factorSets.TryGetValue(setId, out var groupIds)) continue;
+                    foreach (var groupId in groupIds)
+                        if (factorGroups.TryGetValue(groupId, out var fs))
+                            factors.AddRange(fs);
+                }
+                if (factors.Count > 0) result[copyId] = factors;
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    private static void LoadTable(string configDir, string dbFile, string jsonProp, Dictionary<int, List<int>> result)
+    {
+        var path = Path.Combine(configDir, dbFile);
+        if (!File.Exists(path)) return;
+        using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT id, jsonbytes FROM DBObject";
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            var id = int.TryParse(r.GetString(0), out var parsed) ? parsed : 0;
+            if (id == 0) continue;
+            var bytes = ReadColumnBytes(r, 1);
+            var json = XorDecode(bytes);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty(jsonProp, out var arr) || arr.ValueKind != JsonValueKind.Array) continue;
+            var list = new List<int>();
+            foreach (var item in arr.EnumerateArray())
+                if (item.TryGetInt32(out var v)) list.Add(v);
+            result[id] = list;
+        }
+    }
+
+    private static byte[] ReadColumnBytes(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal)) return [];
+        var value = reader.GetValue(ordinal);
+        return value switch { byte[] b => b, string s => Encoding.UTF8.GetBytes(s), _ => [] };
+    }
+
+    private static string XorDecode(byte[] source)
+    {
+        var result = new byte[source.Length];
+        for (var i = 0; i < source.Length; i++) result[i] = (byte)(source[i] ^ XorKey);
+        return Encoding.UTF8.GetString(result);
+    }
+}
+
+/// <summary>从 config_copy / config_fleet / config_ship_enemy 加载战斗配置。</summary>
+internal static class CopyBattleLoader{
     private static readonly Dictionary<int, int> _copyFleetMap = new();       // copy_id → fleet_id
     private static readonly Dictionary<int, int> _copyConfigIdMap = new();    // copy_id → config_copy DBObject id
     private static readonly Dictionary<int, List<int>> _fleetEnemies = new(); // fleet_id → enemy ship ids
