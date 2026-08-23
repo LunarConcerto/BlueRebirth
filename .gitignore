@@ -21,6 +21,7 @@ __pycache__/
 
 # ---- Reverse-engineering artifacts (regenerable via Il2CppDumper) ----
 /il2cppdump/
+/lua_tools/
 
 # ---- Runtime / temp artifacts ----
 /runtime/
