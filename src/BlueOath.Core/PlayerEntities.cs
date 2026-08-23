@@ -62,7 +62,8 @@ public sealed record Hero(
     int Mood = 0,
     int MarryType = 0,
     long CurHp = 0,
-    IReadOnlyList<uint>? EquipSlots = null);
+    IReadOnlyList<uint>? EquipSlots = null,
+    string Name = "");
 
 /// <summary>
 /// 船坞（玩家拥有的全部舰娘）。对应 <c>hero.UpdateHeroBagData</c> 的 HeroBag
@@ -98,8 +99,25 @@ public sealed record PlayerEquip(
     IReadOnlyList<EquipItem> Items,
     int EquipBagSize = 2000);
 
+/// <summary>单个关卡的记录（BaseId → 星级/评价/首通时间/通关次数/通关用时）。</summary>
+public sealed record CopyRecord(
+    int CopyId,
+    int StarLevel = 0,
+    int Grade = 0,
+    int FirstPassTime = 0,
+    int PassTime = 0,
+    int PassCount = 0);
+
+/// <summary>玩家关卡进度（所有已通关的关卡记录）。</summary>
+public sealed record PlayerCopyProgress(
+    IReadOnlyList<CopyRecord> Records);
+
+/// <summary>海域关卡进度（CopyType=2 的关卡记录）。</summary>
+public sealed record PlayerSeaCopyProgress(
+    IReadOnlyList<CopyRecord> Records);
+
 /// <summary>
-/// 玩家账号聚合（角色 + 船坞 + 仓库 + 时装）。存档数据库中实际存在的实体根，
+/// 玩家账号聚合（角色 + 船坞 + 仓库 + 时装 + 关卡进度）。存档数据库中实际存在的实体根，
 /// 后续如需加入建造/浴室/建筑等玩家域数据，可在此扩展新的成员（保持向后兼容：
 /// 新增可选字段或子实体）。
 /// </summary>
@@ -110,7 +128,10 @@ public sealed record PlayerAccount(
     PlayerBag? Bag = null,
     PlayerFashion? Fashion = null,
     PlayerEquip? Equip = null,
-    PlayerFleet? Fleet = null);
+    PlayerFleet? Fleet = null,
+    PlayerCopyProgress? CopyProgress = null,
+    PlayerSeaCopyProgress? SeaProgress = null,
+    IReadOnlyList<int>? PlotRewardIds = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
@@ -141,9 +162,9 @@ public static class PlayerAccountFactory
     /// <summary>创建新档案的默认账号（角色 + 含一只秘书舰的船坞 + 空仓库/时装）。</summary>
     public static PlayerAccount CreateDefault(string profileId, int nowSeconds)
     {
-        var character = new PlayerCharacter(Uid: 1, Name: profileId, Level: 1, Class: 1, SecretaryId: 1,
+        var character = new PlayerCharacter(Uid: 1, Name: profileId, Level: 80, Class: 1, SecretaryId: 1,
             CreateTime: nowSeconds, Gold: DefaultGold, Diamond: DefaultDiamond, Supply: DefaultSupply,
-            PvePt: 100);
+            PvePt: 100, PlotChapterId: int.MaxValue);
         var hero = new Hero(
             HeroId: 1,
             TemplateId: DefaultHeroTemplateId,

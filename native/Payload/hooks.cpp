@@ -5439,6 +5439,8 @@ void TryApplyExecuteAtomHook() {
 //   EPU_AirAttack.__ExecuteAtom      0x523C03  F2 0F 59 45 C0  mulsd xmm0,[ebp-0x40]
 //   __BomberAttack                   0x51DA87  F2 0F 59 45 A0  mulsd xmm0,[ebp-0x60]
 //   战斗机路径                        0x51E6D7  F2 0F 59 45 A0  mulsd xmm0,[ebp-0x60]
+//   EPU_ViceGun.ExecuteAtom          0x52430C  F2 0F 59 48 28  mulsd xmm1,[eax+0x28]
+//      (副炮。eax=[edi+0x64]=actSkillInfo, +0x28=damageFac; 与主炮/空袭同模式)
 // ---------------------------------------------------------------------------
 bool mainGunDamageFacPatched = false;
 
@@ -5467,6 +5469,8 @@ void TryApplyMainGunDamageFacPatch() {
         { 0x51DA87, { 0xF2, 0x0F, 0x59, 0x45, 0xA0 } },
         // 绌鸿鎴樻枟鏈鸿矾寰勶紙0x51E500 鍖哄煙鍑芥暟锛夛細0x51E6D7 鍚屾牱鐨?damageFac 涔樻硶銆?
         { 0x51E6D7, { 0xF2, 0x0F, 0x59, 0x45, 0xA0 } },
+        // 副炮 EPU_ViceGun.ExecuteAtom 0x523FD0: 0x52430C mulsd xmm1,[eax+0x28] (eax=[edi+0x64]=actSkillInfo, +0x28=damageFac)
+        { 0x52430C, { 0xF2, 0x0F, 0x59, 0x48, 0x28 } },
     };
     for (const auto& s : slots) {
         auto address = reinterpret_cast<unsigned char*>(ga) + s.rva;

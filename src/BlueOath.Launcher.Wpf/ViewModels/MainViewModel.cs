@@ -1,6 +1,8 @@
 using System;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows.Input;
+using BlueOath.Launcher.Wpf.Models;
 
 namespace BlueOath.Launcher.Wpf.ViewModels;
 
@@ -8,6 +10,7 @@ public class MainViewModel : ViewModelBase
 {
     private object _currentPage = null!;
     private int _selectedPageIndex = -1;
+    private LaunchViewModel? _launchViewModel;
 
     public object CurrentPage
     {
@@ -54,6 +57,25 @@ public class MainViewModel : ViewModelBase
         {
             SelectedPageIndex = index;
         }
+    }
+
+    public void RegisterLaunchViewModel(LaunchViewModel launchViewModel)
+    {
+        _launchViewModel = launchViewModel;
+    }
+
+    public void UpdateLaunchConfig(SettingsConfig settings)
+    {
+        if (_launchViewModel is null) return;
+        _launchViewModel.Config = new LaunchConfig
+        {
+            Region = settings.Region,
+            ServerPort = settings.ServerPort,
+            GameLoginPort = settings.GameLoginPort,
+            GmPort = settings.GmPort,
+            SkipBuild = settings.SkipBuild,
+            KeepLog = settings.KeepLog
+        };
     }
 }
 

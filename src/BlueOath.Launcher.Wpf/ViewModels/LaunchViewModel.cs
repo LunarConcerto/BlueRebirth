@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
+using System.Windows;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using BlueOath.Launcher.Wpf.Models;
@@ -94,6 +94,14 @@ public class LaunchViewModel : ViewModelBase
     private async Task Launch(bool startServer)
     {
         if (IsLaunching) return;
+
+        var validationError = _processManager.ValidatePaths(_config, startServer);
+        if (validationError is not null)
+        {
+            MessageBox.Show(validationError, "路径验证失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         IsLaunching = true;
 
         await _processManager.LaunchAsync(_config, startServer);

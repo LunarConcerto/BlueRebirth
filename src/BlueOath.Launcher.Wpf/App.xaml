@@ -248,6 +248,36 @@
             <conv:BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
             <conv:BooleanInvertConverter x:Key="BooleanInvertConverter" />
 
+            <!-- ==================== Settings Styles ==================== -->
+            <Style x:Key="SettingTextBoxStyle" TargetType="TextBox">
+                <Setter Property="Background" Value="{StaticResource BgLightBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource TextMutedBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CaretBrush" Value="{StaticResource TextPrimaryBrush}" />
+                <Setter Property="Padding" Value="8,6" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TextBox">
+                            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                                <ScrollViewer x:Name="PART_ContentHost" Margin="0" />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="SettingComboBoxStyle" TargetType="ComboBox">
+                <Setter Property="Background" Value="{StaticResource BgLightBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource TextMutedBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Padding" Value="8,6" />
+                <Setter Property="FontSize" Value="13" />
+            </Style>
+
         </ResourceDictionary>
     </Application.Resources>
 </Application>

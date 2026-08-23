@@ -18,6 +18,9 @@
         <DataTemplate DataType="{x:Type vm:GuardianViewModel}">
             <views:GuardianPage />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+            <views:SettingsPage />
+        </DataTemplate>
     </Window.Resources>
 
     <Grid>
@@ -56,6 +59,13 @@
                             FontSize="12"
                             Command="{Binding NavigateToPageCommand}"
                             CommandParameter="1"
+                            Margin="0,0,4,0" />
+                    <Button Content="设置"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Height="30"
+                            FontSize="12"
+                            Command="{Binding NavigateToPageCommand}"
+                            CommandParameter="2"
                             Margin="0,0,4,0" />
                 </StackPanel>
             </Grid>

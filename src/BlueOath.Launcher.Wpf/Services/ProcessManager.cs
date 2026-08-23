@@ -84,6 +84,7 @@ public class ProcessStateInfo : INotifyPropertyChanged
 public class ProcessManager
 {
     private readonly string _rootDir;
+    private readonly Models.SettingsConfig _settings;
     private Process? _serverProcess;
     private Process? _proxyProcess;
     private int _gamePid;
@@ -119,9 +120,36 @@ public class ProcessManager
     public bool IsRunning => _stage is ProcessStage.StartingServer or ProcessStage.StartingProxy
         or ProcessStage.InjectingGame or ProcessStage.Running;
 
-    public ProcessManager(string rootDir)
+    public ProcessManager(string rootDir, Models.SettingsConfig settings)
     {
         _rootDir = rootDir;
+        _settings = settings;
+    }
+
+    public string? ValidatePaths(LaunchConfig config, bool startServer)
+    {
+        if (startServer)
+        {
+            if (!File.Exists(_settings.ServerDllPath))
+                return $"服务器 DLL 未找到: {_settings.ServerDllPath}";
+        }
+        if (!File.Exists(_settings.ProxyScriptPath))
+            return $"代理脚本未找到: {_settings.ProxyScriptPath}";
+        if (!File.Exists(_settings.InjectorPath))
+            return $"注入器未找到: {_settings.InjectorPath}";
+        if (!File.Exists(_settings.PayloadPath))
+            return $"Payload DLL 未找到: {_settings.PayloadPath}";
+        if (!File.Exists(_settings.BaselinePath))
+            return $"基线文件未找到: {_settings.BaselinePath}";
+        if (!Directory.Exists(_settings.DataRoot))
+            return $"数据目录未找到: {_settings.DataRoot}";
+
+        string clientExe = config.Region == "cn" ? "clsy.exe" : "blueoath.exe";
+        string clientExePath = Path.Combine(_settings.GameClientPath, clientExe);
+        if (!File.Exists(clientExePath))
+            return $"游戏客户端未找到: {clientExePath}";
+
+        return null;
     }
 
     public async Task LaunchAsync(LaunchConfig config, bool startServer)
@@ -136,19 +164,19 @@ public class ProcessManager
             string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             string runRoot = Path.Combine(_rootDir, "runtime", "debug", stamp);
             string tlsRoot = Path.Combine(runRoot, "tls");
-            string dataRoot = Path.Combine(_rootDir, "runtime", "jp");
+            string dataRoot = _settings.DataRoot;
             string traffic = Path.Combine(runRoot, "traffic");
             Directory.CreateDirectory(runRoot);
             Directory.CreateDirectory(tlsRoot);
 
-            string payloadLog = Path.Combine(_rootDir, "native", "bin-x86", "BlueOath.Payload.log");
+            string payloadLog = Path.Combine(Path.GetDirectoryName(_settings.PayloadPath) ?? "", "BlueOath.Payload.log");
             if (!config.KeepLog && File.Exists(payloadLog)) File.Delete(payloadLog);
 
             Stage = ProcessStage.CleaningUp;
             LogSystem("正在清理残留进程...");
             KillLeftoverProcesses();
 
-            string serverDll = Path.Combine(_rootDir, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+            string serverDll = _settings.ServerDllPath;
             if (!File.Exists(serverDll))
             {
                 LogError("服务器程序集未找到: " + serverDll);
@@ -451,8 +479,8 @@ public class ProcessManager
 
     private async Task<int> StartProxy(string leafPem, string leafKeyPem, int serverPort, int proxyPort, CancellationToken token)
     {
-        string proxyScript = Path.Combine(_rootDir, "tools", "tls-loopback-proxy.py");
-        var psi = new ProcessStartInfo("python")
+        string proxyScript = _settings.ProxyScriptPath;
+        var psi = new ProcessStartInfo(_settings.PythonPath)
         {
             Arguments = $"\"{proxyScript}\" --port {proxyPort} --backend-port {serverPort} --cert \"{leafPem}\" --key \"{leafKeyPem}\"",
             UseShellExecute = false,
@@ -517,9 +545,7 @@ public class ProcessManager
 
     private async Task<int> InjectGame(string region, int proxyPort, int serverPort, CancellationToken token)
     {
-        string clientDir = region == "cn"
-            ? GetCnClientDir()
-            : Path.Combine(_rootDir, "blueoath", "blueoath");
+        string clientDir = _settings.GameClientPath;
         string exe = region == "cn" ? "clsy.exe" : "blueoath.exe";
         string exePath = Path.Combine(clientDir, exe);
         if (!File.Exists(exePath))
@@ -528,11 +554,10 @@ public class ProcessManager
             return -1;
         }
 
-        string nativeDir = Path.Combine(_rootDir, "native", "bin-x86");
-        string injector = Path.Combine(nativeDir, "BlueOath.Injector.exe");
-        string payload = Path.Combine(nativeDir, "BlueOath.Payload.dll");
+        string injector = _settings.InjectorPath;
+        string payload = _settings.PayloadPath;
+        string nativeDir = Path.GetDirectoryName(injector) ?? "";
         string bootstrapIni = Path.Combine(nativeDir, "bootstrap.ini");
-        string configIni = Path.Combine(_rootDir, "native", "bootstrap.ini");
 
         if (!File.Exists(injector))
         {
@@ -542,7 +567,7 @@ public class ProcessManager
 
         WriteBootstrapIni(bootstrapIni, proxyPort, serverPort);
 
-        string baselinePath = Path.Combine(_rootDir, "baseline.json");
+        string baselinePath = _settings.BaselinePath;
         string gameHash = "";
         if (File.Exists(baselinePath))
         {

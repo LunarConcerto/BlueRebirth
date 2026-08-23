@@ -9,7 +9,6 @@ using Microsoft.Extensions.Logging;
 
 namespace BlueOath.Server.Protocols;
 
-/// <summary>从数据目录下的 gm-goods.json 加载 GM 商品配置（数据驱动，避免硬编码）。</summary>
 internal static class GmGoodsConfigLoader
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -32,7 +31,6 @@ internal static class GmGoodsConfigLoader
     }
 }
 
-/// <summary>从数据目录下的 gm-mails.json 加载 GM 邮件配置（数据驱动，避免硬编码）。</summary>
 internal static class GmMailsConfigLoader
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -55,7 +53,6 @@ internal static class GmMailsConfigLoader
     }
 }
 
-/// <summary>从数据目录下的 build-pools.json 加载抽卡池配置（数据驱动，不依赖客户端 config DB）。</summary>
 internal static class GmBuildPoolLoader
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -80,16 +77,12 @@ internal static class GmBuildPoolLoader
     }
 }
 
-/// <summary>build-pools.json 的顶层结构。</summary>
 internal sealed record GmBuildPoolsConfig(IReadOnlyList<GmBuildPoolConfig> Pools);
 
-/// <summary>单个卡池配置。</summary>
 internal sealed record GmBuildPoolConfig(int PoolId, IReadOnlyList<GmBuildShipConfig> Ships);
 
-/// <summary>单个卡池中的船娘条目。</summary>
 internal sealed record GmBuildShipConfig(int TemplateId, int Weight);
 
-/// <summary>从 config_ship_exp_item.db 和 config_ship_levelup.db 加载升级所需数据。</summary>
 internal static class ShipLevelupLoader
 {
     public static (Dictionary<int, int> ExpPerItem, Dictionary<int, int> ExpNeeded) Load(string dataRoot)
@@ -131,14 +124,13 @@ internal static class ShipLevelupLoader
     }
 }
 
-/// <summary>加载海域索敌随机因子：config_copy_display.random_factor_sets
-/// → config_random_factor_set.factor_groups → config_random_factor_group.factor。
-/// 供 copy.GetRandomFactors 协议与 StartBase 的 RandomFactors 字段使用。</summary>
+internal sealed record RandomFactorEntry(int SetId, int GroupId, IReadOnlyList<int> Factors);
+
 internal static class RandomFactorLoader
 {
-    public static Dictionary<int, List<int>> Load(string dataRoot)
+    public static Dictionary<int, List<RandomFactorEntry>> Load(string dataRoot)
     {
-        var result = new Dictionary<int, List<int>>();
+        var result = new Dictionary<int, List<RandomFactorEntry>>();
         try
         {
             var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
@@ -150,15 +142,19 @@ internal static class RandomFactorLoader
             LoadTable(configDir, "config_random_factor_group.db", "factor", factorGroups);
             foreach (var (copyId, setIds) in copyDisplay)
             {
-                var factors = new List<int>();
+                var entries = new List<RandomFactorEntry>();
                 foreach (var setId in setIds)
                 {
                     if (!factorSets.TryGetValue(setId, out var groupIds)) continue;
+                    var factors = new List<int>();
                     foreach (var groupId in groupIds)
                         if (factorGroups.TryGetValue(groupId, out var fs))
                             factors.AddRange(fs);
+                    if (factors.Count == 0) continue;
+                    int firstGroup = groupIds.Count > 0 ? groupIds[0] : setId;
+                    entries.Add(new RandomFactorEntry(setId, firstGroup, factors));
                 }
-                if (factors.Count > 0) result[copyId] = factors;
+                if (entries.Count > 0) result[copyId] = entries;
             }
         }
         catch { }
@@ -179,13 +175,13 @@ internal static class RandomFactorLoader
     }
 }
 
-/// <summary>从 config_copy / config_fleet / config_ship_enemy 加载战斗配置。</summary>
 internal static class CopyBattleLoader{
-    private static readonly Dictionary<int, int> _copyFleetMap = new();       // copy_id → fleet_id
-    private static readonly Dictionary<int, int> _copyConfigIdMap = new();    // copy_id → config_copy DBObject id
-    private static readonly Dictionary<int, List<int>> _fleetEnemies = new(); // fleet_id → enemy ship ids
-    private static readonly Dictionary<int, bool> _fleetHasAttached = new();  // fleet_id → 是否带 copy_attacheds
-    private static readonly Dictionary<int, EnemyStat> _enemyStats = new();   // enemy id → stats
+    private static readonly Dictionary<int, int> _copyFleetMap = new();
+    private static readonly Dictionary<int, int> _copyConfigIdMap = new();
+    private static readonly Dictionary<int, List<int>> _fleetEnemies = new();
+    private static readonly Dictionary<int, bool> _fleetHasAttached = new();
+    private static readonly Dictionary<int, EnemyStat> _enemyStats = new();
+    private static readonly Dictionary<int, List<int>> _copyMissions = new();
     private static bool _loaded;
 
     public sealed record EnemyStat(int Hp, int Attack, int Defense, int Level, int ShipInfoId,
@@ -200,6 +196,7 @@ internal static class CopyBattleLoader{
             LoadCopyFleet(configDir);
             LoadFleetEnemies(configDir);
             LoadEnemyStats(configDir);
+            LoadCopyMissions(configDir);
         }
         catch { }
         _loaded = true;
@@ -290,15 +287,30 @@ internal static class CopyBattleLoader{
     public static bool HasCopyAttacheds(int fleetId)
         => _fleetHasAttached.TryGetValue(fleetId, out var has) && has;
 
+    public static List<int> GetMissionIdList(int copyId)
+        => _copyMissions.TryGetValue(copyId, out var list) && list.Count > 0
+            ? list
+            : MissionChainLoader.DefaultChain();
 
-    public static void GetMissionIdList(int copyId)
+    private static void LoadCopyMissions(string configDir)
     {
-        int copyConfigId = _copyConfigIdMap[copyId];
+        try
+        {
+            ConfigDbLoader.LoadRows(configDir, "config_copy.db", (id, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("copy_id", out var copyIdProp)) return;
+                if (!doc.RootElement.TryGetProperty("mission_id", out var missionProp)
+                    || missionProp.ValueKind != JsonValueKind.Array) return;
+                var list = new List<int>();
+                foreach (var item in missionProp.EnumerateArray())
+                    if (item.TryGetInt32(out var v)) list.Add(v);
+                if (list.Count > 0) _copyMissions[copyIdProp.GetInt32()] = list;
+            });
+        }
+        catch { }
     }
 
-    /// <summary>敌人舰队锚点：直接返回 config_copy 查到的真实舰队 id。
-    /// 不再因 copy_attacheds 为空回退到临时测试舰队 907（此前误判，导致所有关卡
-    /// 都弹 907 的 9999999HP 伤害测试敌舰 71）。若客户端 PVEStartData 因此 NRE，再单独处理。</summary>
     public static int GetFleetIdWithAttached(int copyId)
         => GetFleetId(copyId);
 
@@ -313,7 +325,66 @@ internal static class CopyBattleLoader{
 
 }
 
-/// <summary>从 config_ship_main 加载玩家船基础属性（key = sm_id = 船的 TemplateId）。</summary>
+internal static class MissionChainLoader
+{
+    private static List<int> _defaultChain = new();
+    private static bool _loaded;
+
+    public static List<int> DefaultChain()
+    {
+        EnsureLoaded();
+        return _defaultChain;
+    }
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            var next = new Dictionary<int, List<int>>();
+            var hasIncoming = new HashSet<int>();
+            ConfigDbLoader.LoadRows(configDir, "config_mission.db", (id, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("id", out var idProp)) return;
+                int mid = idProp.GetInt32();
+                if (!doc.RootElement.TryGetProperty("nextmission", out var nx)
+                    || nx.ValueKind != JsonValueKind.Array) return;
+                var list = new List<int>();
+                foreach (var item in nx.EnumerateArray())
+                    if (item.TryGetInt32(out var v)) { list.Add(v); hasIncoming.Add(v); }
+                next[mid] = list;
+            });
+            var starts = next.Keys.Where(k => !hasIncoming.Contains(k)).OrderBy(k => k).ToList();
+            if (starts.Count == 0)
+            {
+                _defaultChain = next.Keys.OrderBy(k => k).ToList();
+                return;
+            }
+
+            var chain = new List<int>();
+            var visited = new HashSet<int>();
+            void Walk(int node)
+            {
+                if (visited.Add(node)) chain.Add(node);
+                if (!next.TryGetValue(node, out var children) || children.Count == 0) return;
+                Walk(children[0]);
+            }
+
+            Walk(starts[0]);
+            _defaultChain = chain;
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    private static void EnsureLoaded()
+    {
+        if (!_loaded) Load("");
+    }
+}
+
 internal static class ShipMainLoader
 {
     private static readonly Dictionary<int, ConfigShipMain> _ships = new();
@@ -329,7 +400,6 @@ internal static class ShipMainLoader
                 (id, cfg) =>
                 {
                     _ships[id] = cfg;
-                    // 双键索引：同时按 DB 行 id 与 sm_id（TemplateId）查找
                     if (cfg.SmId != 0)
                         _ships[checked((int)cfg.SmId)] = cfg;
                 });
@@ -341,12 +411,10 @@ internal static class ShipMainLoader
     public static ConfigShipMain? Get(int templateId)
         => _ships.TryGetValue(templateId, out var cfg) ? cfg : null;
 
-    /// <summary>属性等级成长：base + levelup × (level - 1)。</summary>
     public static long Leveled(long baseValue, long levelup, int level)
         => baseValue + levelup * Math.Max(0, level - 1);
 }
 
-/// <summary>从 config_assist_ship_info 加载临时/支援舰船（key = assist_ship_info id = HeroId）。</summary>
 internal static class AssistShipLoader
 {
     private static readonly Dictionary<int, ConfigAssistShipInfo> _ships = new();
@@ -370,7 +438,6 @@ internal static class AssistShipLoader
         => _ships.TryGetValue(id, out var cfg) ? cfg : null;
 }
 
-/// <summary>从 config_equip 加载装备模板（key = e_id），用于构造出战船只的装备数据。</summary>
 internal static class EquipLoader
 {
     private static readonly Dictionary<int, ConfigEquip> _equips = new();
@@ -394,70 +461,132 @@ internal static class EquipLoader
         => _equips.TryGetValue(id, out var cfg) ? cfg : null;
 }
 
-/// <summary>从 config_chapter 加载章节 → 关卡列表映射。</summary>
- internal static class ChapterCopyLoader
- {
-     private static readonly Dictionary<int, List<int>> _chapterCopies = new();
-     private static readonly Dictionary<int, int> _firstCopyMap = new();
-     private static readonly Dictionary<int, List<int>> _seaChapterCopies = new();
-     private static int _seaFirstChapterId = 0;
-     private static int _seaFirstCopyId = 0;
-     private static bool _loaded;
+internal static class ChapterCopyLoader
+{
+    private static readonly Dictionary<int, List<int>> _chapterCopies = new();
+    private static readonly Dictionary<int, int> _firstCopyMap = new();
+    private static readonly Dictionary<int, List<int>> _seaChapterCopies = new();
+    private static int _seaFirstChapterId = 0;
+    private static readonly Dictionary<int, int> _copyTypeMap = new();
+    private static int _seaFirstCopyId = 0;
+    private static bool _loaded;
 
-     public static void Load(string dataRoot)
-     {
-         if (_loaded) return;
-         try
-         {
-             var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
-             ConfigDbLoader.LoadRows(configDir, "config_chapter.db", (id, _, json) =>
-             {
-                 using var doc = JsonDocument.Parse(json);
-                 if (!doc.RootElement.TryGetProperty("level_list", out var levelList)) return;
-                 if (!doc.RootElement.TryGetProperty("class_type", out var classType)) return;
-                 var copies = new List<int>();
-                 foreach (var item in levelList.EnumerateArray())
-                     copies.Add(item.GetInt32());
-                 if (copies.Count == 0) return;
-                 var ct = classType.GetInt32();
-                 if (ct == 1) // PlotCopy
-                 {
-                     _chapterCopies[id] = copies;
-                     _firstCopyMap[id] = copies[0];
-                 }
-                 else if (ct == 2) // SeaCopy
-                 {
-                     _seaChapterCopies[id] = copies;
-                     if (_seaFirstChapterId == 0 || id < _seaFirstChapterId)
-                     {
-                         _seaFirstChapterId = id;
-                         _seaFirstCopyId = copies[0];
-                     }
-                 }
-             });
-         }
-         catch { }
-         _loaded = true;
-     }
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            ConfigDbLoader.LoadRows(configDir, "config_chapter.db", (id, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("level_list", out var levelList)) return;
+                if (!doc.RootElement.TryGetProperty("class_type", out var classType)) return;
+                var copies = new List<int>();
+                foreach (var item in levelList.EnumerateArray())
+                    copies.Add(item.GetInt32());
+                if (copies.Count == 0) return;
+                var ct = classType.GetInt32();
+                if (ct == 1)
+                {
+                    _chapterCopies[id] = copies;
+                    _firstCopyMap[id] = copies[0];
+                    foreach (var cid in copies) _copyTypeMap[cid] = 1;
+                }
+                else if (ct == 2)
+                {
+                    _seaChapterCopies[id] = copies;
+                    foreach (var cid in copies) _copyTypeMap[cid] = 2;
+                    if (_seaFirstChapterId == 0 || id < _seaFirstChapterId)
+                    {
+                        _seaFirstChapterId = id;
+                        _seaFirstCopyId = copies[0];
+                    }
+                }
+            });
+        }
+        catch { }
+        _loaded = true;
+    }
 
-     public static List<int> GetCopyIds(int chapterId)
-         => _chapterCopies.TryGetValue(chapterId, out var list) ? list : [];
+    public static List<int> GetCopyIds(int chapterId)
+        => _chapterCopies.TryGetValue(chapterId, out var list) ? list : [];
 
-     public static int GetFirstCopyId(int chapterId)
-         => _firstCopyMap.TryGetValue(chapterId, out var id) ? id : 0;
+    public static int GetFirstCopyId(int chapterId)
+        => _firstCopyMap.TryGetValue(chapterId, out var id) ? id : 0;
 
-     public static List<int> GetAllChapterIds()
-         => [.. _chapterCopies.Keys.OrderBy(x => x)];
+    public static List<int> GetAllChapterIds()
+        => [.. _chapterCopies.Keys.OrderBy(x => x)];
 
-     /// <summary>海域（SeaCopy, class_type=2）全部章节的关卡，按章节 id 升序。</summary>
-     public static List<int> GetSeaLevels()
-     {
-         var result = new List<int>();
-         foreach (var chapterId in _seaChapterCopies.Keys.OrderBy(x => x))
-             result.AddRange(_seaChapterCopies[chapterId]);
-         return result;
-     }
+    public static List<int> GetSeaLevels()
+    {
+        var result = new List<int>();
+        foreach (var chapterId in _seaChapterCopies.Keys.OrderBy(x => x))
+            result.AddRange(_seaChapterCopies[chapterId]);
+        return result;
+    }
 
-     /// <summary>海域第 1 章第一关（用作 MaxCopyId，使 _getFarestId 落在第 1 章）。</summary>
-     public static int GetSeaFirstCopyId() => _seaFirstCopyId;
- }
+    public static int GetSeaFirstCopyId() => _seaFirstCopyId;
+
+    public static int GetCopyType(int copyId)
+        => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;
+}
+
+internal static class ShipHandbookLoader
+{
+    private static readonly Dictionary<int, ConfigShipHandbook> _handbooks = new();
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _handbooks.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigShipHandbook>(configDir, "config_ship_handbook.db"))
+                _handbooks[id] = cfg;
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigShipHandbook? Get(int shipInfoId)
+        => _handbooks.TryGetValue(shipInfoId, out var cfg) ? cfg : null;
+
+    public static string GetShipName(int templateId)
+    {
+        int shipInfoId = (templateId - 1) / 10;
+        return _handbooks.TryGetValue(shipInfoId, out var cfg) ? cfg.ShipName ?? "" : "";
+    }
+}
+
+internal static class PlotTriggerLoader
+{
+    private static List<int> _allPlotIds = [];
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _allPlotIds.Clear();
+            int count = 0;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigPlotEpisodeTrigger>(configDir, "config_plot_episode_trigger.db"))
+            {
+                _allPlotIds.Add(checked((int)cfg.PlotTriggerId));
+                count++;
+            }
+            Console.Error.WriteLine($"[PlotTrigger] loaded {count} plot trigger IDs from {configDir}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[PlotTrigger] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    public static IReadOnlyList<int> AllPlotIds => _allPlotIds;
+}

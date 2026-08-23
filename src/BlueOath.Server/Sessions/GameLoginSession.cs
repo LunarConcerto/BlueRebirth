@@ -8,10 +8,6 @@ using Microsoft.Extensions.Logging.Console;
 
 namespace BlueOath.Server.Sessions;
 
-/// <summary>
-/// 游戏登录 TCP 端点的每个连接处理器（承载 protobuf <c>TMessage</c> 请求/响应层的
-/// NetSocket 帧）。会话内跟踪当前 profileId，使角色/船坞数据按账号从存档读取。
-/// </summary>
 internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerFactory loggerFactory)
 {
     private readonly GameLoginMessageHandler _handler = handler;
@@ -38,7 +34,6 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         "game-login[{ConnectionId}] netsocket type={Type} len={Length} preview={Preview}",
                         connectionId, type, payload.Length,
                         Convert.ToHexString(payload.AsSpan(0, Math.Min(payload.Length, 16))));
-                    // 心跳帧直接原样回 ping。
                     if (type == NetSocketFrameCodec.TypePing)
                     {
                         await NetSocketFrameCodec.WriteAsync(stream, ReadOnlyMemory<byte>.Empty,
@@ -52,31 +47,32 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
 
                     _messageLogger.Log(LogLevel.Information, "GameSession received request method={Method}", request.Method);
 
-                    // player.Login 先解析 pid，更新会话的 profileId，后续请求按该账号读取。
                     if (request.Method == "player.Login")
                         profileId = _handler.ResolveLoginProfileId(request);
 
-                    // 在 user.UserLogin 应答前先推送 user.UpdateUserInfo，确保
-                    // Data.userData.m_TypeNumMap 在 LoginOk 事件触发前已初始化。
-                    // 同时推送 guide.GuideInfo，确保 GuideManager:init 读取到
-                    // GUIDE_DONE_STAGES，避免触发新手引导。
                     if (request.Method == "user.UserLogin")
                     {
                         var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                        var account = await _handler.GetAccountAsync(profileId, ct);
                         var push = await _handler.BuildUpdateUserInfoPushAsync(profileId, now, ct);
                         await NetSocketFrameCodec.WriteAsync(stream, push, NetSocketFrameCodec.TypeData, ct);
                         _fileLogger.LogInformation(
                             "game-login[{ConnectionId}] push user.UpdateUserInfo (before LoginOk)",
                             connectionId);
-                        var guidePush = _handler.BuildGuideInfoPush(now);
+                        var guidePush = _handler.BuildGuideInfoPush(now, account);
                         await NetSocketFrameCodec.WriteAsync(stream, guidePush, NetSocketFrameCodec.TypeData, ct);
                         _fileLogger.LogInformation(
                             "game-login[{ConnectionId}] push guide.GuideInfo (before LoginOk)",
                             connectionId);
                     }
 
-                    // 抽卡请求：先推送 hero 数据（船坞更新），再应答 BuildShip，
-                    // 确保 ShowGirlPage 打开时 hero 数据已就绪。
+                    if (request.Method == "guide.PlotReward")
+                    {
+                        var (_, plotPayload) = await _handler.BuildC2SResponseAsync(request, profileId, ct);
+                        await NetSocketFrameCodec.WriteAsync(stream, plotPayload, NetSocketFrameCodec.TypeData, ct);
+                        continue;
+                    }
+
                     if (request.Method == "buildship.BuildShip")
                     {
                         var (_, buildPayload) = await _handler.BuildC2SResponseAsync(request, profileId, ct);
@@ -85,10 +81,9 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                             var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                             var account = await _handler.GetAccountAsync(profileId, ct);
                             var newIds = _handler.GetLastBuildHeroIds();
-                            // 只推送本次抽卡新创建的 hero，缩小推送体积
                             var newHeroes = account.Dock.Heroes
                                 .Where(h => newIds.Contains(h.HeroId))
-                                .Select(h => new HeroGrid(h.HeroId, h.TemplateId, h.Level, h.Fashioning, h.Exp, h.CreateTime, h.UpdateTime, h.Affection, h.MarryTime, h.CurHp, h.Mood, h.MarryType, h.EquipSlots))
+                                .Select(h => new HeroGrid(h.HeroId, h.TemplateId, h.Level, h.Fashioning, h.Exp, h.CreateTime, h.UpdateTime, h.Affection, h.MarryTime, h.CurHp, h.Mood, h.MarryType, h.EquipSlots, Name: ShipHandbookLoader.GetShipName(h.TemplateId)))
                                 .ToList();
                             if (newHeroes.Count > 0)
                             {
@@ -97,7 +92,6 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                                     Ret: PlayerDataCodec.Encode(new HeroBag(newHeroes, account.Dock.BagSize)),
                                     Time: now));
                                 await NetSocketFrameCodec.WriteAsync(stream, heroPush, NetSocketFrameCodec.TypeData, ct);
-                                // 推送图鉴数据（仅新船），避免 CheckShowMeet 里 data[si_id].quality 访问 nil
                                 var illustratePush = TMessageCodec.EncodeResponse(new TResponse(
                                     Method: "illustrate.IllustrateInfo",
                                     Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
@@ -127,7 +121,6 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         "game-login[{ConnectionId}] response bytes={Bytes} hex={Hex}",
                         connectionId, responsePayload.Length, Convert.ToHexString(responsePayload));
 
-                    // 用户信息请求应答后，再主动推送主界面所需的玩家域数据。
                     if (request.Method == "user.GetUserInfo")
                     {
                         var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -147,7 +140,6 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         }
                     }
 
-                    // 购买应答后，推送更新后的货币/仓库/时装数据。
                     if (request.Method == "shop.BuyGoods" || request.Method == "shop.QualityBuyGoods")
                     {
                         var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -160,7 +152,6 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         }
                     }
 
-                    // 邮件领取应答后，推送更新后的货币数据。
                     if (request.Method == "mail.FetchItem" || request.Method == "mail.FetchAllItems")
                     {
                         var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -171,7 +162,6 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                             connectionId, push.Length, Convert.ToHexString(push));
                     }
 
-                    // 装备穿脱应答后，推送更新后的英雄 + 装备数据。
                     if (request.Method == "hero.ChangeEquip")
                     {
                         var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -184,7 +174,6 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         }
                     }
 
-                    // 用户档案更新后，推送 user.UpdateUserInfo 刷新客户端显示。
                     if (request.Method is "user.SetUserSecretary" or "user.ChangeName"
                         or "user.SetMessage" or "user.SetPlayerHeadFrame" or "user.SetHead")
                     {
@@ -196,12 +185,11 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                             connectionId, push.Length);
                     }
 
-                    // 舰娘升级后，推送 hero + bag 数据。
                     if (request.Method == "hero.AddExp")
                     {
                         var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                         var account = await _handler.GetAccountAsync(profileId, ct);
-                        var heroes = account.Dock.Heroes.Select(h => new HeroGrid(h.HeroId, h.TemplateId, h.Level, h.Fashioning, h.Exp, h.CreateTime, h.UpdateTime, h.Affection, h.MarryTime, h.CurHp, h.Mood, h.MarryType, h.EquipSlots)).ToList();
+                        var heroes = account.Dock.Heroes.Select(h => new HeroGrid(h.HeroId, h.TemplateId, h.Level, h.Fashioning, h.Exp, h.CreateTime, h.UpdateTime, h.Affection, h.MarryTime, h.CurHp, h.Mood, h.MarryType, h.EquipSlots, Name: ShipHandbookLoader.GetShipName(h.TemplateId))).ToList();
                         var heroPush = TMessageCodec.EncodeResponse(new TResponse(
                             Method: "hero.UpdateHeroBagData",
                             Ret: PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize)),
@@ -215,13 +203,48 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         await NetSocketFrameCodec.WriteAsync(stream, bagPush, NetSocketFrameCodec.TypeData, ct);
                     }
 
-                    // 剧情奖励领取后，推送更新后的章节数据解锁下一章。
-                    // 全章节已解锁，无需额外推送。
-                    if (request.Method == "guide.PlotReward")
+                    if (request.Method == "hero.Marry")
                     {
+                        var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                        var account = await _handler.GetAccountAsync(profileId, ct);
+                        var heroes = account.Dock.Heroes.Select(h => new HeroGrid(h.HeroId, h.TemplateId, h.Level, h.Fashioning, h.Exp, h.CreateTime, h.UpdateTime, h.Affection, h.MarryTime, h.CurHp, h.Mood, h.MarryType, h.EquipSlots, Name: ShipHandbookLoader.GetShipName(h.TemplateId))).ToList();
+                        var heroPush = TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize)),
+                            Time: now));
+                        var bagPush = TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "bag.UpdateBagData",
+                            Ret: PlayerDataCodec.Encode(new BagInfoRet(BagType: 1, BagSize: (account.Bag ?? new PlayerBag([], 100)).BagSize,
+                                BagInfo: (account.Bag?.Items ?? []).Select(i => new BagGridInfo(i.TemplateId, i.Num)).ToList())),
+                            Time: now));
+                        await NetSocketFrameCodec.WriteAsync(stream, heroPush, NetSocketFrameCodec.TypeData, ct);
+                        await NetSocketFrameCodec.WriteAsync(stream, bagPush, NetSocketFrameCodec.TypeData, ct);
                     }
 
-                    // 战斗开始后，推送 copy.StartBase push 触发 BattleLauncher 打开 StageSimpleBattle（不推 battle.createBattleInfo，避免打开崩溃的 StagePvpBattle）
+                    if (request.Method == "copy.PassBase")
+                    {
+                        var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                        var account = await _handler.GetAccountAsync(profileId, ct);
+                        int copyId = GameLoginMessageHandler.DecodePassBaseCopyId(request.Args ?? []);
+                        int copyType = ChapterCopyLoader.GetCopyType(copyId);
+                        if (copyType == 2)
+                        {
+                            var seaPush = TMessageCodec.EncodeResponse(new TResponse(
+                                Method: "copy.GetCopy",
+                                Ret: GameLoginMessageHandler.EncodeSeaCopyInfo(account.SeaProgress),
+                                Time: now));
+                            await NetSocketFrameCodec.WriteAsync(stream, seaPush, NetSocketFrameCodec.TypeData, ct);
+                        }
+                        else
+                        {
+                            var plotPush = TMessageCodec.EncodeResponse(new TResponse(
+                                Method: "copy.GetCopy",
+                                Ret: GameLoginMessageHandler.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
+                                Time: now));
+                            await NetSocketFrameCodec.WriteAsync(stream, plotPush, NetSocketFrameCodec.TypeData, ct);
+                        }
+                    }
+
                     if (request.Method == "copy.StartBase")
                     {
                         var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());

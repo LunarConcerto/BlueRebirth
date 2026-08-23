@@ -12,18 +12,23 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         var rootDir = FindRoot();
-        var processManager = new ProcessManager(rootDir);
+        var settingsService = new SettingsService();
+        var settings = settingsService.Load();
+        var processManager = new ProcessManager(rootDir, settings);
 
         var mainViewModel = new MainViewModel();
 
         var launchViewModel = new LaunchViewModel(processManager, mainViewModel);
+        mainViewModel.RegisterLaunchViewModel(launchViewModel);
         var announcementService = new AnnouncementService();
         launchViewModel.LoadAnnouncements(announcementService.LoadAnnouncements());
 
         var guardianViewModel = new GuardianViewModel(processManager, mainViewModel);
+        var settingsViewModel = new SettingsViewModel(settingsService, mainViewModel);
 
         mainViewModel.AddPage(launchViewModel);
         mainViewModel.AddPage(guardianViewModel);
+        mainViewModel.AddPage(settingsViewModel);
         mainViewModel.SelectedPageIndex = 0;
 
         DataContext = mainViewModel;

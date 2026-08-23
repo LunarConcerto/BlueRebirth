@@ -213,10 +213,26 @@
   **其他 Loader 建议后续统一改用 FindConfigDir**，否则在 bin/Debug dataRoot 下玩家船/敌舰属性均为 fallback 值。
 - 实测：海域分页正常显示第 1 章节点关卡，可切换章节。
 
+## 2026-08-24 补充：副炮 MISS（已解决）
+- 现象：副炮（EPU_ViceGun）伤害事件 `EventDamageAfter damage=0` → MISS，主炮/鱼雷/空袭均正常。
+- 根因（与主炮/空袭完全相同的 `Ship.actSkillInfo.damageFac=0` 模式）：
+  - 副炮伤害核心 `EPU_ViceGun.ExecuteAtom`（RVA 0x523FD0，`ExecuteAtom(IObj exporter, Ship targetShip)`）。
+  - 函数末尾 `0x5242D0` 取 `eax=[edi+0x64]`（exporter 的 actSkillInfo），若 null 抛异常（非本问题）；
+    `0x52430C F2 0F 59 48 28 mulsd xmm1,[eax+0x28]` —— 乘 `actSkillInfo.damageFac`（离线无 A-skill → 0）→ 总伤害清零 → isMiss=true → MISS。
+  - 副炮伤害公式（反汇编推演）：
+    `damage = ceil( base * coe[ebp-0x2c](GetShipDamageCoe skillType=2) * coe[ebp-0x34](GetAmmounitionEffect 68) * coe[ebp-0x3c](GetDamageOdd_BCS 0x524BF0) * coe[ebp-0x4c]*[ebp-0x54]*[ebp-0x5c] * damageFac )`，
+    base = `Max(0, exporter.GetAttribute(65) + const - target.GetAttribute(103))`（近似）。
+  - `__IsHit`（0x5281B0）照常命中；但伤害乘 0 → isMiss。
+- 修复（payload，`native/Payload/hooks.cpp` 的 `TryApplyMainGunDamageFacPatch`）：
+  - 新增 slot `0x52430C { F2 0F 59 48 28 }`（mulsd xmm1,[eax+0x28]，5 字节）→ NOP（等价 damageFac=1.0）。
+  - 注意与主炮/空袭不同：副炮 **inline** 读取 damageFac（不经 `0x1052f5a0` 读取器），故只需 NOP 乘法，无需 hook 读取器。
+- 已构建 payload（bin-x86/BlueOath.Payload.dll）。待实测：副炮应有伤害数字。
+
 ## 地址速查（补充）
 - damageFac 乘法待 NOP 地址：0x52044A / 0x521910 / 0x5222F1 / 0x52314B / 0x5232F0 / 0x523C03。
 - `ShipActSkillInfo.damageFac` = Ship+0x64 → +0x28。
 - `GetASkillAttr`（0x65BA80）返回 ASkillAttrUnit.damageFac（0x10）。
+- 副炮 damageFac 乘法待 NOP 地址：0x52430C（`F2 0F 59 48 28`）。
 - 伤害最终公式（EPU_MainGun.__ExecuteAtom）：
   `damage = ceil( (Max(Attack*0.9 - Defense, 0) + Attack*0.1) * base1 * GetASkillAttrFac * actSkillDamFac )`。
 - `0x57F960` = `Mathf.CeilToInt`（最终取整）；`0x5806B0` = `Max(a, 0)`。

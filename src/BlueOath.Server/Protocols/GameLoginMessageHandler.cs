@@ -27,7 +27,7 @@ internal sealed partial class GameLoginMessageHandler
     private readonly Dictionary<int, BuildShipPool> _buildPools;
     private readonly Dictionary<int, int> _expPerItem;
     private readonly Dictionary<int, int> _expNeeded;
-    private readonly Dictionary<int, List<int>> _copyRandomFactors;
+    private readonly Dictionary<int, List<RandomFactorEntry>> _copyRandomFactors;
     private readonly Random _rng = new();
 
     public GameLoginMessageHandler(SqliteGameRepository repo, ServerOptions options, ILoggerFactory loggerFactory)
@@ -44,9 +44,12 @@ internal sealed partial class GameLoginMessageHandler
         _copyRandomFactors = RandomFactorLoader.Load(options.DataRoot);
         ChapterCopyLoader.Load(options.DataRoot);
         CopyBattleLoader.Load(options.DataRoot);
+        MissionChainLoader.Load(options.DataRoot);
         ShipMainLoader.Load(options.DataRoot);
         AssistShipLoader.Load(options.DataRoot);
         EquipLoader.Load(options.DataRoot);
+        ShipHandbookLoader.Load(options.DataRoot);
+        PlotTriggerLoader.Load(options.DataRoot);
     }
 
     /// <summary>
@@ -105,6 +108,10 @@ internal sealed partial class GameLoginMessageHandler
         {
             ret = await BuildAddExpRetAsync(request, profileId, ct);
         }
+        else if (request.Method == "hero.Marry")
+        {
+            ret = await BuildMarryRetAsync(request, profileId, now, ct);
+        }
         else if (request.Method == "tactic.GetHerosTactic")
         {
             ret = await BuildGetHerosTacticAsync(profileId, ct);
@@ -115,7 +122,11 @@ internal sealed partial class GameLoginMessageHandler
         }
         else if (request.Method == "guide.PlotReward")
         {
-            ret = BuildPlotReward(request.Args ?? []);
+            ret = await BuildPlotRewardAsync(request.Args ?? [], profileId, ct);
+        }
+        else if (request.Method == "copyinfo.GetCopyInfo")
+        {
+            ret = BuildCopyInfoRet(request.Args ?? []);
         }
         else if (request.Method == "user.SetUserSecretary")
         {
@@ -215,15 +226,21 @@ internal sealed partial class GameLoginMessageHandler
     /// LoginOk 事件触发 GuideManager:init 时 GUIDE_DONE_STAGES 仍为空，
     /// 引导系统会触发第一个 stage(id=10000) 打开 GuidePage。这里标记所有 stage 已完成。
     /// </summary>
-    public byte[] BuildGuideInfoPush(uint now)
+    public byte[] BuildGuideInfoPush(uint now, PlayerAccount account)
     {
-        var push = new TResponse(Method: "guide.GuideInfo",
-            Ret: PlayerDataCodec.Encode(new GuideInfo(Setting:
-            [
-                new GuideSetting("GUIDE_DONE_STAGES", BuildDoneGuideStages()),
-                new GuideSetting("GUIDE_DOING_STAGE", ""),
-            ])),
-            Time: now);
+        var settings = new List<GuideSetting>
+        {
+            new("GUIDE_DONE_STAGES", BuildDoneGuideStages()),
+            new("GUIDE_DOING_STAGE", ""),
+            new("PlotPassKey", ""),
+            new("PlotUtcTime", "0"),
+            new("PlotToggleSkipTip", "0"),
+        };
+        var plotList = PlotTriggerLoader.AllPlotIds;
+        _fileLogger.LogInformation("guide.GuideInfo push PlotList count={Count}", plotList.Count);
+        var guideInfo = new GuideInfo(PlotList: plotList, Setting: settings);
+        var ret = PlayerDataCodec.Encode(guideInfo);
+        var push = new TResponse(Method: "guide.GuideInfo", Ret: ret, Time: now, IsResponse: 0);
         return TMessageCodec.EncodeResponse(push);
     }
 
@@ -295,14 +312,14 @@ internal sealed partial class GameLoginMessageHandler
             // 剧情章节数据推送，填充首章关卡信息防止章节锁定。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "copy.GetCopy",
-                Ret: EncodePlotCopyInfo(account.Character.PlotChapterId),
+                Ret: EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
                 Time: now)),
 
             // 海域章节数据推送（CopyType=2 SeaCopy）。海域页面节点依赖 GetCopyInfo() 里
             // 存在海域关卡，缺则 CheckChapterIsOpen/GetBattleModeChapter 全 false → 海域页空。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "copy.GetCopy",
-                Ret: EncodeSeaCopyInfo(),
+                Ret: EncodeSeaCopyInfo(account.SeaProgress),
                 Time: now)),
 
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目
@@ -359,6 +376,8 @@ internal sealed partial class GameLoginMessageHandler
         if (account is not null)
         {
             EnsureEquipIdFromAccount(account);
+            if (account.Character.Level < 80)
+                account = account with { Character = account.Character with { Level = 80 } };
             return account;
         }
         var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
@@ -370,7 +389,11 @@ internal sealed partial class GameLoginMessageHandler
     public async Task<PlayerAccount> GetAccountAsync(string profileId, CancellationToken ct)
     {
         var account = await _repo.LoadAccountAsync(profileId, ct);
-        return account ?? PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        if (account is null)
+            return PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        if (account.Character.Level < 80)
+            account = account with { Character = account.Character with { Level = 80 } };
+        return account;
     }
 
     /// <summary>获取最近一次抽卡创建的新英雄 ID 列表（供会话层只推送增量 hero 数据）。</summary>

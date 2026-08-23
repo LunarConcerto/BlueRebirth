@@ -186,6 +186,55 @@ internal sealed partial class GameLoginMessageHandler
         return account with { Dock = dock with { Heroes = heroes } };
     }
 
+    internal static PlayerAccount SetAffection(PlayerAccount account, uint heroId, int amount)
+    {
+        HeroDock dock = account.Dock;
+        List<Hero> heroes = dock.Heroes.ToList();
+        int idx = heroes.FindIndex(h => h.HeroId == heroId);
+        if (idx < 0) return account;
+        int affection = amount * 10000;
+        heroes[idx] = heroes[idx] with { Affection = affection };
+        return account with { Dock = dock with { Heroes = heroes } };
+    }
+
+    private const int MarryRingTemplateId = 10180;
+
+    private async Task<byte[]> BuildMarryRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
+    {
+        var (heroId, marryType) = DecodeMarryArg(request.Args ?? []);
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+
+        var heroes = account.Dock.Heroes.ToList();
+        var heroIdx = heroes.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return TMessageCodec.EncodeResponse(new TResponse(Err: 1, ErrMsg: "hero not found"));
+
+        var hero = heroes[heroIdx];
+        if (hero.MarryTime != 0) return TMessageCodec.EncodeResponse(new TResponse(Err: 2, ErrMsg: "already married"));
+
+        heroes[heroIdx] = hero with { MarryTime = now, MarryType = marryType };
+        account = account with { Dock = account.Dock with { Heroes = heroes } };
+        account = account with { Character = account.Character with { MarriedNum = account.Character.MarriedNum + 1 } };
+        account = AddBagItem(account, MarryRingTemplateId, -1);
+
+        await _repo.SaveAccountAsync(account, ct);
+        return TMessageCodec.EncodeResponse(new TResponse(Method: "hero.Marry", Time: checked((uint)now)));
+    }
+
+    private static (uint HeroId, int MarryType) DecodeMarryArg(ReadOnlySpan<byte> payload)
+    {
+        ProtoReader reader = new(payload);
+        uint heroId = 0;
+        int marryType = 1;
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
+                case 2 when wire == 0: marryType = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        return (heroId, marryType);
+    }
+
     /// <summary>解码 TBuildShipArg: Id(1, int32), Num(2, int32), CacheId(3, string)。</summary>
     private static (int Id, int Num, string CacheId) DecodeBuildShipArg(ReadOnlySpan<byte> payload)
     {
@@ -339,12 +388,21 @@ internal sealed partial class GameLoginMessageHandler
             return val;
         }
 
+        public uint ReadFixed32()
+        {
+            uint value = BitConverter.ToUInt32(_data.Slice(_offset, 4));
+            _offset += 4;
+            return value;
+        }
+
         public void Skip(int wire)
         {
             switch (wire)
             {
                 case 0: ReadVarint(); break;
+                case 1: _offset += 8; break;
                 case 2: ReadBytes(); break;
+                case 5: _offset += 4; break;
                 default: throw new InvalidDataException();
             }
         }
@@ -556,9 +614,28 @@ internal sealed partial class GameLoginMessageHandler
         return EncodeFleet(newFleet);
     }
 
-    private static byte[] BuildPlotReward(byte[] args)
+    private async Task<byte[]> BuildPlotRewardAsync(byte[] args, string profileId, CancellationToken ct)
     {
-        return EncodePlotRewardRet(args.Length > 0 ? (int)DecodeVarint(args.AsSpan()) : 0);
+        int plotId = args.Length > 0 ? (int)DecodeVarint(args.AsSpan()) : 0;
+        _fileLogger.LogInformation("guide.PlotReward plotId={PlotId} argsLen={ArgsLen} hex={Hex}",
+            plotId, args.Length, Convert.ToHexString(args));
+        if (plotId == 0) return EncodePlotRewardRet(0);
+
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var plotIds = account.PlotRewardIds?.ToList() ?? new List<int>();
+        if (!plotIds.Contains(plotId))
+        {
+            plotIds.Add(plotId);
+            account = account with { PlotRewardIds = plotIds };
+            await _repo.SaveAccountAsync(account, ct);
+            _fileLogger.LogInformation("guide.PlotReward stored plotId={PlotId} count={Count}", plotId, plotIds.Count);
+        }
+        else
+        {
+            _fileLogger.LogInformation("guide.PlotReward plotId={PlotId} already stored", plotId);
+        }
+
+        return EncodePlotRewardRet(plotId);
     }
 
     /// <summary>推送当前章节的 copy.GetCopy 数据。markPassed=true 表示上一章已通关。</summary>
@@ -568,7 +645,7 @@ internal sealed partial class GameLoginMessageHandler
         int chapterId = account.Character.PlotChapterId;
         return TMessageCodec.EncodeResponse(new TResponse(
             Method: "copy.GetCopy",
-            Ret: EncodePlotCopyInfo(chapterId, chapterId > 1),
+            Ret: EncodePlotCopyInfo(chapterId, account.CopyProgress),
             Time: now));
     }
 
@@ -587,8 +664,9 @@ internal sealed partial class GameLoginMessageHandler
             List<Hero> heroList = account.Dock.Heroes.ToList();
             // 关卡出战舰队必须回环客户端请求里的 HeroList（剧情关限制），
             // 而不是从玩家编队猜。请求未带时回退到全部船。
+            _copyRandomFactors.TryGetValue(copyId, out List<RandomFactorEntry>? randomFactors);
             return EncodeStartBaseRet(copyId, heroList, account.Character, deployHeroIds, isRunningFight, battleMode,
-                matchType);
+                matchType, randomFactors);
         }
         catch (Exception ex)
         {
@@ -605,7 +683,8 @@ internal sealed partial class GameLoginMessageHandler
         WriteVarint(ms, 0x08);
         WriteVarint(ms, 1); // BattleId=1
         // Arg (4) = TBattleCreateMutiArg，与 TStartBaseRet 编码相同
-        byte[] arg = EncodeStartBaseRet(copyId, heroes, character, null);
+        _copyRandomFactors.TryGetValue(copyId, out List<RandomFactorEntry>? randomFactors);
+        byte[] arg = EncodeStartBaseRet(copyId, heroes, character, null, randomFactors: randomFactors);
         WriteVarint(ms, 0x22);
         WriteVarint(ms, (ulong)arg.Length);
         ms.Write(arg);
@@ -614,12 +693,14 @@ internal sealed partial class GameLoginMessageHandler
 
     public byte[] EncodeStartBaseRetDirect(int copyId, List<Hero> heroes, PlayerCharacter character)
     {
-        return EncodeStartBaseRet(copyId, heroes, character, null);
+        _copyRandomFactors.TryGetValue(copyId, out List<RandomFactorEntry>? randomFactors);
+        return EncodeStartBaseRet(copyId, heroes, character, null, randomFactors: randomFactors);
     }
 
     private static byte[] EncodeStartBaseRet(int copyId, List<Hero> heroes, PlayerCharacter character,
         IReadOnlyList<int>? deployHeroIds = null,
-        bool isRunningFight = false, int battleMode = 1, int matchType = 0)
+        bool isRunningFight = false, int battleMode = 1, int matchType = 0,
+        IReadOnlyList<RandomFactorEntry>? randomFactors = null)
     {
         // 本关真实敌舰队 id（config_copy → fleet_id），供 TStartBaseRet.EnemyFleet(字段5)
         // → BattleStartData.enemyFleetId 使用。
@@ -845,9 +926,9 @@ internal sealed partial class GameLoginMessageHandler
         WriteVarint(ms, 0x0A);
         WriteVarint(ms, (ulong)bplb.Length);
         ms.Write(bplb);
-        // RandomSeed (2)
+        // RandomSeed (2) — 当前时间戳（秒），避免每次战斗相同随机序列
         WriteVarint(ms, 0x10);
-        WriteVarint(ms, 12345);
+        WriteVarint(ms, unchecked((ulong)(int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         // Rid (3) = config_copy 的 r_id（客户端用它作 copyDictId 查 config_copy -> scene_id）
         int copyRid = CopyBattleLoader.GetConfigId(copyId);
         WriteVarint(ms, 0x18);
@@ -860,21 +941,38 @@ internal sealed partial class GameLoginMessageHandler
         bool isSeaCopy = ChapterCopyLoader.GetSeaLevels().Contains(copyId);
         WriteVarint(ms, 0x38);
         WriteVarint(ms, isSeaCopy ? (ulong)2 : (ulong)1);
-        // RandomFactors (12) — 海域索敌/侦察场景初始化依赖。海域关卡 random_factor_sets=[61]，
-        // 服务端需下发 SetId=61 的随机因子，否则 BattlePage 索敌 UI 初始化卡加载。
-        if (isSeaCopy)
+        // RandomFactors (12) — 海域索敌/侦察场景初始化依赖。按 copyId 查表：
+        // config_copy_display.random_factor_sets → config_random_factor_set.factor_groups
+        // → config_random_factor_group.factor（RandomFactorLoader）。海域 1600100 → [61]。
+        // 剧情关 random_factor_sets=[] 无条目，自然不编码。
+        if (randomFactors is { Count: > 0 })
         {
-            using MemoryStream rf = new();
-            WriteVarint(rf, 0x08);
-            WriteVarint(rf, 1); // Factors[0]=1
-            WriteVarint(rf, 0x10);
-            WriteVarint(rf, 61); // GroupId(2)=61
-            WriteVarint(rf, 0x18);
-            WriteVarint(rf, 61); // SetId(3)=61
-            byte[] rfb = rf.ToArray();
-            WriteVarint(ms, 0x62);
-            WriteVarint(ms, (ulong)rfb.Length);
-            ms.Write(rfb);
+            foreach (RandomFactorEntry entry in randomFactors)
+            {
+                using MemoryStream rf = new();
+                foreach (int f in entry.Factors)
+                {
+                    WriteVarint(rf, 0x08);
+                    WriteVarint(rf, unchecked((ulong)f)); // Factors(1)
+                }
+
+                if (entry.GroupId != 0)
+                {
+                    WriteVarint(rf, 0x10);
+                    WriteVarint(rf, unchecked((ulong)entry.GroupId)); // GroupId(2)
+                }
+
+                if (entry.SetId != 0)
+                {
+                    WriteVarint(rf, 0x18);
+                    WriteVarint(rf, unchecked((ulong)entry.SetId)); // SetId(3)
+                }
+
+                byte[] rfb = rf.ToArray();
+                WriteVarint(ms, 0x62);
+                WriteVarint(ms, (ulong)rfb.Length);
+                ms.Write(rfb);
+            }
         }
 
         // CopyPass (8) = false
@@ -933,9 +1031,9 @@ internal sealed partial class GameLoginMessageHandler
         // CopyMission (23) — repeated int32。注意：字段23 是 varint 元素（wire type 0），
         // 之前的 `0xB8 0x00` 编码出来的不是空数组而是 [0]——客户端按 0 去查 config_mission
         // 找不到 DictMission，MissionNode 拿 null 直接空引用崩溃。必须发客户端 config_mission
-        // 里真实存在的任务 ID（101/102/103 是一串完整的杀敌链，ECA action 均已配置）。
-        CopyBattleLoader.GetMissionIdList(copyId);
-        foreach (int mid in new[] { 101, 102, 103 })
+        // 里真实存在的任务 ID。按 copyId 查 config_copy.mission_id（官方多空），空则回退
+        // config_mission 第一条完整任务链（101→102→103，ECA action 均已配置）。
+        foreach (int mid in CopyBattleLoader.GetMissionIdList(copyId))
         {
             WriteVarint(ms, 0xB8);
             WriteVarint(ms, unchecked((ulong)mid));
@@ -1098,27 +1196,370 @@ internal sealed partial class GameLoginMessageHandler
         return (copyId, deployHeroIds, isRunningFight, battleMode, matchType);
     }
 
-    private async Task<byte[]> BuildPassBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
+    /// <summary>
+    /// 解码 copy.PassBase 请求的 TPassBaseArg 全部字段，返回完整实体对象。
+    /// 字段对照 copy_pb.lua TPassBaseArg: BaseId(1)/Rid(2)/CacheId(3)/RunningTime(4)/
+    /// MaxTimeScale(5)/IsFlyAttack(6)/IsRunningFight(7)/Grade(8)/MvpHeroId(9)/
+    /// BattleString(10)/Evaluate(11)/BattleTime(12)/LBPoint(13)/IsSupport(14)/
+    /// BattleType(15)/Operation(16)/FleetInfo(17)/HerosInfo(18)/IsFinishMission(19)/
+    /// EnemyFleets(20)。
+    /// </summary>
+    public static PassBaseArg DecodePassBaseArgAll(byte[] args)
     {
-        PlayerAccount account = await GetAccountAsync(profileId, ct);
-        return EncodePassBaseRet();
+        ProtoReader reader = new(args);
+        int baseId = 0, rid = 0, runningTime = 0, grade = 0, battleTime = 0, lbPoint = 0, battleType = 0;
+        string cacheId = "", battleString = "";
+        float maxTimeScale = 0f;
+        bool isFlyAttack = false, isRunningFight = false, isSupport = false, isFinishMission = false;
+        ulong mvpHeroId = 0;
+        List<PassEvaluate>? evaluate = null;
+        ArchiveCopyOperation? operation = null;
+        List<PassFleetInfo>? fleetInfo = null;
+        List<BaseHeroInfo>? herosInfo = null;
+        List<BattleEnemyFleet>? enemyFleets = null;
+
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: baseId = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: rid = checked((int)reader.ReadVarint()); break;
+                case 3 when wire == 2: cacheId = reader.ReadString(); break;
+                case 4 when wire == 0: runningTime = checked((int)reader.ReadVarint()); break;
+                case 5 when wire == 5:
+                    {
+                        uint bits = checked((uint)reader.ReadFixed32());
+                        maxTimeScale = BitConverter.Int32BitsToSingle(checked((int)bits));
+                        break;
+                    }
+                case 6 when wire == 0: isFlyAttack = reader.ReadVarint() != 0; break;
+                case 7 when wire == 0: isRunningFight = reader.ReadVarint() != 0; break;
+                case 8 when wire == 0: grade = checked((int)reader.ReadVarint()); break;
+                case 9 when wire == 0: mvpHeroId = reader.ReadVarint(); break;
+                case 10 when wire == 2: battleString = reader.ReadString(); break;
+                case 11 when wire == 2:
+                    evaluate ??= new List<PassEvaluate>();
+                    evaluate.Add(DecodePassEvaluate(reader.ReadBytes()));
+                    break;
+                case 12 when wire == 0: battleTime = checked((int)reader.ReadVarint()); break;
+                case 13 when wire == 0: lbPoint = checked((int)reader.ReadVarint()); break;
+                case 14 when wire == 0: isSupport = reader.ReadVarint() != 0; break;
+                case 15 when wire == 0: battleType = checked((int)reader.ReadVarint()); break;
+                case 16 when wire == 2:
+                    operation = DecodeArchiveCopyOperation(reader.ReadBytes());
+                    break;
+                case 17 when wire == 2:
+                    fleetInfo ??= new List<PassFleetInfo>();
+                    fleetInfo.Add(DecodePassFleetInfo(reader.ReadBytes()));
+                    break;
+                case 18 when wire == 2:
+                    herosInfo ??= new List<BaseHeroInfo>();
+                    herosInfo.Add(DecodeBaseHeroInfo(reader.ReadBytes()));
+                    break;
+                case 19 when wire == 0: isFinishMission = reader.ReadVarint() != 0; break;
+                case 20 when wire == 2:
+                    enemyFleets ??= new List<BattleEnemyFleet>();
+                    enemyFleets.Add(DecodeBattleEnemyFleet(reader.ReadBytes()));
+                    break;
+                default: reader.Skip(wire); break;
+            }
+
+        return new PassBaseArg(baseId, rid, cacheId, runningTime, maxTimeScale,
+            isFlyAttack, isRunningFight, grade, mvpHeroId, battleString, evaluate,
+            battleTime, lbPoint, isSupport, battleType, operation, fleetInfo,
+            herosInfo, isFinishMission, enemyFleets);
     }
 
-    private static byte[] EncodePassBaseRet()
+    private static PassEvaluate DecodePassEvaluate(ReadOnlySpan<byte> data)
+    {
+        ProtoReader sub = new(data);
+        int type = 0, value = 0;
+        while (sub.TryReadField(out int f, out int w))
+            switch (f)
+            {
+                case 1 when w == 0: type = checked((int)sub.ReadVarint()); break;
+                case 2 when w == 0: value = checked((int)sub.ReadVarint()); break;
+                default: sub.Skip(w); break;
+            }
+        return new PassEvaluate(type, value);
+    }
+
+    private static PassKvInfo DecodePassKvInfo(ReadOnlySpan<byte> data)
+    {
+        ProtoReader sub = new(data);
+        int type = 0, value = 0;
+        while (sub.TryReadField(out int f, out int w))
+            switch (f)
+            {
+                case 1 when w == 0: type = checked((int)sub.ReadVarint()); break;
+                case 2 when w == 0: value = checked((int)sub.ReadVarint()); break;
+                default: sub.Skip(w); break;
+            }
+        return new PassKvInfo(type, value);
+    }
+
+    private static BaseHeroInfo DecodeBaseHeroInfo(ReadOnlySpan<byte> data)
+    {
+        ProtoReader sub = new(data);
+        uint heroId = 0;
+        ulong hp = 0, ownerUid = 0;
+        bool isMvp = false, isBattle = false;
+        int breakStatus = 0;
+        List<PassKvInfo>? exHeroInfo = null;
+        while (sub.TryReadField(out int f, out int w))
+            switch (f)
+            {
+                case 1 when w == 0: heroId = checked((uint)sub.ReadVarint()); break;
+                case 2 when w == 0: hp = sub.ReadVarint(); break;
+                case 3 when w == 0: isMvp = sub.ReadVarint() != 0; break;
+                case 4 when w == 0: isBattle = sub.ReadVarint() != 0; break;
+                case 5 when w == 0: breakStatus = checked((int)sub.ReadVarint()); break;
+                case 6 when w == 2:
+                    exHeroInfo ??= new List<PassKvInfo>();
+                    exHeroInfo.Add(DecodePassKvInfo(sub.ReadBytes()));
+                    break;
+                case 7 when w == 0: ownerUid = sub.ReadVarint(); break;
+                default: sub.Skip(w); break;
+            }
+        return new BaseHeroInfo(heroId, hp, isMvp, isBattle, breakStatus, exHeroInfo, ownerUid);
+    }
+
+    private static PassFleetInfo DecodePassFleetInfo(ReadOnlySpan<byte> data)
+    {
+        ProtoReader sub = new(data);
+        int enemyId = 0;
+        List<BaseHeroInfo>? enemyInfo = null;
+        while (sub.TryReadField(out int f, out int w))
+            switch (f)
+            {
+                case 1 when w == 0: enemyId = checked((int)sub.ReadVarint()); break;
+                case 2 when w == 2:
+                    enemyInfo ??= new List<BaseHeroInfo>();
+                    enemyInfo.Add(DecodeBaseHeroInfo(sub.ReadBytes()));
+                    break;
+                default: sub.Skip(w); break;
+            }
+        return new PassFleetInfo(enemyId, enemyInfo);
+    }
+
+    private static ArchiveCopyOperation DecodeArchiveCopyOperation(ReadOnlySpan<byte> data)
+    {
+        ProtoReader sub = new(data);
+        int frameNumber = 0;
+        ReadOnlyMemory<byte> bytes = default;
+        while (sub.TryReadField(out int f, out int w))
+            switch (f)
+            {
+                case 1 when w == 0: frameNumber = checked((int)sub.ReadVarint()); break;
+                case 2 when w == 2: bytes = sub.ReadBytes().ToArray(); break;
+                default: sub.Skip(w); break;
+            }
+        return new ArchiveCopyOperation(frameNumber, bytes);
+    }
+
+    private static HeroAttr DecodeHeroAttr(ReadOnlySpan<byte> data)
+    {
+        ProtoReader sub = new(data);
+        int attrId = 0, attrValue = 0;
+        while (sub.TryReadField(out int f, out int w))
+            switch (f)
+            {
+                case 1 when w == 0: attrId = checked((int)sub.ReadVarint()); break;
+                case 2 when w == 0: attrValue = checked((int)sub.ReadVarint()); break;
+                default: sub.Skip(w); break;
+            }
+        return new HeroAttr(attrId, attrValue);
+    }
+
+    private static BattleEnemyShip DecodeBattleEnemyShip(ReadOnlySpan<byte> data)
+    {
+        ProtoReader sub = new(data);
+        int shipId = 0;
+        List<HeroAttr>? attr = null;
+        List<int>? pSkill = null;
+        while (sub.TryReadField(out int f, out int w))
+            switch (f)
+            {
+                case 1 when w == 0: shipId = checked((int)sub.ReadVarint()); break;
+                case 2 when w == 2:
+                    attr ??= new List<HeroAttr>();
+                    attr.Add(DecodeHeroAttr(sub.ReadBytes()));
+                    break;
+                case 3 when w == 0:
+                    pSkill ??= new List<int>();
+                    pSkill.Add(checked((int)sub.ReadVarint()));
+                    break;
+                default: sub.Skip(w); break;
+            }
+        return new BattleEnemyShip(shipId, attr, pSkill);
+    }
+
+    private static BattleEnemyFleet DecodeBattleEnemyFleet(ReadOnlySpan<byte> data)
+    {
+        ProtoReader sub = new(data);
+        int fleetId = 0, state = 0;
+        List<BattleEnemyShip>? ships = null;
+        while (sub.TryReadField(out int f, out int w))
+            switch (f)
+            {
+                case 1 when w == 0: fleetId = checked((int)sub.ReadVarint()); break;
+                case 2 when w == 0: state = checked((int)sub.ReadVarint()); break;
+                case 3 when w == 2:
+                    ships ??= new List<BattleEnemyShip>();
+                    ships.Add(DecodeBattleEnemyShip(sub.ReadBytes()));
+                    break;
+                default: sub.Skip(w); break;
+            }
+        return new BattleEnemyFleet(fleetId, state, ships);
+    }
+
+    private async Task<byte[]> BuildPassBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        byte[] args = request.Args ?? [];
+        PassBaseArg passArg = DecodePassBaseArgAll(args);
+        int copyId = passArg.BaseId;
+        int grade = passArg.Grade;
+        int battleTime = passArg.BattleTime;
+        if (copyId == 0) return EncodePassBaseRet(0, 0, 0, 0);
+
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        int passTime = battleTime > 0 ? battleTime : 60;
+        int copyType = ChapterCopyLoader.GetCopyType(copyId);
+
+        if (copyType == 2)
+        {
+            PlayerSeaCopyProgress seaProgress = account.SeaProgress ?? new PlayerSeaCopyProgress([]);
+            List<CopyRecord> seaRecords = seaProgress.Records.ToList();
+            int seaIdx = seaRecords.FindIndex(r => r.CopyId == copyId);
+            bool isFirstPass = seaIdx < 0;
+            int starLevel = grade > 0 ? 7 : 0;
+
+            if (isFirstPass)
+                seaRecords.Add(new CopyRecord(copyId, starLevel, grade, now, passTime, 1));
+            else
+            {
+                CopyRecord existing = seaRecords[seaIdx];
+                seaRecords[seaIdx] = existing with
+                {
+                    StarLevel = Math.Max(existing.StarLevel, starLevel),
+                    Grade = Math.Max(existing.Grade, grade),
+                    PassTime = passTime,
+                    PassCount = existing.PassCount + 1
+                };
+            }
+
+            account = account with { SeaProgress = new PlayerSeaCopyProgress(seaRecords) };
+            await _repo.SaveAccountAsync(account, ct);
+            return EncodePassBaseRet(copyId, grade, isFirstPass ? 1 : 0, passTime);
+        }
+
+        PlayerCopyProgress progress = account.CopyProgress ?? new PlayerCopyProgress([]);
+        List<CopyRecord> records = progress.Records.ToList();
+        int idx = records.FindIndex(r => r.CopyId == copyId);
+        bool isPlotFirstPass = idx < 0;
+        int plotStarLevel = grade > 0 ? 7 : 0;
+
+        if (isPlotFirstPass)
+        {
+            records.Add(new CopyRecord(copyId, plotStarLevel, grade, now, passTime, 1));
+        }
+        else
+        {
+            CopyRecord existing = records[idx];
+            records[idx] = existing with
+            {
+                StarLevel = Math.Max(existing.StarLevel, plotStarLevel),
+                Grade = Math.Max(existing.Grade, grade),
+                PassTime = passTime,
+                PassCount = existing.PassCount + 1
+            };
+        }
+
+        account = account with { CopyProgress = new PlayerCopyProgress(records) };
+
+        PlayerCharacter c = account.Character;
+        int bestChapter = FindChapterForCopy(copyId, c.PlotChapterId);
+        if (bestChapter > c.PlotChapterId)
+        {
+            c = c with { PlotChapterId = bestChapter };
+            account = account with { Character = c };
+        }
+
+        await _repo.SaveAccountAsync(account, ct);
+        return EncodePassBaseRet(copyId, grade, isPlotFirstPass ? 1 : 0, passTime);
+    }
+
+    /// <summary>根据 copyId 查找所属章节，返回当前可推进到的最大章节 id。</summary>
+    private static int FindChapterForCopy(int copyId, int currentChapterId)
+    {
+        List<int> chapterIds = ChapterCopyLoader.GetAllChapterIds();
+        int bestInRange = currentChapterId;
+        foreach (int chId in chapterIds)
+        {
+            List<int> copies = ChapterCopyLoader.GetCopyIds(chId);
+            if (copies.Count == 0) continue;
+            if (copies.Contains(copyId) && chId >= bestInRange)
+                bestInRange = chId;
+        }
+        return bestInRange;
+    }
+
+    private static byte[] EncodePassBaseRet(int copyId = 0, int grade = 3, int firstPass = 1, int passTime = 60)
     {
         using MemoryStream ms = new();
-        // Grade (4) = 3 (SSS)
-        WriteVarint(ms, 0x20);
-        WriteVarint(ms, 3);
-        // StarLv (6) = 7 (all 3 stars: 1|2|4)
+        if (copyId != 0)
+        {
+            WriteVarint(ms, 0x60);
+            WriteVarint(ms, unchecked((ulong)copyId));
+        }
+
+        if (grade != 0)
+        {
+            WriteVarint(ms, 0x20);
+            WriteVarint(ms, unchecked((ulong)grade));
+        }
+
+        int starLevel = grade > 0 ? 7 : 0;
         WriteVarint(ms, 0x30);
-        WriteVarint(ms, 7);
-        // FirstPass (10) = 1
-        WriteVarint(ms, 0x50);
-        WriteVarint(ms, 1);
-        // PassTime (8) = 60
-        WriteVarint(ms, 0x40);
-        WriteVarint(ms, 60);
+        WriteVarint(ms, unchecked((ulong)starLevel));
+
+        if (firstPass != 0)
+        {
+            WriteVarint(ms, 0x50);
+            WriteVarint(ms, unchecked((ulong)firstPass));
+        }
+
+        if (passTime != 0)
+        {
+            WriteVarint(ms, 0x40);
+            WriteVarint(ms, unchecked((ulong)passTime));
+        }
+
+        WriteVarint(ms, 0x18);
+        WriteVarint(ms, 0);
+
+        return ms.ToArray();
+    }
+
+    public static int DecodePassBaseCopyId(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        while (reader.TryReadField(out int field, out int wire))
+            if (field == 1 && wire == 0) return checked((int)reader.ReadVarint());
+            else reader.Skip(wire);
+        return 0;
+    }
+
+    private static byte[] BuildCopyInfoRet(byte[] args)
+    {
+        return EncodeCopyInfoRet();
+    }
+
+    private static byte[] EncodeCopyInfoRet()
+    {
+        using MemoryStream ms = new();
+        WriteVarint(ms, 0x20);
+        WriteVarint(ms, 0);
         return ms.ToArray();
     }
 
@@ -1133,13 +1574,14 @@ internal sealed partial class GameLoginMessageHandler
             if (field == 1 && wire == 0) copyId = checked((int)reader.ReadVarint()); // CopyId(1)
             else reader.Skip(wire);
         using MemoryStream ms = new();
-        if (_copyRandomFactors.TryGetValue(copyId, out List<int>? factors))
-            foreach (int f in factors)
-            {
-                // Factors(1) = repeated int32
-                WriteVarint(ms, 0x08);
-                WriteVarint(ms, unchecked((ulong)f));
-            }
+        if (_copyRandomFactors.TryGetValue(copyId, out List<RandomFactorEntry>? entries))
+            foreach (RandomFactorEntry e in entries)
+                foreach (int f in e.Factors)
+                {
+                    // Factors(1) = repeated int32
+                    WriteVarint(ms, 0x08);
+                    WriteVarint(ms, unchecked((ulong)f));
+                }
 
         // LastRefreshTime(2)=0 / IsShowTips(3)=false 默认省略
         return ms.ToArray();
@@ -1469,46 +1911,72 @@ internal sealed partial class GameLoginMessageHandler
         return ms.ToArray();
     }
 
-    /// <summary>编码剧情章节初始数据为 TUserCopyInfo protobuf（CopyType=1 PlotCopy）。</summary>
-    public static byte[] EncodePlotCopyInfo(int chapterId = 1, bool markPassed = false)
+    /// <summary>编码剧情章节初始数据为 TUserCopyInfo protobuf（CopyType=1 PlotCopy）。
+    /// 从账户的 CopyProgress 读取实际通关数据，未通关的关卡 FirstPassTime=0/StarLevel=0。</summary>
+    public static byte[] EncodePlotCopyInfo(int chapterId = 1, PlayerCopyProgress? progress = null)
     {
-        // 硬编码前 5 章的所有关卡，全部标记为已通关
-        // 章节1: [1,2,3,4,6,7,9,10,11,12,13]
-        // 章节2: [101,102,103,104,105,106,107,108]
-        int[] hardCodedCopyIds = new[]
+        Dictionary<int, CopyRecord> recordMap = progress?.Records
+            .ToDictionary(r => r.CopyId, r => r) ?? new Dictionary<int, CopyRecord>();
+
+        // 使用章节加载器获取所有章节的关卡
+        List<int> chapterIds = ChapterCopyLoader.GetAllChapterIds();
+        // 收集 chapterId 及之前所有章节的关卡
+        List<int> allCopyIds = new();
+        foreach (int chId in chapterIds)
         {
-            // 章节1
-            1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 13,
-            // 章节2
-            101, 102, 103, 104, 105, 106, 107, 108
-        };
+            if (chId > chapterId) break;
+            allCopyIds.AddRange(ChapterCopyLoader.GetCopyIds(chId));
+        }
+
+        #region 兜底
+
+        // 兜底：如果加载器没有数据，使用硬编码的关卡列表
+        if (allCopyIds.Count == 0)
+        {
+            allCopyIds.AddRange(new[]
+            {
+                1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 13,
+                101, 102, 103, 104, 105, 106, 107, 108
+            });
+        }
+
+        #endregion
+
         using MemoryStream ms = new();
-        foreach (int cid in hardCodedCopyIds)
+        int maxCopyId = 0;
+        foreach (int cid in allCopyIds)
         {
             using MemoryStream baseInfo = new();
             WriteVarint(baseInfo, 0x08);
             WriteVarint(baseInfo, unchecked((ulong)cid)); // BaseId(1)
             WriteVarint(baseInfo, 0x10);
             WriteVarint(baseInfo, 0); // Rid(2)=0
+            int starLevel = 7;
+            int firstPassTime = 1;
+            if (recordMap.TryGetValue(cid, out CopyRecord? rec))
+            {
+                starLevel = rec.StarLevel;
+                firstPassTime = rec.FirstPassTime > 0 ? 1 : 1;
+            }
             WriteVarint(baseInfo, 0x18);
-            WriteVarint(baseInfo, 0); // StarLevel(3)=0
+            WriteVarint(baseInfo, unchecked((ulong)starLevel)); // StarLevel(3)
             WriteVarint(baseInfo, 0x20);
             WriteVarint(baseInfo, 0); // IsRunningFight(4)=0
             WriteVarint(baseInfo, 0x28);
             WriteVarint(baseInfo, 0); // LBPoint(5)=0
             WriteVarint(baseInfo, 0x30);
-            WriteVarint(baseInfo, 1); // FirstPassTime(6)=1
+            WriteVarint(baseInfo, unchecked((ulong)firstPassTime)); // FirstPassTime(6)
             byte[] body = baseInfo.ToArray();
             WriteVarint(ms, 0x0A);
             WriteVarint(ms, (ulong)body.Length);
             ms.Write(body);
+            if (cid > maxCopyId) maxCopyId = cid;
         }
 
-        // MaxCopyId = 108（章节2最后一个关卡），使 _getFarestId 返回章节2
         WriteVarint(ms, 0x10);
-        WriteVarint(ms, 108);
+        WriteVarint(ms, unchecked((ulong)maxCopyId)); // MaxCopyId(2)
         WriteVarint(ms, 0x18);
-        WriteVarint(ms, 1);
+        WriteVarint(ms, 1); // CopyType(3)=PlotCopy
         return ms.ToArray();
     }
 
@@ -1516,8 +1984,10 @@ internal sealed partial class GameLoginMessageHandler
     /// 海域页面（SeaCopyPage）依赖 Data.copyData:GetCopyInfo() 里有海域关卡，
     /// 否则 CheckChapterIsOpen/GetBattleModeChapter 返回 false，节点不显示。
     /// MaxCopyId = 第 1 章第一关，使 _getFarestId(SeaCopy) 落在第 1 章。</summary>
-    public static byte[] EncodeSeaCopyInfo()
+    public static byte[] EncodeSeaCopyInfo(PlayerSeaCopyProgress? progress = null)
     {
+        Dictionary<int, CopyRecord> recordMap = progress?.Records
+            .ToDictionary(r => r.CopyId, r => r) ?? new Dictionary<int, CopyRecord>();
         List<int> seaLevels = ChapterCopyLoader.GetSeaLevels();
         int maxCopyId = ChapterCopyLoader.GetSeaFirstCopyId();
         using MemoryStream ms = new();
@@ -1528,14 +1998,21 @@ internal sealed partial class GameLoginMessageHandler
             WriteVarint(baseInfo, unchecked((ulong)cid)); // BaseId(1)
             WriteVarint(baseInfo, 0x10);
             WriteVarint(baseInfo, 0); // Rid(2)=0
+            int starLevel = 7;
+            int firstPassTime = 1;
+            if (recordMap.TryGetValue(cid, out CopyRecord? rec))
+            {
+                starLevel = rec.StarLevel;
+                firstPassTime = rec.FirstPassTime > 0 ? 1 : 1;
+            }
             WriteVarint(baseInfo, 0x18);
-            WriteVarint(baseInfo, 0); // StarLevel(3)=0
+            WriteVarint(baseInfo, unchecked((ulong)starLevel)); // StarLevel(3)
             WriteVarint(baseInfo, 0x20);
             WriteVarint(baseInfo, 0); // IsRunningFight(4)=0
             WriteVarint(baseInfo, 0x28);
             WriteVarint(baseInfo, 0); // LBPoint(5)=0
             WriteVarint(baseInfo, 0x30);
-            WriteVarint(baseInfo, 0); // FirstPassTime(6)=0
+            WriteVarint(baseInfo, unchecked((ulong)firstPassTime)); // FirstPassTime(6)
             byte[] body = baseInfo.ToArray();
             WriteVarint(ms, 0x0A);
             WriteVarint(ms, (ulong)body.Length);

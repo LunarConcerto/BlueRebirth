@@ -29,7 +29,7 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 /// <summary>One hero owned by the player (THeroGrid). Extend with Equips/PSkill/CurHp/etc. as needed.</summary>
 public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
     int Exp = 0, int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
-    long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null);
+    long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "");
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -215,6 +215,7 @@ public static class PlayerDataCodec
         if (value.UpdateTime != 0) WriteVarintField(output, 20, unchecked((ulong)value.UpdateTime));
         WriteVarintField(output, 21, unchecked((ulong)value.MarryType));
         if (value.Fashioning != 0) WriteVarintField(output, 22, unchecked((ulong)value.Fashioning));
+        WriteStringField(output, 15, value.Name);
         return output.ToArray();
     }
 
@@ -496,5 +497,13 @@ public static class PlayerDataCodec
             value >>= 7;
         }
         output.WriteByte((byte)value);
+    }
+
+    private static void WriteStringField(Stream output, int field, string value)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        WriteVarint(output, (ulong)((field << 3) | 2));
+        WriteVarint(output, (ulong)bytes.Length);
+        output.Write(bytes);
     }
 }
