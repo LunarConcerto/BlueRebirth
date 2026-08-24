@@ -12,7 +12,7 @@ namespace BlueOath.Server.Protocols;
 internal sealed partial class GameLoginMessageHandler
 {
     /// <summary>config_shop 全部商店 id（104 个）。</summary>
-    private static readonly int[] ShopIds =
+    internal static readonly int[] ShopIds =
     [
         1, 3, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
         26, 27, 29, 30, 101, 102, 104, 105, 106, 107, 110, 111, 200, 201, 202, 205,
@@ -22,6 +22,28 @@ internal sealed partial class GameLoginMessageHandler
         1013, 1014, 1015, 1020, 1021, 1022, 1023, 1024, 1025, 1026, 1030, 1040, 1041,
         1042, 1043, 1044, 1051, 1052, 1071, 1072, 1073, 1074, 1201, 1202,
     ];
+
+    /// <summary>商店列表响应（shop.GetShopsInfo 使用）。</summary>
+    internal byte[] BuildShopsInfoRet(uint now)
+    {
+        var goodsByShop = _gmGoods.Goods
+            .GroupBy(g => g.ShopId)
+            .ToDictionary(g => g.Key, g => g.Select(x => new ShopGoodsData(x.GoodId, 0, 0)).ToList());
+        var shopInfo = ShopIds.Select(id =>
+            goodsByShop.TryGetValue(id, out var goods)
+                ? new RetShopInfo(id, goods)
+                : new RetShopInfo(id)).ToList();
+        return PlayerDataCodec.Encode(new RetShopsInfo(ShopInfo: shopInfo));
+    }
+
+    /// <summary>仓库信息响应（bag.GetBagInfo 使用）。</summary>
+    internal async Task<byte[]> BuildGetBagInfoRetAsync(string profileId, CancellationToken ct)
+    {
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var bag = account.Bag ?? new PlayerBag([], 100);
+        var info = bag.Items.Select(i => new BagGridInfo(i.TemplateId, i.Num)).ToList();
+        return PlayerDataCodec.Encode(new BagInfoRet(BagType: 1, BagSize: bag.BagSize, BagInfo: info));
+    }
 
     /// <summary>
     /// 商店数据推送（shop.UpdateShopInfo）。让 Data.shopData.m_shopInfo 非空，否则
@@ -38,17 +60,20 @@ public byte[] BuildShopInfoPush(uint now)
     }
 
     // GoodsType 常量（constants.lua）。ITEM=1, EQUIP=2, CURRENCY=5, EQUIP_ENHANCE_ITEM=6, FASHION=18。
-    private const int GoodsTypeCurrency = 5;
-    private const int GoodsTypeEquip = 2;
-    private const int GoodsTypeFashion = 18;
+    internal const int GoodsTypeCurrency = 5;
+    internal const int GoodsTypeEquip = 2;
+    internal const int GoodsTypeFashion = 18;
     private uint _nextEquipId = 1;
     private uint _nextHeroId = 2; // 1 是默认秘书舰
 
     /// <summary>为 GM 命令生成下一个可用的舰娘实例 ID（调用前需确保已加载账号）。</summary>
     public uint NextHeroId() => _nextHeroId++;
 
+    /// <summary>生成下一个装备实例 ID。</summary>
+    internal uint NextEquipId() => _nextEquipId++;
+
     /// <summary>初始化 _nextEquipId 为账号中最大装备 ID + 1（避免服务重启后 ID 重复）。</summary>
-    private void EnsureEquipIdFromAccount(PlayerAccount account)
+    internal void EnsureEquipIdFromAccount(PlayerAccount account)
     {
         if (account.Equip is { Items.Count: > 0 } equip)
         {
@@ -64,87 +89,9 @@ public byte[] BuildShopInfoPush(uint now)
         }
     }
 
-    /// <summary>
-    /// 处理 shop.BuyGoods：免费发放商品内容到对应存储（GM 功能，不扣货币）。
-    /// - ITEM/EQUIP_ENHANCE_ITEM → 仓库（bag）
-    /// - CURRENCY → 货币（UserInfo.Bath 温泉币）
-    /// - FASHION → 时装解锁
-    /// 返回 TBuyGoodsRet{Reward, GoodId, BuyNum}，并把更新后的账号落盘。
-    /// </summary>
-    private async Task<byte[]> BuildBuyGoodsRetAsync(TRequest request, string profileId, CancellationToken ct)
-    {
-        if (request.Args is null)
-            return [];
-        var (_, goodId, buyNum, _) = TMessageCodec.DecodeBuyGoodsArg(request.Args);
-        if (buyNum <= 0)
-            buyNum = 1;
 
-        var account = await GetOrCreateAccountAsync(profileId, ct);
-        var (newAccount, reward) = ApplyGoods(account, goodId, buyNum);
-        if (reward.Type == 0)
-            return [];
-        await _repo.SaveAccountAsync(newAccount, ct);
+    /// <summary>发放单个 GM 商品（已迁移到 ShopModule）。</summary>
 
-        return TMessageCodec.EncodeBuyGoodsRet(reward, goodId, buyNum);
-    }
-
-    /// <summary>
-    /// 处理 shop.QualityBuyGoods（多选/批量购买）：对每个 GoodId 免费发放。
-    /// 返回 TQualityBuyGoodsRet{Reward, GoodIdList}。
-    /// </summary>
-    private async Task<byte[]> BuildQualityBuyGoodsRetAsync(TRequest request, string profileId, CancellationToken ct)
-    {
-        if (request.Args is null)
-            return [];
-        var (_, goodIds) = TMessageCodec.DecodeQualityBuyGoodsArg(request.Args);
-        if (goodIds.Count == 0)
-            return [];
-
-        var account = await GetOrCreateAccountAsync(profileId, ct);
-        var rewards = new List<CommonReward>();
-        foreach (var goodId in goodIds)
-        {
-            var (newAccount, reward) = ApplyGoods(account, goodId, 1);
-            if (reward.Type == 0)
-                continue;
-            account = newAccount;
-            rewards.Add(reward);
-        }
-        await _repo.SaveAccountAsync(account, ct);
-
-        return TMessageCodec.EncodeQualityBuyGoodsRet(rewards, goodIds);
-    }
-
-    /// <summary>发放单个 GM 商品，返回更新后的账号和奖励。无效商品返回 Type=0 的空奖励。</summary>
-    private (PlayerAccount Account, CommonReward Reward) ApplyGoods(PlayerAccount account, int goodId, int buyNum)
-    {
-        if (!_gmGoodsMap.TryGetValue(goodId, out var goods))
-            return (account, new CommonReward());
-        if (buyNum <= 0)
-            buyNum = 1;
-        var totalNum = goods.Num * buyNum;
-
-        if (goods.Type == GoodsTypeCurrency)
-        {
-            // 货币（CurrencyType → UserInfo 对应字段）
-            account = AddCurrency(account, goods.ConfigId, totalNum);
-        }
-        else if (goods.Type == GoodsTypeFashion)
-        {
-            account = AddFashion(account, goods.ConfigId);
-        }
-        else if (goods.Type == GoodsTypeEquip)
-        {
-            // 装备：每个商品条目发放一件装备实例（EquipId 自增），存入装备仓库
-            for (var i = 0; i < totalNum; i++)
-                account = AddEquipItem(account, goods.ConfigId);
-        }
-        else
-        {
-            account = AddBagItem(account, goods.ConfigId, totalNum);
-        }
-        return (account, new CommonReward(goods.Type, goods.ConfigId, totalNum));
-    }
 
     /// <summary>
     /// 货币发放（CurrencyType → UserInfo 字段）。覆盖客户端 UserInfo 里全部 24 种持久货币
@@ -195,36 +142,6 @@ public byte[] BuildShopInfoPush(uint now)
         else
             items.Add(new BagItem(templateId, num));
         return account with { Bag = bag with { Items = items } };
-    }
-
-    /// <summary>装备入库：创建一件装备实例（EquipId 自增），存入装备仓库。</summary>
-    private PlayerAccount AddEquipItem(PlayerAccount account, int templateId)
-    {
-        var equip = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
-        var items = equip.Items.ToList();
-        var id = _nextEquipId++;
-        items.Add(new EquipItem(EquipId: id, TemplateId: templateId));
-        return account with { Equip = equip with { Items = items } };
-    }
-
-    private PlayerAccount AddFashion(PlayerAccount account, int fashionTid)
-    {
-        var fashion = account.Fashion ?? new PlayerFashion([]);
-        var entries = fashion.Entries.ToList();
-        var sfId = _fashionSfIdMap.GetValueOrDefault(fashionTid, fashionTid);
-        var idx = entries.FindIndex(e => e.SfId == sfId);
-        if (idx >= 0)
-        {
-            var tids = entries[idx].FashionTids.ToList();
-            if (!tids.Contains(fashionTid))
-                tids.Add(fashionTid);
-            entries[idx] = entries[idx] with { FashionTids = tids };
-        }
-        else
-        {
-            entries.Add(new FashionEntry(sfId, [fashionTid]));
-        }
-        return account with { Fashion = fashion with { Entries = entries } };
     }
 
     /// <summary>仓库数据推送（bag.UpdateBagData）。</summary>

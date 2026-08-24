@@ -52,6 +52,19 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<BootstrapHttpResponder>();
         builder.Services.AddSingleton<JsonGameSession>();
         builder.Services.AddSingleton<BootstrapHttpSession>();
+
+        // 协议模块（每域一个类）+ 路由器。
+        builder.Services.AddSingleton<IGameModule, PlayerModule>();
+        builder.Services.AddSingleton<IGameModule, MailModule>();
+        builder.Services.AddSingleton<IGameModule, GuideModule>();
+        builder.Services.AddSingleton<IGameModule, BathroomModule>();
+        builder.Services.AddSingleton<IGameModule, FashionModule>();
+        builder.Services.AddSingleton<IGameModule, ShopModule>();
+        builder.Services.AddSingleton<IGameModule, HeroModule>();
+        builder.Services.AddSingleton<IGameModule, UserModule>();
+        builder.Services.AddSingleton<IGameModule, BuildShipModule>();
+        builder.Services.AddSingleton<IGameModule, CopyModule>();
+        builder.Services.AddSingleton<MessageRouter>();
         builder.Services.AddSingleton<GameLoginSession>();
 
         // GM 模块（WebUI + 命令解析）。

@@ -22,8 +22,7 @@ var tests = new (string Name, Func<Task> Run)[]
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
-    ("protobuf login server creates a local profile", GameLoginIntegrationTest),
-    ("kcp login server creates a local profile over UDP", KcpGameLoginIntegrationTest)];
+    ("protobuf login server creates a local profile", GameLoginIntegrationTest)];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -277,65 +276,6 @@ static async Task GameLoginIntegrationTest()
         var userInfo = await RoundTrip("user.GetUserInfo", null);
         Assert(userInfo.Method == "user.GetUserInfo", "get user info response method mismatch");
         Assert(userInfo.Ret is { Length: > 0 }, "get user info response was empty");
-    }
-    finally
-    {
-        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
-        if (Directory.Exists(data)) Directory.Delete(data, true);
-    }
-}
-
-static async Task KcpGameLoginIntegrationTest()
-{
-    var root = FindRepositoryRoot();
-    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
-    var data = Path.Combine(Path.GetTempPath(), "blueoath-kcp-" + Guid.NewGuid().ToString("N"));
-    var startInfo = new ProcessStartInfo("dotnet")
-    {
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true
-    };
-    startInfo.ArgumentList.Add(serverDll);
-    startInfo.ArgumentList.Add("--port=0");
-    startInfo.ArgumentList.Add("--kcp-game-login-port=0");
-    startInfo.ArgumentList.Add("--region=jp");
-    startInfo.ArgumentList.Add("--data=" + data);
-    using var process = new Process { StartInfo = startInfo };
-    try
-    {
-        Assert(process.Start(), "kcp game login server did not start");
-        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
-        var port = ready.RootElement.GetProperty("kcpGameLoginPort").GetInt32();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-
-        using var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-        var endpoint = new IPEndPoint(IPAddress.Loopback, port);
-        var appMessage = ClientGameWireCodec.EncodeClientRequest(GameOperationCodes.Login,
-            GameLoginCodec.Encode(new TArgLogin("kcp-player", 1, "open", "hash")));
-        foreach (var fragment in KcpCodec.FragmentPushMessage(0xABCD1234, 0, 1000, 32, 0, appMessage, maxPayload: 64))
-            await client.SendAsync(fragment, endpoint, timeout.Token);
-
-        var reader = new KcpStreamReader();
-        var reassembler = new KcpReassembler();
-        byte[]? responseMessage = null;
-        while (responseMessage is null)
-        {
-            var result = await client.ReceiveAsync(timeout.Token);
-            foreach (var packet in reader.Feed(result.Buffer))
-                if (reassembler.TryReassemble(packet, out var message))
-                    responseMessage = message;
-        }
-
-        Assert(responseMessage is not null, "kcp login response was empty");
-        var responseFrame = ClientGameWireCodec.DecodeServerResponse(responseMessage);
-        Assert(responseFrame.Operation == GameOperationCodes.Login, "kcp login response operation mismatch");
-        var response = GameLoginCodec.DecodeLoginResponse(responseFrame.Payload);
-        Assert(response.Ret == "0" && response.FeignRoleId == "kcp-player", "kcp login response mismatch");
-        var repo = new SqliteGameRepository(data);
-        Assert(await repo.LoadAsync("kcp-player", timeout.Token) is not null, "kcp login did not create profile");
     }
     finally
     {

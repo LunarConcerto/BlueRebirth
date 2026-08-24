@@ -11,55 +11,12 @@ namespace BlueOath.Server.Protocols;
 
 internal sealed partial class GameLoginMessageHandler
 {
-    /// <summary>把 GM 邮件配置转换为 MailList 实体列表（IsGotReawrd=0，可反复领取）。</summary>
-    private IReadOnlyList<MailList> BuildMailEntities(int now)
-    {
-        return _gmMails.Select(m => new MailList(
-            m.Mid,
-            Subject: m.Subject,
-            Content: m.Content,
-            ReceiveTime: now,
-            ReadTime: 0,
-            IsGotReawrd: 0,
-            Items: [new MailItem(GoodsTypeCurrency, m.CurrencyType, m.Num)],
-            DeleteTime: 0)).ToList();
-    }
-
-    /// <summary>邮件列表响应（mail.GetMailList/OpenMail/DeleteMail/DeleteAllMail/ReceiveNewMail 共用）。</summary>
-    private byte[] BuildMailListRet(int now)
-    {
-        IReadOnlyList<MailList> list = BuildMailEntities(now);
-        return PlayerDataCodec.Encode(new MailListRet(list.Count, List: list));
-    }
-
-    /// <summary>
-    /// 邮件领取（mail.FetchItem / mail.FetchAllItems）：发放对应邮件的货币并落盘，邮件不删除
-    /// （IsGotReawrd 保持 0，客户端仍显示"领取"按钮，实现无限领取）。返回 TMailListRet{list, Reward}。
-    /// </summary>
-    private async Task<byte[]> BuildFetchMailRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
-    {
-        ulong mid = request.Args is null ? 0UL : TMessageCodec.DecodeMailMid(request.Args);
-        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
-        List<CommonReward> rewards = new();
-        foreach (GmMailConfig mail in _gmMails)
-        {
-            if (request.Method == "mail.FetchItem" && mail.Mid != mid)
-                continue;
-            account = AddCurrency(account, mail.CurrencyType, mail.Num);
-            rewards.Add(new CommonReward(GoodsTypeCurrency, mail.CurrencyType, mail.Num));
-        }
-
-        if (rewards.Count > 0)
-            await _repo.SaveAccountAsync(account, ct);
-        IReadOnlyList<MailList> list = BuildMailEntities(now);
-        return PlayerDataCodec.Encode(new MailListRet(list.Count, List: list, Reward: rewards));
-    }
 
     /// <summary>
     /// 处理 hero.ChangeEquip：装备穿脱（EquipId&gt;0 = 装备，EquipId=0 = 卸下）。
     /// 更新 Hero.EquipSlots 和 EquipItem.HeroId，落盘后返回空响应（客户端通过推送刷新）。
     /// </summary>
-    private async Task<byte[]> BuildChangeEquipRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildChangeEquipRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null)
             return [];
@@ -103,7 +60,7 @@ internal sealed partial class GameLoginMessageHandler
     }
 
     /// <summary>设置装备的 HeroId（装备/卸下）。</summary>
-    private static PlayerAccount SetEquipHeroId(PlayerAccount account, uint equipId, uint heroId)
+    internal static PlayerAccount SetEquipHeroId(PlayerAccount account, uint equipId, uint heroId)
     {
         PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
         List<EquipItem> items = equip.Items.ToList();
@@ -138,7 +95,7 @@ internal sealed partial class GameLoginMessageHandler
     /// 抽取到的舰娘加入船坞，返回 TBuildShipRet{BuildShipResult=[TCommonReward]}。
     /// 10 连保底至少一个 SR（quality>=3）。
     /// </summary>
-    private async Task<byte[]> BuildBuildShipRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildBuildShipRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null)
             return [];
@@ -292,7 +249,7 @@ internal sealed partial class GameLoginMessageHandler
     }
 
     /// <summary>装备加入仓库</summary>
-    private uint AddEquip(PlayerAccount account, int templateId, int now)
+    internal uint AddEquip(PlayerAccount account, int templateId, int now)
     {
         // 简化实现：作为 CommonReward 返回，不实际加入装备仓库
         return 0;
@@ -325,7 +282,7 @@ internal sealed partial class GameLoginMessageHandler
 
     private const int MarryRingTemplateId = 10180;
 
-    private async Task<byte[]> BuildMarryRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
+    internal async Task<byte[]> BuildMarryRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
     {
         var (heroId, marryType) = DecodeMarryArg(request.Args ?? []);
         var account = await GetOrCreateAccountAsync(profileId, ct);
@@ -380,7 +337,7 @@ internal sealed partial class GameLoginMessageHandler
     }
 
     /// <summary>编码 TBuildShipRet: BuildShipResult(1, repeated TCommonReward)。</summary>
-    private static byte[] EncodeBuildShipRet(IReadOnlyList<CommonReward> rewards)
+    internal static byte[] EncodeBuildShipRet(IReadOnlyList<CommonReward> rewards)
     {
         using MemoryStream output = new();
         foreach (CommonReward r in rewards)
@@ -451,7 +408,7 @@ internal sealed partial class GameLoginMessageHandler
         return output.ToArray();
     }
 
-    private static void WriteVarint(Stream output, ulong value)
+    internal static void WriteVarint(Stream output, ulong value)
     {
         while (value >= 0x80)
         {
@@ -462,7 +419,7 @@ internal sealed partial class GameLoginMessageHandler
         output.WriteByte((byte)value);
     }
 
-    private ref struct ProtoReader
+    internal ref struct ProtoReader
     {
         private readonly ReadOnlySpan<byte> _data;
         private int _offset;
@@ -538,7 +495,7 @@ internal sealed partial class GameLoginMessageHandler
     /// 处理用户档案更新（秘书舰/改名/签名/头像/头像框）。
     /// 解码对应协议的 arg，更新 PlayerCharacter，落盘，返回空响应。
     /// </summary>
-    private async Task<byte[]> BuildUserProfileUpdateAsync(TRequest request, string profileId, CancellationToken ct,
+    internal async Task<byte[]> BuildUserProfileUpdateAsync(TRequest request, string profileId, CancellationToken ct,
         string field)
     {
         if (request.Args is null) return [];
@@ -588,7 +545,7 @@ internal sealed partial class GameLoginMessageHandler
         return [];
     }
 
-    private static ulong DecodeVarintField(ReadOnlySpan<byte> data, int field)
+    internal static ulong DecodeVarintField(ReadOnlySpan<byte> data, int field)
     {
         ProtoReader reader = new(data);
         while (reader.TryReadField(out int f, out int wire))
@@ -600,7 +557,7 @@ internal sealed partial class GameLoginMessageHandler
         return 0;
     }
 
-    private static string? DecodeStringField(ReadOnlySpan<byte> data, int field)
+    internal static string? DecodeStringField(ReadOnlySpan<byte> data, int field)
     {
         ProtoReader reader = new(data);
         while (reader.TryReadField(out int f, out int wire))
@@ -612,7 +569,7 @@ internal sealed partial class GameLoginMessageHandler
         return null;
     }
 
-    private async Task<byte[]> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
         (uint heroId, List<(int Id, int Num)> items) = DecodeHeroAddExp(request.Args);
@@ -723,14 +680,14 @@ internal sealed partial class GameLoginMessageHandler
         return output.ToArray();
     }
 
-    private async Task<byte[]> BuildGetHerosTacticAsync(string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildGetHerosTacticAsync(string profileId, CancellationToken ct)
     {
         PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
         PlayerFleet fleet = account.Fleet ?? PlayerAccountFactory.DefaultFleet();
         return EncodeFleet(fleet);
     }
 
-    private async Task<byte[]> BuildSetHerosTacticAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildSetHerosTacticAsync(TRequest request, string profileId, CancellationToken ct)
     {
         PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
         List<FleetEntry> entries = DecodeSetHerosTactic(request.Args ?? []);
@@ -738,30 +695,6 @@ internal sealed partial class GameLoginMessageHandler
         PlayerAccount updated = account with { Fleet = newFleet };
         await _repo.SaveAccountAsync(updated, ct);
         return EncodeFleet(newFleet);
-    }
-
-    private async Task<byte[]> BuildPlotRewardAsync(byte[] args, string profileId, CancellationToken ct)
-    {
-        int plotId = args.Length > 0 ? (int)DecodeVarint(args.AsSpan()) : 0;
-        _fileLogger.LogInformation("guide.PlotReward plotId={PlotId} argsLen={ArgsLen} hex={Hex}",
-            plotId, args.Length, Convert.ToHexString(args));
-        if (plotId == 0) return EncodePlotRewardRet(0);
-
-        var account = await GetOrCreateAccountAsync(profileId, ct);
-        var plotIds = account.PlotRewardIds?.ToList() ?? new List<int>();
-        if (!plotIds.Contains(plotId))
-        {
-            plotIds.Add(plotId);
-            account = account with { PlotRewardIds = plotIds };
-            await _repo.SaveAccountAsync(account, ct);
-            _fileLogger.LogInformation("guide.PlotReward stored plotId={PlotId} count={Count}", plotId, plotIds.Count);
-        }
-        else
-        {
-            _fileLogger.LogInformation("guide.PlotReward plotId={PlotId} already stored", plotId);
-        }
-
-        return EncodePlotRewardRet(plotId);
     }
 
     /// <summary>推送当前章节的 copy.GetCopy 数据。markPassed=true 表示上一章已通关。</summary>
@@ -775,7 +708,7 @@ internal sealed partial class GameLoginMessageHandler
             Time: now));
     }
 
-    private async Task<byte[]> BuildStartBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildStartBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         try
         {
@@ -817,7 +750,7 @@ internal sealed partial class GameLoginMessageHandler
         return ms.ToArray();
     }
 
-    private static byte[] EncodeStartBaseRet(int copyId, List<Hero> heroes, PlayerCharacter character,
+    internal static byte[] EncodeStartBaseRet(int copyId, List<Hero> heroes, PlayerCharacter character,
         IReadOnlyList<int>? deployHeroIds = null,
         bool isRunningFight = false, int battleMode = 1, int matchType = 0,
         IReadOnlyList<RandomFactorEntry>? randomFactors = null)
@@ -1261,7 +1194,7 @@ internal sealed partial class GameLoginMessageHandler
         return ms.ToArray();
     }
 
-    private static int DecodeStartBaseCopyId(byte[] args)
+    internal static int DecodeStartBaseCopyId(byte[] args)
     {
         ProtoReader reader = new(args);
         int copyId = 0;
@@ -1534,7 +1467,7 @@ internal sealed partial class GameLoginMessageHandler
         return new BattleEnemyFleet(fleetId, state, ships);
     }
 
-    private async Task<byte[]> BuildPassBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildPassBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         byte[] args = request.Args ?? [];
         PassBaseArg passArg = DecodePassBaseArgAll(args);
@@ -1626,7 +1559,7 @@ internal sealed partial class GameLoginMessageHandler
         return bestInRange;
     }
 
-    private static byte[] EncodePassBaseRet(int copyId = 0, int grade = 3, int firstPass = 1, int passTime = 60)
+    internal static byte[] EncodePassBaseRet(int copyId = 0, int grade = 3, int firstPass = 1, int passTime = 60)
     {
         using MemoryStream ms = new();
         if (copyId != 0)
@@ -1672,12 +1605,12 @@ internal sealed partial class GameLoginMessageHandler
         return 0;
     }
 
-    private static byte[] BuildCopyInfoRet(byte[] args)
+    internal static byte[] BuildCopyInfoRet(byte[] args)
     {
         return EncodeCopyInfoRet();
     }
 
-    private static byte[] EncodeCopyInfoRet()
+    internal static byte[] EncodeCopyInfoRet()
     {
         using MemoryStream ms = new();
         WriteVarint(ms, 0x20);
@@ -1714,7 +1647,7 @@ internal sealed partial class GameLoginMessageHandler
     /// 并附带一个伤害值（字段5，按最大生命值比例的扣血，HpCoefficient 比例尺=1e10 下 10%=1e9）。
     /// 客户端在没有回报时认定攻击失效，因此这里必须回包。
     /// </summary>
-    private static byte[] BuildAttackBaseRet(byte[]? args)
+    internal static byte[] BuildAttackBaseRet(byte[]? args)
     {
         int attackType = 0, copyId = 0, enemyId = 0;
         List<int> heroIds = new();
@@ -1764,7 +1697,7 @@ internal sealed partial class GameLoginMessageHandler
     }
 
     /// <summary>回环 copy.QuitBase 请求（TQuitBaseArg），让客户端确认退出请求被受理。</summary>
-    private static byte[] BuildQuitBaseRet(byte[]? args)
+    internal static byte[] BuildQuitBaseRet(byte[]? args)
     {
         using MemoryStream ms = new();
         if (args is { Length: > 0 })
@@ -1773,7 +1706,7 @@ internal sealed partial class GameLoginMessageHandler
         return ms.ToArray();
     }
 
-    private static void WriteString(Stream output, int field, string value)
+    internal static void WriteString(Stream output, int field, string value)
     {
         WriteVarint(output, (ulong)field);
         byte[] bytes = Encoding.UTF8.GetBytes(value);
@@ -1781,19 +1714,7 @@ internal sealed partial class GameLoginMessageHandler
         output.Write(bytes);
     }
 
-    private static byte[] EncodePlotRewardRet(int plotId)
-    {
-        using MemoryStream ms = new();
-        if (plotId != 0)
-        {
-            WriteVarint(ms, 0x08);
-            WriteVarint(ms, unchecked((ulong)plotId));
-        }
-
-        return ms.ToArray();
-    }
-
-    private static ulong DecodeVarint(ReadOnlySpan<byte> data)
+    internal static ulong DecodeVarint(ReadOnlySpan<byte> data)
     {
         ulong value = 0;
         for (int shift = 0; shift < 64 && shift / 7 < data.Length; shift += 7)
@@ -1834,7 +1755,7 @@ internal sealed partial class GameLoginMessageHandler
             Time: now));
     }
 
-    private static byte[] EncodeBattlePlayer(List<Hero> heroes, PlayerCharacter character)
+    internal static byte[] EncodeBattlePlayer(List<Hero> heroes, PlayerCharacter character)
     {
         using MemoryStream bp = new();
         WriteVarint(bp, 0x08);
@@ -2025,7 +1946,7 @@ internal sealed partial class GameLoginMessageHandler
         return entries;
     }
 
-    private static byte[] EncodeCacheDataRet()
+    internal static byte[] EncodeCacheDataRet()
     {
         // TCacheDataRet{Ret=string}
         using MemoryStream ms = new();
@@ -2149,9 +2070,9 @@ internal sealed partial class GameLoginMessageHandler
         return ms.ToArray();
     }
 
-    private static Task<byte[]> BuildSimpleRet() => Task.FromResult(Array.Empty<byte>());
+    internal static Task<byte[]> BuildSimpleRet() => Task.FromResult(Array.Empty<byte>());
 
-    private async Task<byte[]> BuildLockHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildLockHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
         (uint heroId, bool isLock) = DecodeLockHeroArg(request.Args);
@@ -2181,7 +2102,7 @@ internal sealed partial class GameLoginMessageHandler
         return (heroId, isLock);
     }
 
-    private async Task<byte[]> BuildRetireHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildRetireHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
         List<uint> heroIds = DecodeRetireHeroArg(request.Args);
@@ -2205,7 +2126,7 @@ internal sealed partial class GameLoginMessageHandler
         return heroIds;
     }
 
-    private async Task<byte[]> BuildChangeNameRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildChangeNameRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
         (uint heroId, string name) = DecodeChangeHeroNameArg(request.Args);
@@ -2236,7 +2157,7 @@ internal sealed partial class GameLoginMessageHandler
         return (heroId, name);
     }
 
-    private async Task<byte[]> BuildAddAffectionRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildAddAffectionRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
         (uint heroId, _, int num) = DecodeHeroAddAffectionArg(request.Args);
@@ -2269,14 +2190,14 @@ internal sealed partial class GameLoginMessageHandler
         return (heroId, templateId, num);
     }
 
-    private async Task<byte[]> BuildGetHeroInfoRetAsync(string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildGetHeroInfoRetAsync(string profileId, CancellationToken ct)
     {
         PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
         List<HeroGrid> heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
         return PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize));
     }
 
-    private async Task<byte[]> BuildGetHeroInfoByHeroIdArrayRetAsync(string profileId, CancellationToken ct)
+    internal async Task<byte[]> BuildGetHeroInfoByHeroIdArrayRetAsync(string profileId, CancellationToken ct)
     {
         PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
         List<HeroGrid> heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
