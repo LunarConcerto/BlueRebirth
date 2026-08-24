@@ -68,12 +68,10 @@ internal static class ServerHostBuilder
             sp.GetService<DevelopmentTlsMaterial>(),
             sp.GetRequiredService<ILogger<FrontDoorTcpListener>>()));
         builder.Services.AddSingleton<GameLoginTcpListener>();
-        builder.Services.AddSingleton<KcpGameLoginListener>();
 
         // 按注册顺序启动，保证 ready 打印前所有端口已绑定。
         builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<FrontDoorTcpListener>());
         builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<GameLoginTcpListener>());
-        builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<KcpGameLoginListener>());
         builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<GmWebListener>());
 
         return builder.Build();

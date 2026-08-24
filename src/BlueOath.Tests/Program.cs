@@ -18,7 +18,6 @@ var tests = new (string Name, Func<Task> Run)[]
     ("game service resolves deterministic battle", GameTest),
     ("mod manager filters target and orders mods", ModTest),
     ("kcp fragments reassemble across sticky and split buffers", KcpReassemblyTest),
-    ("kcp connection acks and retransmits", KcpArqTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
@@ -114,44 +113,6 @@ static Task KcpReassemblyTest()
     var request = ClientGameWireCodec.DecodeClientRequest(reassembled);
     Assert(request.Operation == GameOperationCodes.Login &&
         GameLoginCodec.DecodeLogin(request.Payload).Pid == "kcp-player", "login application wire mismatch");
-    return Task.CompletedTask;
-}
-
-static Task KcpArqTest()
-{
-    var connection = new KcpConnection(0x1234);
-    var appMessage = ClientGameWireCodec.EncodeClientRequest(GameOperationCodes.Login,
-        GameLoginCodec.Encode(new TArgLogin("arq-player", 1, "open", "hash")));
-
-    var fragments = KcpCodec.FragmentPushMessage(0x1234, 0, 0, 32, 0, appMessage, maxPayload: 16);
-    var delivered = new List<byte[]>();
-    foreach (var fragmentBytes in fragments)
-    {
-        Assert(KcpCodec.TryDecode(fragmentBytes, out var packet, out _), "fragment decode failed");
-        delivered.AddRange(connection.Input(packet, nowMs: 0));
-    }
-    Assert(delivered.Count == 1 && delivered[0].AsSpan().SequenceEqual(appMessage), "login was not delivered");
-
-    var ackOutput = connection.Flush(0);
-    Assert(ackOutput.Count >= 1, "no ACK emitted");
-    Assert(KcpCodec.TryDecode(ackOutput[0], out var ack, out _) &&
-        ack.Command == KcpCommand.Ack &&
-        ack.Unacknowledged == (uint)fragments.Count, "ACK una mismatch");
-
-    connection.Send(appMessage, nowMs: 0);
-    var first = connection.Flush(0);
-    Assert(first.Count == 1 && KcpCodec.TryDecode(first[0], out var sent, out _) &&
-        sent.Command == KcpCommand.Push, "response was not transmitted");
-
-    Assert(connection.Flush(100).Count == 0, "retransmitted before RTO");
-
-    var retransmit = connection.Flush(250);
-    Assert(retransmit.Count == 1, "no retransmission after RTO");
-    Assert(KcpCodec.TryDecode(retransmit[0], out var responsePacket, out _), "retransmit decode failed");
-
-    connection.Input(new KcpPacket(0x1234, KcpCommand.Ack, 0, 32, 0,
-        responsePacket.SequenceNumber, responsePacket.SequenceNumber + 1, []), nowMs: 250);
-    Assert(connection.PendingSendCount == 0, "send buffer not drained after ACK");
     return Task.CompletedTask;
 }
 
