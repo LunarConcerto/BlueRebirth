@@ -59,7 +59,7 @@ public sealed record Hero(
     int UpdateTime = 0,
     int Affection = 0,
     int MarryTime = 0,
-    int Mood = 0,
+    int Mood = 100,
     int MarryType = 0,
     long CurHp = 0,
     IReadOnlyList<uint>? EquipSlots = null,
@@ -178,7 +178,7 @@ public static class PlayerAccountFactory
             Affection: 1000,
             MarryTime: 0,
             CurHp: HpCoefficient,
-            Mood: 0,
+            Mood: 100,
             MarryType: 0);
         var dock = new HeroDock([hero], BagSize: 200);
         var bag = new PlayerBag([], BagSize: 100);

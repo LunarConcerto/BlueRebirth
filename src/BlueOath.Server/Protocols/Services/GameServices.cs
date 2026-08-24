@@ -393,8 +393,8 @@ internal sealed class GameServices
         List<Hero> heroes = dock.Heroes.ToList();
         int fashioning = (templateId - 1) / 10;
         heroes.Add(new Hero(heroId, templateId, 1,
-            fashioning, CreateTime: now, UpdateTime: now, Affection: 1000, CurHp: PlayerAccountFactory.HpCoefficient,
-            Mood: 0, MarryType: 0));
+            fashioning, CreateTime: now, UpdateTime: now, Affection: 10000, CurHp: PlayerAccountFactory.HpCoefficient,
+            Mood: 100, MarryType: 0));
         return account with { Dock = dock with { Heroes = heroes } };
     }
 
