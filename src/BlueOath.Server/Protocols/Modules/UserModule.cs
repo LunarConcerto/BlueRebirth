@@ -1,10 +1,10 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
 /// <summary>玩家模块：user.*（登录/信息/档案更新）。</summary>
-internal sealed class UserModule(GameLoginMessageHandler services) : IGameModule
+internal sealed class UserModule(UserService user, GameServices services) : IGameModule
 {
     public string Prefix => "user";
 
@@ -30,7 +30,7 @@ internal sealed class UserModule(GameLoginMessageHandler services) : IGameModule
             case "user.GetUserInfo":
                 result = new ModuleResult
                 {
-                    Ret = GameLoginMessageHandler.EncodeGetUserInfo(await ctx.GetAccountAsync()),
+                    Ret = GameServices.EncodeGetUserInfo(await ctx.GetAccountAsync()),
                     PostPushes = await services.BuildSyncPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
                 };
                 break;
@@ -49,7 +49,7 @@ internal sealed class UserModule(GameLoginMessageHandler services) : IGameModule
                 };
                 result = new ModuleResult
                 {
-                    Ret = await services.BuildUserProfileUpdateAsync(request, ctx.ProfileId, ctx.Ct, field),
+                    Ret = await user.BuildUserProfileUpdateAsync(request, ctx.ProfileId, ctx.Ct, field),
                     PostPushes = [await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)],
                 };
                 break;

@@ -4,7 +4,7 @@ using BlueOath.Protocol;
 namespace BlueOath.Server.Protocols;
 
 /// <summary>娴村妯″潡锛歜athroom.*锛堝紑濮?缁撴潫/鏈嶅姟/鑷姩/鎵归噺锛夈€?/summary>
-internal sealed class BathroomModule(GameLoginMessageHandler services) : IGameModule
+internal sealed class BathroomModule(GameServices services) : IGameModule
 {
     public string Prefix => "bathroom";
 
@@ -54,7 +54,7 @@ internal sealed class BathroomModule(GameLoginMessageHandler services) : IGameMo
         list.Add(new BathHero(arg.HeroId, arg.Pos, StartTime: ctx.Now, BathTime: 0));
         account = account with { Bath = new PlayerBath(list, account.Bath?.IsAllAuto ?? 0) };
         await services.SaveAccountAsync(account, ctx.Ct);
-        return PlayerDataCodec.Encode(GameLoginMessageHandler.ToBathroomInfo(account.Bath));
+        return PlayerDataCodec.Encode(GameServices.ToBathroomInfo(account.Bath));
     }
 
     private async Task<byte[]> BuildBathEndRetAsync(GameContext ctx, TRequest request)
@@ -74,7 +74,7 @@ internal sealed class BathroomModule(GameLoginMessageHandler services) : IGameMo
         list.RemoveAll(h => h.HeroId == heroId);
         account = account with { Bath = new PlayerBath(list, account.Bath?.IsAllAuto ?? 0) };
         await services.SaveAccountAsync(account, ctx.Ct);
-        return PlayerDataCodec.EncodeBathEndRet(GameLoginMessageHandler.ToBathHeroInfo(bathHero));
+        return PlayerDataCodec.EncodeBathEndRet(GameServices.ToBathHeroInfo(bathHero));
     }
 
     private async Task<byte[]> BuildBathServiceRetAsync(GameContext ctx, TRequest request)
@@ -84,7 +84,7 @@ internal sealed class BathroomModule(GameLoginMessageHandler services) : IGameMo
         var bathHero = account.Bath?.HeroList.FirstOrDefault(h => h.HeroId == arg.HeroId);
         if (bathHero is null) return PlayerDataCodec.EncodeBathServiceRet(new BathHeroInfo(arg.HeroId), 0, false);
         // BuffId=0: skip buff lookup; GetBathAttrBuff checks heroBath.BuffId==0 鈫?ret=nil
-        return PlayerDataCodec.EncodeBathServiceRet(GameLoginMessageHandler.ToBathHeroInfo(bathHero), 0, false);
+        return PlayerDataCodec.EncodeBathServiceRet(GameServices.ToBathHeroInfo(bathHero), 0, false);
     }
 
     private async Task<byte[]> BuildBathAutoRetAsync(GameContext ctx, TRequest request)
@@ -112,7 +112,7 @@ internal sealed class BathroomModule(GameLoginMessageHandler services) : IGameMo
     private async Task<byte[]> BuildGetBathroomInfoRetAsync(GameContext ctx)
     {
         var account = await ctx.GetAccountAsync();
-        return PlayerDataCodec.Encode(GameLoginMessageHandler.ToBathroomInfo(account.Bath));
+        return PlayerDataCodec.Encode(GameServices.ToBathroomInfo(account.Bath));
     }
 
     private async Task<byte[]> BuildBathStartAllRetAsync(GameContext ctx, TRequest request)
@@ -130,6 +130,6 @@ internal sealed class BathroomModule(GameLoginMessageHandler services) : IGameMo
         }
         account = account with { Bath = new PlayerBath(list, account.Bath?.IsAllAuto ?? 0) };
         await services.SaveAccountAsync(account, ctx.Ct);
-        return PlayerDataCodec.EncodeBathStartAllRet(result.Select(GameLoginMessageHandler.ToBathHeroInfo).ToList());
+        return PlayerDataCodec.EncodeBathStartAllRet(result.Select(GameServices.ToBathHeroInfo).ToList());
     }
 }

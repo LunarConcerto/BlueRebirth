@@ -1,4 +1,4 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 
 namespace BlueOath.Server.Protocols;
 
@@ -18,7 +18,7 @@ internal sealed class GameContext
     public required CancellationToken Ct { get; init; }
 
     /// <summary>共享服务（账号加载、编解码、货币/道具/舰娘操作等）。</summary>
-    public required GameLoginMessageHandler Services { get; init; }
+    public required GameServices Services { get; init; }
 
     /// <summary>加载（或创建）当前账号。</summary>
     public Task<PlayerAccount> GetAccountAsync() => Services.GetOrCreateAccountAsync(ProfileId, Ct);

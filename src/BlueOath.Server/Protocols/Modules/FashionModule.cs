@@ -1,10 +1,10 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
 /// <summary>时装模块：fashion.*（Equip / updateData / fashionReplaceReward）。</summary>
-internal sealed class FashionModule(GameLoginMessageHandler services) : IGameModule
+internal sealed class FashionModule(GameServices services) : IGameModule
 {
     public string Prefix => "fashion";
 
@@ -38,7 +38,7 @@ internal sealed class FashionModule(GameLoginMessageHandler services) : IGameMod
 
     private static (int FashionTid, int EquipStatus, uint HeroId) DecodeFashionEquipArg(ReadOnlySpan<byte> data)
     {
-        GameLoginMessageHandler.ProtoReader reader = new(data);
+        GameServices.ProtoReader reader = new(data);
         int fashionTid = 0, equipStatus = 0;
         uint heroId = 0;
         while (reader.TryReadField(out int field, out int wire))

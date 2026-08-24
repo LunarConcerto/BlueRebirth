@@ -1,4 +1,4 @@
-using BlueOath.Protocol;
+﻿using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
@@ -13,7 +13,7 @@ internal sealed class PlayerModule : IGameModule
         {
             "player.Login" => GameLoginCodec.Encode(new TRetLogin("ok", "1")),
             "player.GetUserList" => [],
-            "player.CreateUser" => GameLoginMessageHandler.EncodeCreateUser(await ctx.GetAccountAsync()),
+            "player.CreateUser" => GameServices.EncodeCreateUser(await ctx.GetAccountAsync()),
             _ => []
         };
         return ModuleResult.Ok(ret);

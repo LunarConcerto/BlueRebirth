@@ -1,11 +1,11 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 using BlueOath.Protocol;
 using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
 /// <summary>舰娘模块：hero.* 与 tactic.*。</summary>
-internal sealed class HeroModule(GameLoginMessageHandler services) : IGameModule
+internal sealed class HeroModule(HeroService hero, GameServices services) : IGameModule
 {
     public string Prefix => "hero";
 
@@ -17,7 +17,7 @@ internal sealed class HeroModule(GameLoginMessageHandler services) : IGameModule
             case "hero.ChangeEquip":
                 result = new ModuleResult
                 {
-                    Ret = await services.BuildChangeEquipRetAsync(request, ctx.ProfileId, ctx.Ct),
+                    Ret = await hero.BuildChangeEquipRetAsync(request, ctx.ProfileId, ctx.Ct),
                     PostPushes = await services.BuildPostEquipPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
                 };
                 break;
@@ -28,34 +28,34 @@ internal sealed class HeroModule(GameLoginMessageHandler services) : IGameModule
                 result = new ModuleResult
                 {
                     Ret = request.Method == "hero.AddExp"
-                        ? await services.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct)
-                        : await services.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct),
+                        ? await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct)
+                        : await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct),
                     PostPushes = BuildHeroBagPushes(account, heroes, (uint)ctx.Now),
                 };
                 break;
             case "hero.LockHero":
-                result = ModuleResult.Ok(await services.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.RetireHero":
-                result = ModuleResult.Ok(await services.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await hero.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.ChangeName":
-                result = ModuleResult.Ok(await services.BuildChangeNameRetAsync(request, ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await hero.BuildChangeNameRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.AddAffection":
-                result = ModuleResult.Ok(await services.BuildAddAffectionRetAsync(request, ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await hero.BuildAddAffectionRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.GetHeroInfo":
-                result = ModuleResult.Ok(await services.BuildGetHeroInfoRetAsync(ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await hero.BuildGetHeroInfoRetAsync(ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.GetHeroInfoByHeroIdArray":
-                result = ModuleResult.Ok(await services.BuildGetHeroInfoByHeroIdArrayRetAsync(ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await hero.BuildGetHeroInfoByHeroIdArrayRetAsync(ctx.ProfileId, ctx.Ct));
                 break;
             case "tactic.GetHerosTactic":
-                result = ModuleResult.Ok(await services.BuildGetHerosTacticAsync(ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await hero.BuildGetHerosTacticAsync(ctx.ProfileId, ctx.Ct));
                 break;
             case "tactic.SetHerosTactic":
-                result = ModuleResult.Ok(await services.BuildSetHerosTacticAsync(request, ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await hero.BuildSetHerosTacticAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.HeroIntensify":
             case "hero.HeroAdvance":
@@ -73,7 +73,7 @@ internal sealed class HeroModule(GameLoginMessageHandler services) : IGameModule
             case "hero.HeroCombineQuickLevelUp":
             case "hero.HeroCombineBreak":
             case "hero.HeroCombine":
-                result = ModuleResult.Ok(await GameLoginMessageHandler.BuildSimpleRet());
+                result = ModuleResult.Ok(await GameServices.BuildSimpleRet());
                 break;
             default:
                 result = ModuleResult.Empty;
@@ -100,7 +100,7 @@ internal sealed class HeroModule(GameLoginMessageHandler services) : IGameModule
 
     private static HeroGrid ToHeroGridWithName(Hero h)
     {
-        var grid = GameLoginMessageHandler.ToHeroGrid(h);
+        var grid = GameServices.ToHeroGrid(h);
         return grid with { Name = ShipHandbookLoader.GetShipName(h.TemplateId) };
     }
 }

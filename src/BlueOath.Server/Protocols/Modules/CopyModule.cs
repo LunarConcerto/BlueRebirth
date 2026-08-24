@@ -1,10 +1,10 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
 /// <summary>关卡/战斗模块：copy.* / copyinfo.* / battle.*。</summary>
-internal sealed class CopyModule(GameLoginMessageHandler services) : IGameModule
+internal sealed class CopyModule(BattleService battle) : IGameModule
 {
     public string Prefix => "copy";
 
@@ -14,34 +14,34 @@ internal sealed class CopyModule(GameLoginMessageHandler services) : IGameModule
         switch (request.Method)
         {
             case "copy.StartBase":
-                result = ModuleResult.Ok(await services.BuildStartBaseRetAsync(request, ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await battle.BuildStartBaseRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "copy.AttackBase":
-                result = ModuleResult.Ok(GameLoginMessageHandler.BuildAttackBaseRet(request.Args));
+                result = ModuleResult.Ok(GameServices.BuildAttackBaseRet(request.Args));
                 break;
             case "copy.PassBase":
-                var ret = await services.BuildPassBaseRetAsync(request, ctx.ProfileId, ctx.Ct);
+                var ret = await battle.BuildPassBaseRetAsync(request, ctx.ProfileId, ctx.Ct);
                 // 通关后推送最新关卡进度（剧情/海域各一分支）。
                 var account = await ctx.GetAccountAsync();
-                int copyId = GameLoginMessageHandler.DecodePassBaseCopyId(request.Args ?? []);
+                int copyId = GameServices.DecodePassBaseCopyId(request.Args ?? []);
                 int copyType = ChapterCopyLoader.GetCopyType(copyId);
                 byte[] copyPush = TMessageCodec.EncodeResponse(new TResponse(
                     Method: "copy.GetCopy",
                     Ret: copyType == 2
-                        ? GameLoginMessageHandler.EncodeSeaCopyInfo(account.SeaProgress)
-                        : GameLoginMessageHandler.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
+                        ? GameServices.EncodeSeaCopyInfo(account.SeaProgress)
+                        : GameServices.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
                     Time: (uint)ctx.Now));
                 result = new ModuleResult { Ret = ret, PostPushes = [copyPush] };
                 break;
             case "copy.QuitBase":
-                result = ModuleResult.Ok(GameLoginMessageHandler.BuildQuitBaseRet(request.Args));
+                result = ModuleResult.Ok(GameServices.BuildQuitBaseRet(request.Args));
                 break;
             case "copy.GetCopy":
             case "copy.UnLockCopy":
-                result = ModuleResult.Ok(GameLoginMessageHandler.EncodePlotCopyInfo());
+                result = ModuleResult.Ok(GameServices.EncodePlotCopyInfo());
                 break;
             case "copyinfo.GetCopyInfo":
-                result = ModuleResult.Ok(GameLoginMessageHandler.BuildCopyInfoRet(request.Args ?? []));
+                result = ModuleResult.Ok(GameServices.BuildCopyInfoRet(request.Args ?? []));
                 break;
             case "copy.StarReward":
             case "copy.FetchRewardBox":

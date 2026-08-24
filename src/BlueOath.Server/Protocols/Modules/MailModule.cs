@@ -1,10 +1,10 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
 /// <summary>邮件模块：mail.*（列表/打开/删除/领取）。</summary>
-internal sealed class MailModule(GameLoginMessageHandler services) : IGameModule
+internal sealed class MailModule(GameServices services) : IGameModule
 {
     public string Prefix => "mail";
 
@@ -44,7 +44,7 @@ internal sealed class MailModule(GameLoginMessageHandler services) : IGameModule
             ReceiveTime: now,
             ReadTime: 0,
             IsGotReawrd: 0,
-            Items: [new MailItem(GameLoginMessageHandler.GoodsTypeCurrency, m.CurrencyType, m.Num)],
+            Items: [new MailItem(GameServices.GoodsTypeCurrency, m.CurrencyType, m.Num)],
             DeleteTime: 0)).ToList();
 
     /// <summary>邮件列表响应（mail.GetMailList/OpenMail/DeleteMail/DeleteAllMail/ReceiveNewMail 共用）。</summary>
@@ -67,8 +67,8 @@ internal sealed class MailModule(GameLoginMessageHandler services) : IGameModule
         {
             if (request.Method == "mail.FetchItem" && mail.Mid != mid)
                 continue;
-            account = GameLoginMessageHandler.AddCurrency(account, mail.CurrencyType, mail.Num);
-            rewards.Add(new CommonReward(GameLoginMessageHandler.GoodsTypeCurrency, mail.CurrencyType, mail.Num));
+            account = GameServices.AddCurrency(account, mail.CurrencyType, mail.Num);
+            rewards.Add(new CommonReward(GameServices.GoodsTypeCurrency, mail.CurrencyType, mail.Num));
         }
 
         if (rewards.Count > 0)

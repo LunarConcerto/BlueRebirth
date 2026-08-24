@@ -1,10 +1,10 @@
-using BlueOath.Protocol;
+﻿using BlueOath.Protocol;
 using Microsoft.Extensions.Logging;
 
 namespace BlueOath.Server.Protocols;
 
 /// <summary>引导模块：guide.*（PlotReward / Setting）。</summary>
-internal sealed class GuideModule(GameLoginMessageHandler services) : IGameModule
+internal sealed class GuideModule(GameServices services) : IGameModule
 {
     public string Prefix => "guide";
 
@@ -21,7 +21,7 @@ internal sealed class GuideModule(GameLoginMessageHandler services) : IGameModul
 
     private async Task<byte[]> BuildPlotRewardAsync(GameContext ctx, byte[] args)
     {
-        int plotId = args.Length > 0 ? (int)GameLoginMessageHandler.DecodeVarint(args.AsSpan()) : 0;
+        int plotId = args.Length > 0 ? (int)GameServices.DecodeVarint(args.AsSpan()) : 0;
         services.FileLogger.LogInformation("guide.PlotReward plotId={PlotId} argsLen={ArgsLen} hex={Hex}",
             plotId, args.Length, Convert.ToHexString(args));
         if (plotId == 0)
@@ -49,8 +49,8 @@ internal sealed class GuideModule(GameLoginMessageHandler services) : IGameModul
         using MemoryStream ms = new();
         if (plotId != 0)
         {
-            GameLoginMessageHandler.WriteVarint(ms, 0x08);
-            GameLoginMessageHandler.WriteVarint(ms, unchecked((ulong)plotId));
+            GameServices.WriteVarint(ms, 0x08);
+            GameServices.WriteVarint(ms, unchecked((ulong)plotId));
         }
 
         return ms.ToArray();

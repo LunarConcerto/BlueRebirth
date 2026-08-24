@@ -1,4 +1,4 @@
-using BlueOath.Protocol;
+﻿using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
@@ -16,7 +16,7 @@ internal sealed class OfflineStubModule : IGameModule
         byte[] ret = request.Method switch
         {
             "GetSvrTime" => TMessageCodec.EncodeRetGetSvrTime(ctx.Now, ctx.Now),
-            "cachedata.CacheData" => GameLoginMessageHandler.EncodeCacheDataRet(),
+            "cachedata.CacheData" => GameServices.EncodeCacheDataRet(),
             _ => []
         };
         return Task.FromResult(ModuleResult.Ok(ret));

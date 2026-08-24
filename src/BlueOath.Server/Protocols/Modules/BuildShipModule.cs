@@ -1,11 +1,11 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 using BlueOath.Protocol;
 using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
 /// <summary>抽卡模块：buildship.*（BuildShip / BuildShipInfo / BuildShipBox / BuildShipReward）。</summary>
-internal sealed class BuildShipModule(GameLoginMessageHandler services) : IGameModule
+internal sealed class BuildShipModule(BuildShipService buildShip, GameServices services) : IGameModule
 {
     public string Prefix => "buildship";
 
@@ -15,7 +15,7 @@ internal sealed class BuildShipModule(GameLoginMessageHandler services) : IGameM
         switch (request.Method)
         {
             case "buildship.BuildShip":
-                var ret = await services.BuildBuildShipRetAsync(request, ctx.ProfileId, ctx.Ct);
+                var ret = await buildShip.BuildBuildShipRetAsync(request, ctx.ProfileId, ctx.Ct);
                 // 应答前推送新抽到的舰娘（船坞 + 图鉴），客户端据此刷新列表。
                 var pre = new List<byte[]>();
                 if (ret.Length != 0)
@@ -59,7 +59,7 @@ internal sealed class BuildShipModule(GameLoginMessageHandler services) : IGameM
 
     private static HeroGrid ToHeroGridWithName(Hero h)
     {
-        var grid = GameLoginMessageHandler.ToHeroGrid(h);
+        var grid = GameServices.ToHeroGrid(h);
         return grid with { Name = ShipHandbookLoader.GetShipName(h.TemplateId) };
     }
 }

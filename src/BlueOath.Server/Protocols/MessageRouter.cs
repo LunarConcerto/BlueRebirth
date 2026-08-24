@@ -1,4 +1,4 @@
-using BlueOath.Protocol;
+﻿using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
@@ -8,11 +8,11 @@ namespace BlueOath.Server.Protocols;
 /// </summary>
 internal sealed class MessageRouter
 {
-    private readonly GameLoginMessageHandler _services;
+    private readonly GameServices _services;
     private readonly IReadOnlyList<IGameModule> _modules;
     private readonly OfflineStubModule _stub;
 
-    public MessageRouter(GameLoginMessageHandler services, IEnumerable<IGameModule> modules)
+    public MessageRouter(GameServices services, IEnumerable<IGameModule> modules)
     {
         _services = services;
         _modules = modules.ToList();

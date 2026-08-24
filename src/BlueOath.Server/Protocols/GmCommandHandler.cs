@@ -1,17 +1,17 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 using BlueOath.Storage;
 using Microsoft.Extensions.Logging;
 
 namespace BlueOath.Server.Protocols;
 
 /// <summary>
-/// GM 命令解析器：解析 WebUI 输入框的文本命令，调用 <see cref="GameLoginMessageHandler"/>
+/// GM 命令解析器：解析 WebUI 输入框的文本命令，调用 <see cref="GameServices"/>
 /// 的实体操作方法，返回执行结果文本。
 /// </summary>
 internal sealed class GmCommandHandler
 {
     private readonly SqliteGameRepository _repo;
-    private readonly GameLoginMessageHandler _handler;
+    private readonly GameServices _handler;
     private readonly ILogger<GmCommandHandler> _logger;
 
     private static readonly Dictionary<string, int> CurrencyNames = new()
@@ -24,7 +24,7 @@ internal sealed class GmCommandHandler
         ["pvept"] = 30, ["guildcoin2"] = 31, ["urequip"] = 32, ["activity_bp"] = 33,
     };
 
-    public GmCommandHandler(SqliteGameRepository repo, GameLoginMessageHandler handler,
+    public GmCommandHandler(SqliteGameRepository repo, GameServices handler,
         ILogger<GmCommandHandler> logger)
     {
         _repo = repo;
@@ -121,7 +121,7 @@ internal sealed class GmCommandHandler
             return $"unknown currency type: {parts[2]}. Available: {string.Join(' ', CurrencyNames.Keys)}";
 
         var account = await _handler.GetOrCreateAccountAsync(profileId, ct);
-        account = GameLoginMessageHandler.AddCurrency(account, currencyType, amount);
+        account = GameServices.AddCurrency(account, currencyType, amount);
         await _repo.SaveAccountAsync(account, ct);
         return $"ok: {parts[2]} +{amount}";
     }
@@ -136,7 +136,7 @@ internal sealed class GmCommandHandler
         var account = await _handler.GetOrCreateAccountAsync(profileId, ct);
         var heroId = _handler.NextHeroId();
         var now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        account = GameLoginMessageHandler.AddShip(account, heroId, templateId, now);
+        account = GameServices.AddShip(account, heroId, templateId, now);
         // 如果指定了等级，单独设置
         if (level > 1)
         {
@@ -159,7 +159,7 @@ internal sealed class GmCommandHandler
         var count = parts.Length > 3 && int.TryParse(parts[3], out var c) ? c : 1;
 
         var account = await _handler.GetOrCreateAccountAsync(profileId, ct);
-        account = GameLoginMessageHandler.AddBagItem(account, templateId, count);
+        account = GameServices.AddBagItem(account, templateId, count);
         await _repo.SaveAccountAsync(account, ct);
         return $"ok: item TemplateId={templateId} +{count}";
     }

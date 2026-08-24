@@ -1,10 +1,10 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
 /// <summary>商店/仓库模块：shop.*（购买/商店信息）与 bag.GetBagInfo。</summary>
-internal sealed class ShopModule(GameLoginMessageHandler services) : IGameModule
+internal sealed class ShopModule(ShopService shop, GameServices services) : IGameModule
 {
     public string Prefix => "shop";
 
@@ -27,7 +27,7 @@ internal sealed class ShopModule(GameLoginMessageHandler services) : IGameModule
                 result = ModuleResult.Ok(services.BuildShopsInfoRet(checked((uint)ctx.Now)));
                 break;
             case "bag.GetBagInfo":
-                result = ModuleResult.Ok(await services.BuildGetBagInfoRetAsync(ctx.ProfileId, ctx.Ct));
+                result = ModuleResult.Ok(await shop.BuildGetBagInfoRetAsync(ctx.ProfileId, ctx.Ct));
                 break;
             case "shop.RefreshShop":
             default:
@@ -87,22 +87,22 @@ internal sealed class ShopModule(GameLoginMessageHandler services) : IGameModule
         if (buyNum <= 0) buyNum = 1;
         var totalNum = goods.Num * buyNum;
 
-        if (goods.Type == GameLoginMessageHandler.GoodsTypeCurrency)
+        if (goods.Type == GameServices.GoodsTypeCurrency)
         {
-            account = GameLoginMessageHandler.AddCurrency(account, goods.ConfigId, totalNum);
+            account = GameServices.AddCurrency(account, goods.ConfigId, totalNum);
         }
-        else if (goods.Type == GameLoginMessageHandler.GoodsTypeFashion)
+        else if (goods.Type == GameServices.GoodsTypeFashion)
         {
             account = AddFashion(account, goods.ConfigId);
         }
-        else if (goods.Type == GameLoginMessageHandler.GoodsTypeEquip)
+        else if (goods.Type == GameServices.GoodsTypeEquip)
         {
             for (var i = 0; i < totalNum; i++)
                 account = AddEquipItem(account, goods.ConfigId);
         }
         else
         {
-            account = GameLoginMessageHandler.AddBagItem(account, goods.ConfigId, totalNum);
+            account = GameServices.AddBagItem(account, goods.ConfigId, totalNum);
         }
         return (account, new CommonReward(goods.Type, goods.ConfigId, totalNum));
     }

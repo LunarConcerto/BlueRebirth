@@ -1,4 +1,4 @@
-using BlueOath.Core;
+﻿using BlueOath.Core;
 using BlueOath.Storage;
 using BlueOath.Server.Infrastructure;
 using BlueOath.Server.Listeners;
@@ -48,10 +48,17 @@ internal static class ServerHostBuilder
                 options.TlsOutputRoot ?? Path.Combine(options.DataRoot, "_tls")));
 
         // 协议/会话处理器（无状态，单例共享）。
-        builder.Services.AddSingleton<GameLoginMessageHandler>();
+        builder.Services.AddSingleton<GameServices>();
         builder.Services.AddSingleton<BootstrapHttpResponder>();
         builder.Services.AddSingleton<JsonGameSession>();
         builder.Services.AddSingleton<BootstrapHttpSession>();
+
+        // 领域服务（共享服务之上的按域拆分）。
+        builder.Services.AddSingleton<UserService>();
+        builder.Services.AddSingleton<BuildShipService>();
+        builder.Services.AddSingleton<ShopService>();
+        builder.Services.AddSingleton<BattleService>();
+        builder.Services.AddSingleton<HeroService>();
 
         // 协议模块（每域一个类）+ 路由器。
         builder.Services.AddSingleton<IGameModule, PlayerModule>();
