@@ -17,31 +17,31 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                 result = ModuleResult.Ok(await battle.BuildStartBaseRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "copy.AttackBase":
-                result = ModuleResult.Ok(GameServices.BuildAttackBaseRet(request.Args));
+                result = ModuleResult.Ok(ProtocolEncoder.BuildAttackBaseRet(request.Args));
                 break;
             case "copy.PassBase":
                 var ret = await battle.BuildPassBaseRetAsync(request, ctx.ProfileId, ctx.Ct);
                 // 通关后推送最新关卡进度（剧情/海域各一分支）。
                 var account = await ctx.GetAccountAsync();
-                int copyId = GameServices.DecodePassBaseCopyId(request.Args ?? []);
+                int copyId = ProtocolDecoder.DecodePassBaseCopyId(request.Args ?? []);
                 int copyType = ChapterCopyLoader.GetCopyType(copyId);
                 byte[] copyPush = TMessageCodec.EncodeResponse(new TResponse(
                     Method: "copy.GetCopy",
                     Ret: copyType == 2
-                        ? GameServices.EncodeSeaCopyInfo(account.SeaProgress)
-                        : GameServices.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
+                        ? ProtocolEncoder.EncodeSeaCopyInfo(account.SeaProgress)
+                        : ProtocolEncoder.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
                     Time: (uint)ctx.Now));
                 result = new ModuleResult { Ret = ret, PostPushes = [copyPush] };
                 break;
             case "copy.QuitBase":
-                result = ModuleResult.Ok(GameServices.BuildQuitBaseRet(request.Args));
+                result = ModuleResult.Ok(ProtocolEncoder.BuildQuitBaseRet(request.Args));
                 break;
             case "copy.GetCopy":
             case "copy.UnLockCopy":
-                result = ModuleResult.Ok(GameServices.EncodePlotCopyInfo());
+                result = ModuleResult.Ok(ProtocolEncoder.EncodePlotCopyInfo());
                 break;
             case "copyinfo.GetCopyInfo":
-                result = ModuleResult.Ok(GameServices.BuildCopyInfoRet(request.Args ?? []));
+                result = ModuleResult.Ok(ProtocolEncoder.BuildCopyInfoRet(request.Args ?? []));
                 break;
             case "copy.StarReward":
             case "copy.FetchRewardBox":

@@ -51,7 +51,7 @@ internal sealed class HeroService(GameServices services)
 
     internal async Task<byte[]> BuildMarryRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
     {
-        var (heroId, marryType) = GameServices.DecodeMarryArg(request.Args ?? []);
+        var (heroId, marryType) = ProtocolDecoder.DecodeMarryArg(request.Args ?? []);
         var account = await services.GetOrCreateAccountAsync(profileId, ct);
 
         var heroes = account.Dock.Heroes.ToList();
@@ -73,7 +73,7 @@ internal sealed class HeroService(GameServices services)
     internal async Task<byte[]> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
-        (uint heroId, List<(int Id, int Num)> items) = GameServices.DecodeHeroAddExp(request.Args);
+        (uint heroId, List<(int Id, int Num)> items) = ProtocolDecoder.DecodeHeroAddExp(request.Args);
         if (heroId == 0 || items.Count == 0) return [];
 
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
@@ -116,30 +116,30 @@ internal sealed class HeroService(GameServices services)
         account = account with { Dock = dock with { Heroes = heroList }, Bag = bag with { Items = bagItems } };
         await services.SaveAccountAsync(account, ct);
 
-        return GameServices.EncodeHeroAddExpRet(heroId, items);
+        return ProtocolEncoder.EncodeHeroAddExpRet(heroId, items);
     }
 
     internal async Task<byte[]> BuildGetHerosTacticAsync(string profileId, CancellationToken ct)
     {
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         PlayerFleet fleet = account.Fleet ?? PlayerAccountFactory.DefaultFleet();
-        return GameServices.EncodeFleet(fleet);
+        return ProtocolEncoder.EncodeFleet(fleet);
     }
 
     internal async Task<byte[]> BuildSetHerosTacticAsync(TRequest request, string profileId, CancellationToken ct)
     {
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-        List<FleetEntry> entries = GameServices.DecodeSetHerosTactic(request.Args ?? []);
+        List<FleetEntry> entries = ProtocolDecoder.DecodeSetHerosTactic(request.Args ?? []);
         PlayerFleet newFleet = new(entries);
         PlayerAccount updated = account with { Fleet = newFleet };
         await services.SaveAccountAsync(updated, ct);
-        return GameServices.EncodeFleet(newFleet);
+        return ProtocolEncoder.EncodeFleet(newFleet);
     }
 
     internal async Task<byte[]> BuildLockHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
-        (uint heroId, bool isLock) = GameServices.DecodeLockHeroArg(request.Args);
+        (uint heroId, bool isLock) = ProtocolDecoder.DecodeLockHeroArg(request.Args);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
@@ -154,7 +154,7 @@ internal sealed class HeroService(GameServices services)
     internal async Task<byte[]> BuildRetireHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
-        List<uint> heroIds = GameServices.DecodeRetireHeroArg(request.Args);
+        List<uint> heroIds = ProtocolDecoder.DecodeRetireHeroArg(request.Args);
         if (heroIds.Count == 0) return [];
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
@@ -168,7 +168,7 @@ internal sealed class HeroService(GameServices services)
     internal async Task<byte[]> BuildChangeNameRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
-        (uint heroId, string name) = GameServices.DecodeChangeHeroNameArg(request.Args);
+        (uint heroId, string name) = ProtocolDecoder.DecodeChangeHeroNameArg(request.Args);
         if (heroId == 0 || string.IsNullOrEmpty(name)) return [];
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
@@ -184,7 +184,7 @@ internal sealed class HeroService(GameServices services)
     internal async Task<byte[]> BuildAddAffectionRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
-        (uint heroId, _, int num) = GameServices.DecodeHeroAddAffectionArg(request.Args);
+        (uint heroId, _, int num) = ProtocolDecoder.DecodeHeroAddAffectionArg(request.Args);
         if (heroId == 0 || num <= 0) return [];
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;

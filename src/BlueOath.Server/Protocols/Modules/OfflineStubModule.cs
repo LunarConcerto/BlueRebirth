@@ -16,7 +16,7 @@ internal sealed class OfflineStubModule : IGameModule
         byte[] ret = request.Method switch
         {
             "GetSvrTime" => TMessageCodec.EncodeRetGetSvrTime(ctx.Now, ctx.Now),
-            "cachedata.CacheData" => GameServices.EncodeCacheDataRet(),
+            "cachedata.CacheData" => ProtocolEncoder.EncodeCacheDataRet(),
             _ => []
         };
         return Task.FromResult(ModuleResult.Ok(ret));

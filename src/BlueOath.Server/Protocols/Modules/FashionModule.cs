@@ -38,7 +38,7 @@ internal sealed class FashionModule(GameServices services) : IGameModule
 
     private static (int FashionTid, int EquipStatus, uint HeroId) DecodeFashionEquipArg(ReadOnlySpan<byte> data)
     {
-        GameServices.ProtoReader reader = new(data);
+        ProtocolDecoder.ProtoReader reader = new(data);
         int fashionTid = 0, equipStatus = 0;
         uint heroId = 0;
         while (reader.TryReadField(out int field, out int wire))

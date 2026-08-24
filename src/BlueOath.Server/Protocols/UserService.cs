@@ -20,33 +20,33 @@ internal sealed class UserService(GameServices services)
         if (field == "Secretary")
         {
             // TSetUserSecretaryArg: SecretaryId(1, uint32)
-            ulong secId = GameServices.DecodeVarintField(request.Args, 1);
+            ulong secId = ProtocolDecoder.DecodeVarintField(request.Args, 1);
             if (secId == 0) return [];
             c = c with { SecretaryId = (uint)secId };
         }
         else if (field == "Name")
         {
             // TUserChangeNameArg: Name(1, string)
-            string? name = GameServices.DecodeStringField(request.Args, 1);
+            string? name = ProtocolDecoder.DecodeStringField(request.Args, 1);
             if (string.IsNullOrWhiteSpace(name)) return [];
             c = c with { Name = name };
         }
         else if (field == "Message")
         {
             // TSetUserMsgArg: Message(1, string)
-            string? msg = GameServices.DecodeStringField(request.Args, 1);
+            string? msg = ProtocolDecoder.DecodeStringField(request.Args, 1);
             c = c with { Message = msg ?? "" };
         }
         else if (field == "HeadFrame")
         {
             // TUserSetPlayerHeadFrameArg: headFrameId(1, int32)
-            ulong frameId = GameServices.DecodeVarintField(request.Args, 1);
+            ulong frameId = ProtocolDecoder.DecodeVarintField(request.Args, 1);
             c = c with { HeadFrame = (int)frameId };
         }
         else if (field == "Head")
         {
             // TNewHeadBuyHeadArg: ShipFleetId(1, int32), ProfileID(2, int32) — 取 ProfileID
-            ulong profileId_i = GameServices.DecodeVarintField(request.Args, 2);
+            ulong profileId_i = ProtocolDecoder.DecodeVarintField(request.Args, 2);
             if (profileId_i == 0) return [];
             c = c with { Head = (int)profileId_i };
         }

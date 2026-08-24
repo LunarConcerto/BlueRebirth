@@ -19,7 +19,7 @@ internal sealed class BattleService(GameServices services)
             PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
             byte[] args = request.Args ?? [];
             (int copyId, List<int>? deployHeroIds, bool isRunningFight, int battleMode, int matchType) =
-                GameServices.DecodeStartBaseArg(args);
+                ProtocolDecoder.DecodeStartBaseArg(args);
             services.FileLogger.LogInformation(
                 "copy.StartBase argsLen={Len} hex={Hex} copyId={CopyId} deployHeroIds={Deploy} isRunningFight={IsRunning}",
                 args.Length, Convert.ToHexString(args), copyId,
@@ -28,7 +28,7 @@ internal sealed class BattleService(GameServices services)
             // 关卡出战舰队必须回环客户端请求里的 HeroList（剧情关限制），
             // 而不是从玩家编队猜。请求未带时回退到全部船。
             services.CopyRandomFactors.TryGetValue(copyId, out List<RandomFactorEntry>? randomFactors);
-            return GameServices.EncodeStartBaseRet(copyId, heroList, account.Character, deployHeroIds, isRunningFight,
+            return ProtocolEncoder.EncodeStartBaseRet(copyId, heroList, account.Character, deployHeroIds, isRunningFight,
                 battleMode, matchType, randomFactors);
         }
         catch (Exception ex)
@@ -41,11 +41,11 @@ internal sealed class BattleService(GameServices services)
     internal async Task<byte[]> BuildPassBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         byte[] args = request.Args ?? [];
-        PassBaseArg passArg = GameServices.DecodePassBaseArgAll(args);
+        PassBaseArg passArg = ProtocolDecoder.DecodePassBaseArgAll(args);
         int copyId = passArg.BaseId;
         int grade = passArg.Grade;
         int battleTime = passArg.BattleTime;
-        if (copyId == 0) return GameServices.EncodePassBaseRet(0, 0, 0, 0);
+        if (copyId == 0) return ProtocolEncoder.EncodePassBaseRet(0, 0, 0, 0);
 
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -76,7 +76,7 @@ internal sealed class BattleService(GameServices services)
 
             account = account with { SeaProgress = new PlayerSeaCopyProgress(seaRecords) };
             await services.SaveAccountAsync(account, ct);
-            return GameServices.EncodePassBaseRet(copyId, grade, isFirstPass ? 1 : 0, passTime);
+            return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isFirstPass ? 1 : 0, passTime);
         }
 
         PlayerCopyProgress progress = account.CopyProgress ?? new PlayerCopyProgress([]);
@@ -112,6 +112,6 @@ internal sealed class BattleService(GameServices services)
         }
 
         await services.SaveAccountAsync(account, ct);
-        return GameServices.EncodePassBaseRet(copyId, grade, isPlotFirstPass ? 1 : 0, passTime);
+        return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isPlotFirstPass ? 1 : 0, passTime);
     }
 }

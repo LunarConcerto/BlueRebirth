@@ -18,7 +18,7 @@ internal sealed class BuildShipService(GameServices services)
     {
         if (request.Args is null)
             return [];
-        (int extractId, int num, _) = GameServices.DecodeBuildShipArg(request.Args);
+        (int extractId, int num, _) = ProtocolDecoder.DecodeBuildShipArg(request.Args);
         if (num <= 0) num = 1;
         if (num > 10) num = 10;
 
@@ -90,7 +90,7 @@ internal sealed class BuildShipService(GameServices services)
         if (rewards.Count > 0)
             await services.SaveAccountAsync(account, ct);
 
-        return GameServices.EncodeBuildShipRet(rewards);
+        return ProtocolEncoder.EncodeBuildShipRet(rewards);
     }
 
     /// <summary>递归展开 config_drop_item 掉落池，将 GoodsType.DROP 嵌套条目展开为最终物品列表。</summary>
