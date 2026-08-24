@@ -536,6 +536,12 @@ internal static class ChapterCopyLoader
 
     public static int GetSeaFirstCopyId() => _seaFirstCopyId;
 
+    public static int GetSeaLastCopyId()
+    {
+        var levels = GetSeaLevels();
+        return levels.Count > 0 ? levels[^1] : _seaFirstCopyId;
+    }
+
     public static int GetCopyType(int copyId)
         => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;
 }

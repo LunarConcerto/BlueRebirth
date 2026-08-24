@@ -525,7 +525,7 @@ public static class GameLoginCodec
         }
     }
 
-    private ref struct ProtoReader
+    internal ref struct ProtoReader
     {
         private ReadOnlySpan<byte> _data;
         private int _offset;

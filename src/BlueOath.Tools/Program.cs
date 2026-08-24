@@ -7,6 +7,8 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 
+Console.WriteLine(A.AuthorInfo);
+
 if (args.Contains("--analyze-protocol", StringComparer.OrdinalIgnoreCase))
     return await ProtocolCatalogTool.RunAsync(args);
 
@@ -29,6 +31,12 @@ if (args.Contains("--config-excel", StringComparer.OrdinalIgnoreCase) ||
     return await ConfigExcelTool.RunAsync(args);
 
 return await CaptureTool.RunAsync(args);
+
+static class A {
+    
+    public const string AuthorInfo = "BlueOath Rebirth Server \n By LunarConcerto && Deepseek v4" ;
+    
+}
 
 static class CaptureTool
 {

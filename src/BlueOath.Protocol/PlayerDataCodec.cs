@@ -152,8 +152,12 @@ public static class PlayerDataCodec
     public static byte[] Encode(BathroomInfo value)
     {
         using var output = new MemoryStream();
-        if (value.HeroList is not null)
+        // HeroList(field 1) must always be encoded (even empty) so SetData
+        // receives a non-nil table; pairs(nil) crashes via readonlymeta.lua.
+        if (value.HeroList is { Count: > 0 })
             foreach (var item in value.HeroList) WriteMessage(output, 1, Encode(item));
+        else
+            WriteMessage(output, 1, []); // encode empty HeroList to prevent nil
         if (value.IsAllAuto != 0) WriteVarintField(output, 2, unchecked((ulong)value.IsAllAuto));
         return output.ToArray();
     }
@@ -173,6 +177,120 @@ public static class PlayerDataCodec
         if (value.Power != 0) WriteVarintField(output, 8, unchecked((ulong)value.Power));
         return output.ToArray();
     }
+
+    // ── Bathroom C2S argument decoding ──
+
+    public static TBathStartArg DecodeBathStartArg(ReadOnlySpan<byte> payload)
+    {
+        uint heroId = 0; int pos = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field) { case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break; case 2 when wire == 0: pos = checked((int)reader.ReadVarint()); break; default: reader.Skip(wire); break; }
+        return new TBathStartArg(heroId, pos);
+    }
+
+    public static uint DecodeBathEndArg(ReadOnlySpan<byte> payload)
+    {
+        uint heroId = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field) { case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break; default: reader.Skip(wire); break; }
+        return heroId;
+    }
+
+    public static TBathServiceArg DecodeBathServiceArg(ReadOnlySpan<byte> payload)
+    {
+        uint heroId = 0; int giftId = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field) { case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break; case 2 when wire == 0: giftId = checked((int)reader.ReadVarint()); break; default: reader.Skip(wire); break; }
+        return new TBathServiceArg(heroId, giftId);
+    }
+
+    public static TBathAutoArg DecodeBathAutoArg(ReadOnlySpan<byte> payload)
+    {
+        uint heroId = 0; int status = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field) { case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break; case 2 when wire == 0: status = checked((int)reader.ReadVarint()); break; default: reader.Skip(wire); break; }
+        return new TBathAutoArg(heroId, status);
+    }
+
+    public static TBathChangeHeroArg DecodeBathChangeHeroArg(ReadOnlySpan<byte> payload)
+    {
+        uint heroId = 0, newHeroId = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field) { case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break; case 2 when wire == 0: newHeroId = checked((uint)reader.ReadVarint()); break; default: reader.Skip(wire); break; }
+        return new TBathChangeHeroArg(heroId, newHeroId);
+    }
+
+    public static int DecodeBathAllAutoArg(ReadOnlySpan<byte> payload)
+    {
+        int status = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field) { case 1 when wire == 0: status = checked((int)reader.ReadVarint()); break; default: reader.Skip(wire); break; }
+        return status;
+    }
+
+    public static IReadOnlyList<TBathStartArg> DecodeBathStartAllArg(ReadOnlySpan<byte> payload)
+    {
+        var list = new List<TBathStartArg>();
+var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 2:
+                    var subMsg = reader.ReadBytes();
+                    var sub = new GameLoginCodec.ProtoReader(subMsg);
+                    uint heroId = 0; int pos = 0;
+                    while (sub.TryReadField(out int sf, out int sw))
+                        switch (sf) { case 1 when sw == 0: heroId = checked((uint)sub.ReadVarint()); break; case 2 when sw == 0: pos = checked((int)sub.ReadVarint()); break; default: sub.Skip(sw); break; }
+                    list.Add(new TBathStartArg(heroId, pos));
+                    break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return list;
+    }
+
+    // ── Bathroom response encoding ──
+
+    public static byte[] EncodeBathEndRet(BathHeroInfo hero)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, 0); // AddExp = 0
+        WriteVarintField(output, 2, unchecked((ulong)hero.BathTime));
+        WriteVarintField(output, 3, hero.HeroId);
+        return output.ToArray();
+    }
+
+    public static byte[] EncodeBathServiceRet(BathHeroInfo hero, int buffId, bool isCrit)
+    {
+        using var output = new MemoryStream();
+        if (hero.Pos != 0) WriteVarintField(output, 1, unchecked((ulong)hero.Pos));
+        WriteVarintField(output, 2, hero.HeroId);
+        if (buffId != 0) WriteVarintField(output, 3, unchecked((ulong)buffId));
+        if (isCrit) WriteVarintField(output, 4, 1);
+        return output.ToArray();
+    }
+
+    public static byte[] EncodeBathStartAllRet(IReadOnlyList<BathHeroInfo> heroes)
+    {
+        using var output = new MemoryStream();
+        foreach (var h in heroes)
+            WriteMessage(output, 1, EncodeBathEndRet(h));
+        return output.ToArray();
+    }
+
+    // ── Bathroom argument records ──
+
+    public readonly record struct TBathStartArg(uint HeroId, int Pos);
+    public readonly record struct TBathServiceArg(uint HeroId, int GiftId);
+    public readonly record struct TBathAutoArg(uint HeroId, int Status);
+    public readonly record struct TBathChangeHeroArg(uint HeroId, uint NewHeroId);
 
     public static byte[] Encode(HeroBag value)
     {
@@ -513,9 +631,10 @@ public static class PlayerDataCodec
     public static byte[] EncodeBuildingInfo(uint now)
     {
         using var output = new MemoryStream();
-        // BuildingInfos[0] (field 1): TBuildingInfo { Id=1, Tid=1, Level=1, Status=1(Idle) }
-        // TBuildingInfo: Id=1(0x08,0x01), Tid=1(0x10,0x01), Level=1(0x18,0x01), Status=1(0x40,0x01)
-        var buildingInfo = new byte[] { 0x08, 0x01, 0x10, 0x01, 0x18, 0x01, 0x40, 0x01 };
+        // BuildingInfos[0] (field 1): TBuildingInfo { Id=1, Tid=1, Level=1, Productivity=0, Status=1(Idle) }
+        // TBuildingInfo: Id=1(0x08,0x01), Tid=1(0x10,0x01), Level=1(0x18,0x01),
+        // Productivity=0(0x28,0x00), Status=1(0x40,0x01)
+        var buildingInfo = new byte[] { 0x08, 0x01, 0x10, 0x01, 0x18, 0x01, 0x28, 0x00, 0x40, 0x01 };
         WriteMessage(output, 1, buildingInfo);
         // LandList[0] (field 2): TLandInfo { Index=1, BuildingId=1 }
         var landInfo = new byte[] { 0x08, 0x01, 0x10, 0x01 };

@@ -132,7 +132,8 @@ public sealed record PlayerAccount(
     PlayerFleet? Fleet = null,
     PlayerCopyProgress? CopyProgress = null,
     PlayerSeaCopyProgress? SeaProgress = null,
-    IReadOnlyList<int>? PlotRewardIds = null);
+    IReadOnlyList<int>? PlotRewardIds = null,
+    PlayerBath? Bath = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
@@ -235,3 +236,19 @@ public sealed record BuildShipEntry(int TemplateId, int Weight);
 
 /// <summary>单个抽卡池配置（来自 config_build_ship）。</summary>
 public sealed record BuildShipPool(int PoolId, IReadOnlyList<BuildShipEntry> Ships);
+
+/// <summary>浴室中单个舰娘（TBathHeroInfo）。</summary>
+public sealed record BathHero(
+    uint HeroId,
+    int Pos = 0,
+    int IsAuto = 0,
+    long StartTime = 0,
+    long BathTime = 0,
+    int BuffId = 0,
+    long BuffTime = 0,
+    int Power = 0);
+
+/// <summary>浴室状态（TBathroomInfo）。</summary>
+public sealed record PlayerBath(
+    IReadOnlyList<BathHero> HeroList,
+    int IsAllAuto = 0);

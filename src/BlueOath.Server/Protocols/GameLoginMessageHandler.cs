@@ -271,6 +271,34 @@ internal sealed partial class GameLoginMessageHandler
         {
             ret = await BuildFashionEquipRetAsync(request, profileId, ct);
         }
+        else if (request.Method == "bathroom.BathStart")
+        {
+            ret = await BuildBathStartRetAsync(request, profileId, now, ct);
+        }
+        else if (request.Method == "bathroom.BathEnd" || request.Method == "bathroom.BathChangeHero")
+        {
+            ret = await BuildBathEndRetAsync(request, profileId, now, ct);
+        }
+        else if (request.Method == "bathroom.BathService")
+        {
+            ret = await BuildBathServiceRetAsync(request, profileId, now, ct);
+        }
+        else if (request.Method == "bathroom.BathAuto")
+        {
+            ret = await BuildBathAutoRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "bathroom.BathAllAuto")
+        {
+            ret = await BuildBathAllAutoRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "bathroom.GetBathroomInfo")
+        {
+            ret = await BuildGetBathroomInfoRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "bathroom.BathStartAll")
+        {
+            ret = await BuildBathStartAllRetAsync(request, profileId, now, ct);
+        }
         else
         {
             ret = request.Method switch
@@ -350,15 +378,6 @@ internal sealed partial class GameLoginMessageHandler
                 "building.SaveTactic" => [],
                 "building.SetTacticName" => [],
                 "building.RemoveTactic" => [],
-                // ── Bathroom: C# bathroom UI and timer logic, offline mode not applicable ──
-                "bathroom.BathStart" => [],
-                "bathroom.BathEnd" => [],
-                "bathroom.BathService" => [],
-                "bathroom.BathAuto" => [],
-                "bathroom.GetBathroomInfo" => [],
-                "bathroom.BathChangeHero" => [],
-                "bathroom.BathAllAuto" => [],
-                "bathroom.BathStartAll" => [],
                 // ── Study: C# study timer and skill system, offline mode not applicable ──
                 "study.GetStudyInfo" => [],
                 "study.StartStudyPSkill" => [],
@@ -784,8 +803,7 @@ internal sealed partial class GameLoginMessageHandler
 
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "bathroom.BathroomInfo",
-                Ret: PlayerDataCodec.Encode(new BathroomInfo(
-                    HeroList: [new BathHeroInfo(HeroId: 0, StartTime: 0)])),
+                Ret: PlayerDataCodec.Encode(ToBathroomInfo(account.Bath)),
                 Time: now)),
 
             // 船坞数据来自存档实体。秘书舰 HeroId 必须与 Character.SecretaryId 一致。
@@ -794,18 +812,11 @@ internal sealed partial class GameLoginMessageHandler
                 Ret: PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize)),
                 Time: now)),
 
-            // 建筑数据推送，填充空的 SpecialPlotDatas/NormalPlotDatas 防止
-            // BuildingData:GetSpecialPlots 里 pairs(nil) 崩溃（readonlymeta.lua
-            // 重写的 pairs 对 nil 返回 nil 导致 generic for 调用 nil 迭代器）。
-            // TUserBuildingInfo: field 11=NormalPlotDatas, field 12=SpecialPlotDatas
-            // 各含一个全零 THeroPlotData（HeroId=0,PlotId=0,BuildingId=0），
-            // 使 SetData 把 self.datas.SpecialPlotDatas 初始化为非空表。
+            // 建筑数据推送，包含 Office 建筑（BuildingInfos）防止
+            // GetOffice() 返回 nil 导致 GetMaxWorkerStrength/GetCurStrengthReal 崩溃。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "building.UpdateBuildingInfo",
-                Ret: new byte[] {
-                    0x62, 0x06, 0x08, 0x01, 0x10, 0x00, 0x18, 0x00,  // SpecialPlotDatas[0]: HeroId=1
-                    0x5A, 0x06, 0x08, 0x01, 0x10, 0x00, 0x18, 0x00,  // NormalPlotDatas[0]: HeroId=1
-                },
+                Ret: PlayerDataCodec.EncodeBuildingInfo(now),
                 Time: now)),
 
             // 编队数据推送，填充玩家编队信息防止 fleetpage 打开时 exHeroInfo nil 崩溃。
@@ -927,6 +938,105 @@ internal sealed partial class GameLoginMessageHandler
             GuildCoinII: c.GuildCoinII, UrEquipCoin: c.UrEquipCoin, ActivityBattlePassExp: c.ActivityBattlePassExp,
             GetHeroCount: c.GetHeroCount, AttackCount: c.AttackCount, MarriedNum: c.MarriedNum,
             Head: c.Head, HeadFrame: c.HeadFrame, Message: c.Message));
+    }
+
+    private static BathHeroInfo ToBathHeroInfo(BathHero h) => new(h.HeroId, h.Pos, h.IsAuto, h.StartTime, h.BathTime, h.BuffId, h.BuffTime, h.Power);
+
+    private static BathroomInfo ToBathroomInfo(PlayerBath? b) => b is null
+        ? new BathroomInfo([], 0)
+        : new BathroomInfo(b.HeroList.Select(ToBathHeroInfo).ToList(), b.IsAllAuto);
+
+    // ── Bathroom handlers ──
+
+    private async Task<byte[]> BuildBathStartRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
+    {
+        var arg = PlayerDataCodec.DecodeBathStartArg(request.Args!);
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var dock = account.Dock;
+        var hero = dock.Heroes.FirstOrDefault(h => h.HeroId == arg.HeroId);
+        if (hero is null) throw new InvalidOperationException($"Hero {arg.HeroId} not found");
+        var list = (account.Bath?.HeroList ?? []).ToList();
+        list.RemoveAll(h => h.HeroId == arg.HeroId);
+        list.Add(new BathHero(arg.HeroId, arg.Pos, StartTime: now, BathTime: 0));
+        account = account with { Bath = new PlayerBath(list, account.Bath?.IsAllAuto ?? 0) };
+        await _repo.SaveAccountAsync(account, ct);
+        return PlayerDataCodec.Encode(ToBathroomInfo(account.Bath));
+    }
+
+    private async Task<byte[]> BuildBathEndRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
+    {
+        uint heroId;
+        if (request.Method == "bathroom.BathEnd")
+            heroId = PlayerDataCodec.DecodeBathEndArg(request.Args!);
+        else
+        {
+            var arg = PlayerDataCodec.DecodeBathChangeHeroArg(request.Args!);
+            heroId = arg.HeroId;
+        }
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var list = (account.Bath?.HeroList ?? []).ToList();
+        var bathHero = list.FirstOrDefault(h => h.HeroId == heroId);
+        if (bathHero is null) return PlayerDataCodec.EncodeBathEndRet(new BathHeroInfo(heroId, BathTime: 0));
+        list.RemoveAll(h => h.HeroId == heroId);
+        account = account with { Bath = new PlayerBath(list, account.Bath?.IsAllAuto ?? 0) };
+        await _repo.SaveAccountAsync(account, ct);
+        return PlayerDataCodec.EncodeBathEndRet(ToBathHeroInfo(bathHero));
+    }
+
+private async Task<byte[]> BuildBathServiceRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
+    {
+        var arg = PlayerDataCodec.DecodeBathServiceArg(request.Args!);
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var bathHero = account.Bath?.HeroList.FirstOrDefault(h => h.HeroId == arg.HeroId);
+        if (bathHero is null) return PlayerDataCodec.EncodeBathServiceRet(new BathHeroInfo(arg.HeroId), 0, false);
+        // BuffId=0: skip buff lookup; GetBathAttrBuff checks heroBath.BuffId==0 → ret=nil
+        return PlayerDataCodec.EncodeBathServiceRet(ToBathHeroInfo(bathHero), 0, false);
+    }
+
+    private async Task<byte[]> BuildBathAutoRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        var arg = PlayerDataCodec.DecodeBathAutoArg(request.Args!);
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var list = (account.Bath?.HeroList ?? []).ToList();
+        var idx = list.FindIndex(h => h.HeroId == arg.HeroId);
+        if (idx >= 0)
+            list[idx] = list[idx] with { IsAuto = arg.Status };
+        account = account with { Bath = new PlayerBath(list, account.Bath?.IsAllAuto ?? 0) };
+        await _repo.SaveAccountAsync(account, ct);
+        return [];
+    }
+
+    private async Task<byte[]> BuildBathAllAutoRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        var status = PlayerDataCodec.DecodeBathAllAutoArg(request.Args!);
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        account = account with { Bath = new PlayerBath(account.Bath?.HeroList ?? [], status) };
+        await _repo.SaveAccountAsync(account, ct);
+        return [];
+    }
+
+    private async Task<byte[]> BuildGetBathroomInfoRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        return PlayerDataCodec.Encode(ToBathroomInfo(account.Bath));
+    }
+
+    private async Task<byte[]> BuildBathStartAllRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
+    {
+        var args = PlayerDataCodec.DecodeBathStartAllArg(request.Args!);
+        var account = await GetOrCreateAccountAsync(profileId, ct);
+        var list = (account.Bath?.HeroList ?? []).ToList();
+        var result = new List<BathHero>();
+        foreach (var a in args)
+        {
+            list.RemoveAll(h => h.HeroId == a.HeroId);
+            var bh = new BathHero(a.HeroId, a.Pos, StartTime: now, BathTime: 0);
+            list.Add(bh);
+            result.Add(bh);
+        }
+        account = account with { Bath = new PlayerBath(list, account.Bath?.IsAllAuto ?? 0) };
+        await _repo.SaveAccountAsync(account, ct);
+        return PlayerDataCodec.EncodeBathStartAllRet(result.Select(ToBathHeroInfo).ToList());
     }
 
     private static HeroGrid ToHeroGrid(Hero hero) =>

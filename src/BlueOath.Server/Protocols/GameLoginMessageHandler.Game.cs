@@ -2109,13 +2109,14 @@ internal sealed partial class GameLoginMessageHandler
     /// <summary>编码海域（SeaCopy, CopyType=2）数据为 TUserCopyInfo protobuf。
     /// 海域页面（SeaCopyPage）依赖 Data.copyData:GetCopyInfo() 里有海域关卡，
     /// 否则 CheckChapterIsOpen/GetBattleModeChapter 返回 false，节点不显示。
-    /// MaxCopyId = 第 1 章第一关，使 _getFarestId(SeaCopy) 落在第 1 章。</summary>
+    /// MaxCopyId = 最后一章第一关，使 _getFarestId(SeaCopy) 落在最后一章，
+    /// 从而 nChapterNewIndex = 最后一章，所有章节可自由切换。</summary>
     public static byte[] EncodeSeaCopyInfo(PlayerSeaCopyProgress? progress = null)
     {
         Dictionary<int, CopyRecord> recordMap = progress?.Records
             .ToDictionary(r => r.CopyId, r => r) ?? new Dictionary<int, CopyRecord>();
         List<int> seaLevels = ChapterCopyLoader.GetSeaLevels();
-        int maxCopyId = ChapterCopyLoader.GetSeaFirstCopyId();
+        int maxCopyId = ChapterCopyLoader.GetSeaLastCopyId();
         using MemoryStream ms = new();
         foreach (int cid in seaLevels)
         {
