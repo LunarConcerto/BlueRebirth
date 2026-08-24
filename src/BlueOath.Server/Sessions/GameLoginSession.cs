@@ -245,22 +245,9 @@ internal sealed class GameLoginSession(GameLoginMessageHandler handler, ILoggerF
                         }
                     }
 
-                    if (request.Method == "copy.StartBase")
-                    {
-                        var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                        var account = await _handler.GetAccountAsync(profileId, ct);
-                        var heroes = account.Dock.Heroes.ToList();
-                        var copyId = _handler.DecodeStartBaseCopyIdPublic(request.Args ?? []);
-                        var copyPush = TMessageCodec.EncodeResponse(new TResponse(
-                            Method: "copy.StartBase",
-                            Ret: _handler.EncodeStartBaseRetDirect(copyId, heroes, account.Character),
-                            Time: now,
-                            IsResponse: 0));
-                        await NetSocketFrameCodec.WriteAsync(stream, copyPush, NetSocketFrameCodec.TypeData, ct);
-                        _fileLogger.LogInformation(
-                            "game-login[{ConnectionId}] push copy.StartBase bytes={Bytes}",
-                            connectionId, copyPush.Length);
-                    }
+                    // copy.StartBase 正常响应由 BuildC2SResponseAsync 统一返回（EncodeStartBaseRet）。
+                    // 此前此处额外推送一条 IsResponse:0 的重复 StartBase（英雄顺序与请求不同），
+                    // 客户端因 PrepareBattleMgr._CopyEnter 事件已注销而静默丢弃，已删除。
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

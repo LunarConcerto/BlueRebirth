@@ -186,6 +186,7 @@ internal static class RandomFactorLoader
 internal static class CopyBattleLoader{
     private static readonly Dictionary<int, int> _copyFleetMap = new();
     private static readonly Dictionary<int, int> _copyConfigIdMap = new();
+    private static readonly Dictionary<int, List<int>> _copyFleetListMap = new();
     private static readonly Dictionary<int, List<int>> _fleetEnemies = new();
     private static readonly Dictionary<int, bool> _fleetHasAttached = new();
     private static readonly Dictionary<int, EnemyStat> _enemyStats = new();
@@ -221,14 +222,20 @@ internal static class CopyBattleLoader{
                 if (!doc.RootElement.TryGetProperty("copy_id", out var copyIdProp)) return;
                 if (!doc.RootElement.TryGetProperty("fleet_id", out var fleetIdProp)) return;
                 var copyId = copyIdProp.GetInt32();
+                var fleetIds = new List<int>();
                 foreach (var item in fleetIdProp.EnumerateArray())
                 {
                     var fleetId = item.GetInt32();
+                    fleetIds.Add(fleetId);
                     var isDefault = doc.RootElement.TryGetProperty("blood_range_lower", out var brl) && brl.GetInt32() == -1
                         && doc.RootElement.TryGetProperty("random_weight", out var rw) && rw.GetInt32() == 1000;
                     if (!candidates.TryGetValue(copyId, out var cur) || (isDefault && !cur.isDefault))
                         candidates[copyId] = (fleetId, isDefault);
-                    if (isDefault) _copyConfigIdMap[copyId] = id;
+                    if (isDefault)
+                    {
+                        _copyConfigIdMap[copyId] = id;
+                        _copyFleetListMap[copyId] = fleetIds;
+                    }
                 }
             });
             foreach (var (copyId, val) in candidates)
@@ -291,6 +298,13 @@ internal static class CopyBattleLoader{
 
     public static int GetFleetId(int copyId)
         => _copyFleetMap.TryGetValue(copyId, out var id) ? id : copyId;
+
+    /// <summary>关卡全部敌舰队 id（config_copy.fleet_id 完整数组）。客户端
+    /// BattleStartData.enemyFleetId 是 int[]，InitNpc 逐个生成敌舰队。查不到回退单值。</summary>
+    public static List<int> GetFleetIdList(int copyId)
+        => _copyFleetListMap.TryGetValue(copyId, out var list) && list.Count > 0
+            ? list
+            : new List<int> { GetFleetId(copyId) };
 
     public static bool HasCopyAttacheds(int fleetId)
         => _fleetHasAttached.TryGetValue(fleetId, out var has) && has;

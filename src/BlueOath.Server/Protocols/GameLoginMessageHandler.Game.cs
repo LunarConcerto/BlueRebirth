@@ -817,23 +817,16 @@ internal sealed partial class GameLoginMessageHandler
         return ms.ToArray();
     }
 
-    public byte[] EncodeStartBaseRetDirect(int copyId, List<Hero> heroes, PlayerCharacter character)
-    {
-        _copyRandomFactors.TryGetValue(copyId, out List<RandomFactorEntry>? randomFactors);
-        return EncodeStartBaseRet(copyId, heroes, character, null, randomFactors: randomFactors);
-    }
-
     private static byte[] EncodeStartBaseRet(int copyId, List<Hero> heroes, PlayerCharacter character,
         IReadOnlyList<int>? deployHeroIds = null,
         bool isRunningFight = false, int battleMode = 1, int matchType = 0,
         IReadOnlyList<RandomFactorEntry>? randomFactors = null)
     {
-        // 本关真实敌舰队 id（config_copy → fleet_id），供 TStartBaseRet.EnemyFleet(字段5)
-        // → BattleStartData.enemyFleetId 使用。
-        int realFleetId = CopyBattleLoader.GetFleetId(copyId);
-        // 敌人舰队锚点：GetFleetIdWithAttached 现直接查表（copy 6 → 200602 → 敌舰 100003）。
-        int fleetId = CopyBattleLoader.GetFleetIdWithAttached(copyId);
-        List<int> enemyIds = CopyBattleLoader.GetEnemyIds(fleetId);
+        // 本关全部敌舰队 id（config_copy → fleet_id 数组）。客户端
+        // BattleStartData.enemyFleetId 是 int[]，PlayerInterface.InitNpc 遍历它逐个生成
+        // 敌舰队（每舰队含自身 copy_attacheds 附属舰队）。只发单个会导致关卡多舰队时
+        // 只生成 1 个敌怪。查不到时回退单值。
+        List<int> fleetIdList = CopyBattleLoader.GetFleetIdList(copyId);
 
         // 出战船只按客户端请求顺序（剧情关可能带临时/支援舰船，其 HeroId 不在玩家船坞，
         // 需从 config_assist_ship_info 加载回环，否则临时舰船丢失）。编队为空时回退到全部船。
@@ -1133,8 +1126,9 @@ internal sealed partial class GameLoginMessageHandler
             // AnimMode (20) = 0
             WriteVarint(ms, 0xA0);
             WriteVarint(ms, 0);
-            // WeatherGroupId (21) = 0
-            WriteVarint(ms, 0xA8);
+            // WeatherGroupId (22) = 0 — 客户端 pb TStartBaseRet.WeatherGroupId=22（copy_pb.lua）。
+            // 之前误写字段 21(0xA8)，客户端永远读到 0；改 22(0xB0)。
+            WriteVarint(ms, 0xB0);
             WriteVarint(ms, 0);
         }
 
@@ -1165,10 +1159,14 @@ internal sealed partial class GameLoginMessageHandler
             WriteVarint(ms, unchecked((ulong)mid));
         }
 
-        // EnemyFleet (5) — repeated int32：本关敌舰队 id → BattleStartData.enemyFleetId。
+        // EnemyFleet (5) — repeated int32：本关全部敌舰队 id → BattleStartData.enemyFleetId。
         // 客户端战斗帧用它在 config_fleet 查 ship_exp / is_last_fleet，必须非空且有效。
-        WriteVarint(ms, 0x28);
-        WriteVarint(ms, unchecked((ulong)realFleetId));
+        // 多舰队关卡（fleet_id 数组>1）必须逐个下发，InitNpc 才会生成全部敌舰队。
+        foreach (int fid in fleetIdList)
+        {
+            WriteVarint(ms, 0x28);
+            WriteVarint(ms, unchecked((ulong)fid));
+        }
         // SkipVcr (17) — TCopySkipVcr[]，补发使 ctor 的 skipVcrs(+0x88) 段有数据
         {
             using MemoryStream sv = new();
@@ -1180,12 +1178,15 @@ internal sealed partial class GameLoginMessageHandler
             WriteVarint(ms, (ulong)svb.Length);
             ms.Write(svb);
         }
-        // EnemyFleets (24) — TBattleEnemyFleet[]，客户端 ctor 与战斗帧都需要
-        if (enemyIds.Count > 0)
+        // EnemyFleets (24) — TBattleEnemyFleet[]，客户端 ctor 与战斗帧都需要。
+        // 每个敌舰队（fleet_id 数组元素）各发一条，含该舰队 config_fleet.copy_enemys 的敌舰属性。
+        foreach (int fid in fleetIdList)
         {
+            List<int> enemyIds = CopyBattleLoader.GetEnemyIds(fid);
+            if (enemyIds.Count == 0) continue;
             using MemoryStream ef = new();
             WriteVarint(ef, 0x08);
-            WriteVarint(ef, unchecked((ulong)fleetId)); // FleetId
+            WriteVarint(ef, unchecked((ulong)fid)); // FleetId
             WriteVarint(ef, 0x10);
             WriteVarint(ef, 0); // State=0
             foreach (int enemyId in enemyIds)
@@ -1258,11 +1259,6 @@ internal sealed partial class GameLoginMessageHandler
             }
 
         return ms.ToArray();
-    }
-
-    public int DecodeStartBaseCopyIdPublic(byte[] args)
-    {
-        return DecodeStartBaseCopyId(args);
     }
 
     private static int DecodeStartBaseCopyId(byte[] args)
