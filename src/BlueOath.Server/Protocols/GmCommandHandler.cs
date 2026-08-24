@@ -64,14 +64,14 @@ internal sealed class GmCommandHandler
 
     private static string Help() =>
         string.Join('\n',
-            "add_currency <profileId> <type> <amount>  — 加货币 (gold/diamond/supply/...)",
-            "add_ship <profileId> <templateId> [level]  — 加舰娘到船坞",
-            "add_item <profileId> <templateId> [count]  — 加道具到仓库",
-            "list_profiles                                — 列出所有档案",
-            "get_character <profileId>                    — 查看角色信息",
-            "get_dock <profileId>                         — 查看船坞",
-            "get_bag <profileId>                          — 查看仓库",
-            "help                                         — 显示此帮助");
+            "add_currency <profileId> <type> <amount>  — 加货币 (gold/diamond/supply/...)\n",
+            "add_ship <profileId> <templateId> [level]  — 加舰娘到船坞\n",
+            "add_item <profileId> <templateId> [count]  — 加道具到仓库\n",
+            "list_profiles                                — 列出所有档案\n",
+            "get_character <profileId>                    — 查看角色信息\n",
+            "get_dock <profileId>                         — 查看船坞\n",
+            "get_bag <profileId>                          — 查看仓库\n",
+            "help                                         — 显示此帮助\n");
 
     private async Task<string> ListProfilesAsync(CancellationToken ct)
     {

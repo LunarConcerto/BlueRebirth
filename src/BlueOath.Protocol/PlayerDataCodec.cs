@@ -29,7 +29,8 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 /// <summary>One hero owned by the player (THeroGrid). Extend with Equips/PSkill/CurHp/etc. as needed.</summary>
 public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
     int Exp = 0, int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
-    long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "");
+    long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "",
+    bool Lock = false);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -216,6 +217,7 @@ public static class PlayerDataCodec
         WriteVarintField(output, 21, unchecked((ulong)value.MarryType));
         if (value.Fashioning != 0) WriteVarintField(output, 22, unchecked((ulong)value.Fashioning));
         WriteStringField(output, 15, value.Name);
+        if (value.Lock) WriteVarintField(output, 12, 1);
         return output.ToArray();
     }
 
@@ -505,5 +507,34 @@ public static class PlayerDataCodec
         WriteVarint(output, (ulong)((field << 3) | 2));
         WriteVarint(output, (ulong)bytes.Length);
         output.Write(bytes);
+    }
+
+    /// <summary>Encode building.UpdateBuildingInfo push (TUserBuildingInfo).</summary>
+    public static byte[] EncodeBuildingInfo(uint now)
+    {
+        using var output = new MemoryStream();
+        // BuildingInfos[0] (field 1): TBuildingInfo { Id=1, Tid=1, Level=1, Status=1(Idle) }
+        // TBuildingInfo: Id=1(0x08,0x01), Tid=1(0x10,0x01), Level=1(0x18,0x01), Status=1(0x40,0x01)
+        var buildingInfo = new byte[] { 0x08, 0x01, 0x10, 0x01, 0x18, 0x01, 0x40, 0x01 };
+        WriteMessage(output, 1, buildingInfo);
+        // LandList[0] (field 2): TLandInfo { Index=1, BuildingId=1 }
+        var landInfo = new byte[] { 0x08, 0x01, 0x10, 0x01 };
+        WriteMessage(output, 2, landInfo);
+        // WorkerStrength (field 3): 1000000 = 100 * BuildingBase.Int(10000) for full bar
+        WriteVarintField(output, 3, 1000000);
+        // WorkerRecover (field 4): 10
+        WriteVarintField(output, 4, 10);
+        // FoodMax (field 6): 100
+        WriteVarintField(output, 6, 100);
+        // ElectricMax (field 8): 100
+        WriteVarintField(output, 8, 100);
+        // WorkerUpdateTime (field 9): now
+        WriteVarintField(output, 9, now);
+        // NormalPlotDatas[0] (field 11): THeroPlotData { HeroId=1, PlotId=0, BuildingId=0 }
+        var plotData = new byte[] { 0x08, 0x01, 0x10, 0x00, 0x18, 0x00 };
+        WriteMessage(output, 11, plotData);
+        // SpecialPlotDatas[0] (field 12): THeroPlotData { HeroId=1, PlotId=0, BuildingId=0 }
+        WriteMessage(output, 12, plotData);
+        return output.ToArray();
     }
 }

@@ -176,7 +176,7 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 
 ### 关键基础设施变更
 
-1. **`lua_pcallk` 错误探针** (`hooks.cpp`): POST-CALL hook 在 `xlua.dll` 的 `lua_pcallk` 上，捕获所有被 pcall 保护的 Lua 错误，打印完整 stack traceback 到日志。安装方式：
+1. **`lua_pcallk` 错误探针** (`hooks_debug.cpp`): POST-CALL hook 在 `xlua.dll` 的 `lua_pcallk` 上，捕获所有被 pcall 保护的 Lua 错误，打印完整 stack traceback 到日志。安装方式：
    - 使用 `InstallXluaExportHook` 对 `xlua.dll` 导出函数做 detour（不同于 `InstallStrArgHook` 的 GameAssembly SHA 门控）
    - 6 参数 cdecl POST-CALL 裸函数 trampoline，保存 `L` 状态指针，读取错误栈顶字符串
 

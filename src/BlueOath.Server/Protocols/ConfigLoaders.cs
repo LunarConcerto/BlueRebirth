@@ -53,35 +53,43 @@ internal static class GmMailsConfigLoader
     }
 }
 
-internal static class GmBuildPoolLoader
+/// <summary>
+/// 从游戏客户端 .db 配置加载抽卡系统所需的全部配置表。
+/// 替代原来的手写 build-pools.json，直接使用 config_extract_ship →
+/// config_drop_item → config_specialdraw 的标准流程。
+/// 单个表加载失败不会中断整体流程，缺失的表返回空字典。
+/// </summary>
+internal static class BuildShipExtractLoader
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
-    public static Dictionary<int, BuildShipPool> Load(string dataRoot)
+    public static (
+        Dictionary<int, ConfigExtractShip> ExtractShips,
+        Dictionary<int, ConfigDropItem> DropItems,
+        Dictionary<int, ConfigSpecialdraw> SpecialDraws,
+        Dictionary<int, ConfigShipInfo> ShipInfos
+    ) Load(string dataRoot)
     {
-        var path = Path.Combine(dataRoot, "build-pools.json");
-        if (!File.Exists(path))
-            return [];
+        var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+        var extractShips = SafeLoad<ConfigExtractShip>(configDir, "config_extract_ship.db");
+        var dropItems = SafeLoad<ConfigDropItem>(configDir, "config_drop_item.db");
+        var specialDraws = SafeLoad<ConfigSpecialdraw>(configDir, "config_specialdraw.db");
+        var shipInfos = SafeLoad<ConfigShipInfo>(configDir, "config_ship_info.db");
+        Console.Error.WriteLine($"[buildship] loaded {extractShips.Count} extract ships, {dropItems.Count} drop items, {specialDraws.Count} special draws, {shipInfos.Count} ship infos");
+        return (extractShips, dropItems, specialDraws, shipInfos);
+    }
+
+    private static Dictionary<int, T> SafeLoad<T>(string configDir, string dbFile) where T : class
+    {
         try
         {
-            var config = JsonSerializer.Deserialize<GmBuildPoolsConfig>(File.ReadAllText(path), JsonOptions);
-            if (config?.Pools is null) return [];
-            return config.Pools.ToDictionary(p => p.PoolId, p => new BuildShipPool(p.PoolId,
-                p.Ships.Select(s => new BuildShipEntry(s.TemplateId, s.Weight)).ToList()));
+            return ConfigDbLoader.LoadAll<T>(configDir, dbFile);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[build-pools] failed to parse {path}: {ex.Message}");
-            return [];
+            Console.Error.WriteLine($"[buildship] failed to load {dbFile}: {ex.Message}");
+            return new Dictionary<int, T>();
         }
     }
 }
-
-internal sealed record GmBuildPoolsConfig(IReadOnlyList<GmBuildPoolConfig> Pools);
-
-internal sealed record GmBuildPoolConfig(int PoolId, IReadOnlyList<GmBuildShipConfig> Ships);
-
-internal sealed record GmBuildShipConfig(int TemplateId, int Weight);
 
 internal static class ShipLevelupLoader
 {

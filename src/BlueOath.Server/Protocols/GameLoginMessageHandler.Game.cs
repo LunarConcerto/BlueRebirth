@@ -113,31 +113,102 @@ internal sealed partial class GameLoginMessageHandler
         return account with { Equip = equip with { Items = items } };
     }
 
+    // GoodsType 常量（constants.lua）。ITEM=1, EQUIP=2, SHIP=3, DROP=4, CURRENCY=5, FASHION=18。
+    // 注：GoodsTypeCurrency/Equip/Fashion 已在 Shop.cs 中定义
+    private const int GoodsTypeItem = 1;
+    private const int GoodsTypeShip = 3;
+    private const int GoodsTypeDrop = 4;
+
+    // ExtractType 常量（constants.lua）
+    private const int ExtractTypeEquip = 1;
+    private const int ExtractTypeShip = 2;
+    private const int ExtractTypeFashion = 3;
+    private const int ExtractTypeLimitShip = 4;
+    private const int ExtractTypeMixTure = 5;
+
+    // HeroRarityType 常量
+    private const int RaritySR = 3;
+    private const int RaritySSR = 4;
+
+    /// <summary>扁平化后的掉落池条目（已递归展开 GoodsType.DROP）。</summary>
+    internal sealed record DropPoolEntry(int GoodsType, int ConfigId, int MinNum, int MaxNum, int Weight);
+
     /// <summary>
-    /// 处理 buildship.BuildShip：按卡池权重随机抽取舰娘，10 连保底至少一个 SR（quality>=3）。
+    /// 处理 buildship.BuildShip：按 config_extract_ship → config_drop_item 标准流程抽取。
     /// 抽取到的舰娘加入船坞，返回 TBuildShipRet{BuildShipResult=[TCommonReward]}。
+    /// 10 连保底至少一个 SR（quality>=3）。
     /// </summary>
     private async Task<byte[]> BuildBuildShipRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null)
             return [];
-        (int poolId, int num, _) = DecodeBuildShipArg(request.Args);
+        (int extractId, int num, _) = DecodeBuildShipArg(request.Args);
         if (num <= 0) num = 1;
         if (num > 10) num = 10;
+
+        if (!_extractShips.TryGetValue(extractId, out var extractConfig))
+            return [];
 
         PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         List<CommonReward> rewards = new();
         _lastBuildHeroIds = new List<uint>();
 
+        var entries = FlattenDropPool((int)extractConfig.DropItemId);
+        if (entries.Count == 0)
+            return [];
+
+        long extractType = extractConfig.ExtractType;
+
         for (int i = 0; i < num; i++)
         {
-            int tid = RollShip(poolId);
-            if (tid == 0) continue;
-            uint heroId = _nextHeroId++;
-            account = AddShip(account, heroId, tid, now);
-            _lastBuildHeroIds.Add(heroId);
-            rewards.Add(new CommonReward(3, tid, 1, (int)heroId));
+            var entry = WeightedPick(entries);
+            if (entry.GoodsType == GoodsTypeShip)
+            {
+                uint heroId = _nextHeroId++;
+                account = AddShip(account, heroId, entry.ConfigId, now);
+                _lastBuildHeroIds.Add(heroId);
+                rewards.Add(new CommonReward(GoodsTypeShip, entry.ConfigId, entry.MinNum, (int)heroId));
+            }
+            else if (entry.GoodsType == GoodsTypeEquip)
+            {
+                uint equipId = AddEquip(account, entry.ConfigId, now);
+                rewards.Add(new CommonReward(GoodsTypeEquip, entry.ConfigId, entry.MinNum, (int)equipId));
+            }
+            else
+            {
+                rewards.Add(new CommonReward(entry.GoodsType, entry.ConfigId, entry.MinNum));
+            }
+        }
+
+        // 10 连保底：至少一个 SR（quality>=3）。仅对舰船类型卡池生效。
+        if (num == 10 && (extractType == ExtractTypeShip || extractType == ExtractTypeLimitShip))
+        {
+            bool hasSR = rewards.Any(r => r.Type == GoodsTypeShip && GetShipRarity(r.ConfigId) >= RaritySR);
+            if (!hasSR)
+            {
+                var srPlusEntries = entries.Where(
+                    e => e.GoodsType == GoodsTypeShip && GetShipRarity(e.ConfigId) >= RaritySR).ToList();
+                if (srPlusEntries.Count > 0)
+                {
+                    // 从后往前找到最后一个舰船奖励并替换
+                    for (int i = rewards.Count - 1; i >= 0; i--)
+                    {
+                        if (rewards[i].Type == GoodsTypeShip)
+                        {
+                            var newEntry = WeightedPick(srPlusEntries);
+                            uint oldHeroId = (uint)rewards[i].Id;
+                            account = RemoveHero(account, oldHeroId);
+                            _lastBuildHeroIds.Remove(oldHeroId);
+                            uint newHeroId = _nextHeroId++;
+                            account = AddShip(account, newHeroId, newEntry.ConfigId, now);
+                            _lastBuildHeroIds.Add(newHeroId);
+                            rewards[i] = new CommonReward(GoodsTypeShip, newEntry.ConfigId, newEntry.MinNum, (int)newHeroId);
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         if (rewards.Count > 0)
@@ -146,33 +217,88 @@ internal sealed partial class GameLoginMessageHandler
         return EncodeBuildShipRet(rewards);
     }
 
-    private List<uint> _lastBuildHeroIds = [];
-
     /// <summary>
-    /// 按卡池权重随机抽取一个舰娘 TemplateId。返回 0 表示池中没有可抽的船。
+    /// 递归展开 config_drop_item 掉落池，将 GoodsType.DROP 嵌套条目展开为最终物品列表。
     /// </summary>
-    private int RollShip(int poolId)
+    private List<DropPoolEntry> FlattenDropPool(int dropItemId, int countMul = 1)
     {
-        if (!_buildPools.TryGetValue(poolId, out BuildShipPool? pool) || pool.Ships.Count == 0)
-            return 0;
-        return WeightedPick(pool.Ships);
+        var result = new List<DropPoolEntry>();
+        if (!_dropItems.TryGetValue(dropItemId, out var dropItem))
+            return result;
+
+        if (dropItem.DropRate > 0 && dropItem.Drop is { Count: > 0 })
+            FlattenDropEntries(dropItem.Drop, countMul, result);
+
+        if (dropItem.DropAloneCount > 0 && dropItem.DropAlone is { Count: > 0 })
+            FlattenDropEntries(dropItem.DropAlone, (int)dropItem.DropAloneCount * countMul, result);
+
+        return result;
     }
 
-    private int WeightedPick(IReadOnlyList<BuildShipEntry> entries)
+    private void FlattenDropEntries(List<List<long>> entries, int countMul, List<DropPoolEntry> result)
+    {
+        foreach (var entry in entries)
+        {
+            if (entry.Count < 5) continue;
+            int goodsType = (int)entry[0];
+            int configId = (int)entry[1];
+            int minNum = (int)entry[2] * countMul;
+            int maxNum = (int)entry[3] * countMul;
+            int weight = (int)entry[4];
+            if (weight == 0) continue;
+
+            if (goodsType == GoodsTypeDrop)
+            {
+                var nested = FlattenDropPool(configId, countMul);
+                result.AddRange(nested);
+            }
+            else
+            {
+                result.Add(new DropPoolEntry(goodsType, configId, minNum, maxNum, weight));
+            }
+        }
+    }
+
+    /// <summary>按权重随机抽取一个掉落池条目。</summary>
+    private DropPoolEntry WeightedPick(List<DropPoolEntry> entries)
     {
         int totalWeight = entries.Sum(e => e.Weight);
-        if (totalWeight <= 0) return entries[0].TemplateId;
+        if (totalWeight <= 0) return entries[0];
         int roll = _rng.Next(totalWeight);
         int cumulative = 0;
-        foreach (BuildShipEntry e in entries)
+        foreach (var e in entries)
         {
             cumulative += e.Weight;
             if (roll < cumulative)
-                return e.TemplateId;
+                return e;
         }
-
-        return entries[^1].TemplateId;
+        return entries[^1];
     }
+
+    /// <summary>通过 ship_info_id 获取舰娘稀有度（quality）。</summary>
+    private int GetShipRarity(int templateId)
+    {
+        int siId = (templateId - 1) / 10;
+        return _shipInfos.TryGetValue(siId, out var info) ? (int)info.Quality : 0;
+    }
+
+    /// <summary>从船坞移除指定舰娘。</summary>
+    internal static PlayerAccount RemoveHero(PlayerAccount account, uint heroId)
+    {
+        HeroDock dock = account.Dock;
+        List<Hero> heroes = dock.Heroes.ToList();
+        heroes.RemoveAll(h => h.HeroId == heroId);
+        return account with { Dock = dock with { Heroes = heroes } };
+    }
+
+    /// <summary>装备加入仓库</summary>
+    private uint AddEquip(PlayerAccount account, int templateId, int now)
+    {
+        // 简化实现：作为 CommonReward 返回，不实际加入装备仓库
+        return 0;
+    }
+
+    private List<uint> _lastBuildHeroIds = [];
 
     /// <summary>舰娘加入船坞：创建 Hero 实例。Affection=1000 避免 GetLoveInfo 返回 nil。</summary>
     internal static PlayerAccount AddShip(PlayerAccount account, uint heroId, int templateId, int now)
@@ -2024,5 +2150,139 @@ internal sealed partial class GameLoginMessageHandler
         WriteVarint(ms, 0x18);
         WriteVarint(ms, 2); // CopyType(3)=SeaCopy
         return ms.ToArray();
+    }
+
+    private static Task<byte[]> BuildSimpleRet() => Task.FromResult(Array.Empty<byte>());
+
+    private async Task<byte[]> BuildLockHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        (uint heroId, bool isLock) = DecodeLockHeroArg(request.Args);
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        HeroDock dock = account.Dock;
+        List<Hero> heroList = dock.Heroes.ToList();
+        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return [];
+        heroList[heroIdx] = heroList[heroIdx] with { Lock = isLock };
+        account = account with { Dock = dock with { Heroes = heroList } };
+        await _repo.SaveAccountAsync(account, ct);
+        return [];
+    }
+
+    private static (uint HeroId, bool Lock) DecodeLockHeroArg(ReadOnlySpan<byte> data)
+    {
+        ProtoReader reader = new(data);
+        uint heroId = 0;
+        bool isLock = false;
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
+                case 2 when wire == 0: isLock = reader.ReadVarint() != 0; break;
+                default: reader.Skip(wire); break;
+            }
+        return (heroId, isLock);
+    }
+
+    private async Task<byte[]> BuildRetireHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        List<uint> heroIds = DecodeRetireHeroArg(request.Args);
+        if (heroIds.Count == 0) return [];
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        HeroDock dock = account.Dock;
+        List<Hero> heroList = dock.Heroes.ToList();
+        heroList.RemoveAll(h => heroIds.Contains(h.HeroId));
+        account = account with { Dock = dock with { Heroes = heroList } };
+        await _repo.SaveAccountAsync(account, ct);
+        return [];
+    }
+
+    private static List<uint> DecodeRetireHeroArg(ReadOnlySpan<byte> data)
+    {
+        ProtoReader reader = new(data);
+        List<uint> heroIds = new();
+        while (reader.TryReadField(out int field, out int wire))
+            if (field == 1 && wire == 0) heroIds.Add(checked((uint)reader.ReadVarint()));
+            else reader.Skip(wire);
+        return heroIds;
+    }
+
+    private async Task<byte[]> BuildChangeNameRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        (uint heroId, string name) = DecodeChangeHeroNameArg(request.Args);
+        if (heroId == 0 || string.IsNullOrEmpty(name)) return [];
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        HeroDock dock = account.Dock;
+        List<Hero> heroList = dock.Heroes.ToList();
+        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return [];
+        heroList[heroIdx] = heroList[heroIdx] with { Name = name };
+        account = account with { Dock = dock with { Heroes = heroList } };
+        await _repo.SaveAccountAsync(account, ct);
+        return [];
+    }
+
+    private static (uint HeroId, string Name) DecodeChangeHeroNameArg(ReadOnlySpan<byte> data)
+    {
+        ProtoReader reader = new(data);
+        uint heroId = 0;
+        string name = "";
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
+                case 2 when wire == 2: name = reader.ReadString(); break;
+                default: reader.Skip(wire); break;
+            }
+        return (heroId, name);
+    }
+
+    private async Task<byte[]> BuildAddAffectionRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        (uint heroId, _, int num) = DecodeHeroAddAffectionArg(request.Args);
+        if (heroId == 0 || num <= 0) return [];
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        HeroDock dock = account.Dock;
+        List<Hero> heroList = dock.Heroes.ToList();
+        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return [];
+        Hero hero = heroList[heroIdx];
+        heroList[heroIdx] = hero with { Affection = hero.Affection + num * 10000 };
+        account = account with { Dock = dock with { Heroes = heroList } };
+        await _repo.SaveAccountAsync(account, ct);
+        return [];
+    }
+
+    private static (uint HeroId, int TemplateId, int Num) DecodeHeroAddAffectionArg(ReadOnlySpan<byte> data)
+    {
+        ProtoReader reader = new(data);
+        uint heroId = 0;
+        int templateId = 0, num = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
+                case 2 when wire == 0: templateId = checked((int)reader.ReadVarint()); break;
+                case 3 when wire == 0: num = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        return (heroId, templateId, num);
+    }
+
+    private async Task<byte[]> BuildGetHeroInfoRetAsync(string profileId, CancellationToken ct)
+    {
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        List<HeroGrid> heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
+        return PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize));
+    }
+
+    private async Task<byte[]> BuildGetHeroInfoByHeroIdArrayRetAsync(string profileId, CancellationToken ct)
+    {
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        List<HeroGrid> heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
+        return PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize));
     }
 }

@@ -29,17 +29,10 @@ internal sealed partial class GameLoginMessageHandler
     /// → CheckShopNewFashion）在主页/商店页就崩溃。
     /// GM 商品按配置的 ShopId 分组放入对应商店（分页）。
     /// </summary>
-    public byte[] BuildShopInfoPush(uint now)
+public byte[] BuildShopInfoPush(uint now)
     {
-        var goodsByShop = _gmGoods.Goods
-            .GroupBy(g => g.ShopId)
-            .ToDictionary(g => g.Key, g => g.Select(x => new ShopGoodsData(x.GoodId, 0, 0)).ToList());
-        var shopInfo = ShopIds.Select(id =>
-            goodsByShop.TryGetValue(id, out var goods)
-                ? new RetShopInfo(id, goods)
-                : new RetShopInfo(id)).ToList();
         var push = new TResponse(Method: "shop.UpdateShopInfo",
-            Ret: PlayerDataCodec.Encode(new RetShopsInfo(ShopInfo: shopInfo)),
+            Ret: BuildShopsInfoRet(now),
             Time: now);
         return TMessageCodec.EncodeResponse(push);
     }

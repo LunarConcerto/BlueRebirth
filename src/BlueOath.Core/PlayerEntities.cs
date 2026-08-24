@@ -63,7 +63,8 @@ public sealed record Hero(
     int MarryType = 0,
     long CurHp = 0,
     IReadOnlyList<uint>? EquipSlots = null,
-    string Name = "");
+    string Name = "",
+    bool Lock = false);
 
 /// <summary>
 /// 船坞（玩家拥有的全部舰娘）。对应 <c>hero.UpdateHeroBagData</c> 的 HeroBag
@@ -212,12 +213,6 @@ public sealed record GmMailConfig(ulong Mid, int CurrencyType, int Num, string S
 /// <summary>GM 邮件配置集合。</summary>
 public sealed record GmMailsConfig(IReadOnlyList<GmMailConfig> Mails);
 
-/// <summary>单个抽卡池中的船娘条目（TemplateId → 权重）。</summary>
-public sealed record BuildShipEntry(int TemplateId, int Weight);
-
-/// <summary>单个抽卡池配置（来自 config_build_ship）。</summary>
-public sealed record BuildShipPool(int PoolId, IReadOnlyList<BuildShipEntry> Ships);
-
 /// <summary>单个编队条目（TTactic）。</summary>
 public sealed record FleetEntry(
     int ModeId,
@@ -234,3 +229,9 @@ public sealed record PlayerFleet(
     int MaxPower = 0,
     int MinPower = 0,
     bool IsSkip = false);
+
+/// <summary>单个抽卡池中的船娘条目（TemplateId → 权重）。</summary>
+public sealed record BuildShipEntry(int TemplateId, int Weight);
+
+/// <summary>单个抽卡池配置（来自 config_build_ship）。</summary>
+public sealed record BuildShipPool(int PoolId, IReadOnlyList<BuildShipEntry> Ships);

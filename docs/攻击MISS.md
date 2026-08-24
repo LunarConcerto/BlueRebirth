@@ -1,4 +1,4 @@
-# 攻击 MISS 调查记录（已解决）
+﻿# 攻击 MISS 调查记录（已解决）
 
 > 状态：**已解决（2026-08-22）**。根因是实战斗伤害公式里的"主动技能伤害系数"
 > `Ship.actSkillInfo.damageFac` 在离线服务端下为 0，被逐级相乘后把最终伤害清零 →
@@ -84,7 +84,7 @@
 
 ## 相关文件/地址速查
 - 服务端：`src/BlueOath.Server/Protocols/GameLoginMessageHandler.cs`（EncodeStartBaseRet / BuildAttackBaseRet / BuildQuitBaseRet）。
-- Payload：`native/Payload/hooks.cpp`（__IsHit/GetAttrAttack/Ship.GetAttribute/Execute/AfterExecute 钩子，部分被注释禁用）。
+- Payload：`native/Payload/hooks_debug.cpp`（__IsHit/GetAttrAttack/Ship.GetAttribute/Execute/AfterExecute 钩子，部分被注释禁用）。
 - dump：`il2cppdump/dump.cs`（DamageInfo 323928、L2DAttackInfo 325791、EPU_MainGun 339787、IEPUBase 340476、Ship 355882、ShipBattleAttribute 356632、EnumProp 403905、DamageResult 533188、AttackerTargetAnalyser 532990）。
 - Lua 协议定义：`lua_tools/BlueoathLua/copy_pb.lua`（字段号）。
 - GameAssembly RVA：`__IsHit=0x5281B0`、`Ship.GetAttribute=0x50B1F0`、`GetAttr_Attack=0x50AD40`、`EPU_MainGun.Execute=0x520EC0`、`AfterExecute=0x520D60`、`_EventDamageAfter=0x527380`、`__ExecuteAtom=0x521E40`、`_GetShipDamageCoe=0x527F70`、`SetAttackDmgInfo0=0x41E860`。
@@ -114,7 +114,7 @@
   真正为 0 的是 `Ship.actSkillInfo.damageFac`。前者在 0x5222EC 乘法（可保留，本来就是 1.0）。
 
 ## 修复：payload NOP 掉 6 处 damageFac 乘法
-- `native/Payload/hooks.cpp` 的 `TryApplyMainGunDamageFacPatch()` 把 6 个 `mulsd xmm?,[ebp-X]`（各 5 字节）
+- `native/Payload/hooks_debug.cpp` 的 `TryApplyMainGunDamageFacPatch()` 把 6 个 `mulsd xmm?,[ebp-X]`（各 5 字节）
   写成 NOP（等价于 damageFac 按 1.0 处理）。校验字节后打补丁，全部成功。
 - 影响：主动技能的伤害系数不再生效（离线服务端本来也没配 A-skill，可接受）。
 
@@ -172,7 +172,7 @@
     —— `[ebp-0x60]` 由 `0x51DA11 fstp` 存 `0x1052f5a0` 结果（=0），`0x51DA87 mulsd xmm0,[ebp-0x60]` 乘 0。
   - 运行时钩子逐级确认：ScoutNum(5)=67、ShipPlaneAttack(14)=743、敌防御=1600、基础伤害≈2056、
     炸弹系数=1.0、命中=1.0、`GetAmmounitionEffect(68)=1.0`、`AirDamageFinal in=0` → 唯独 damageFac=0。
-- 修复（payload，`native/Payload/hooks.cpp`）：
+- 修复（payload，`native/Payload/hooks_debug.cpp`）：
   1. **hook `0x1052f5a0`（damageFac 读取器）强制返回 1.0**（`TryApplyDamageFacHook`）——覆盖轰炸/战斗/鱼雷机全部子路径。
   2. NOP 两处 damageFac 乘法（并入 `TryApplyMainGunDamageFacPatch`）：
      - 轰炸机 `__BomberAttack` `0x51DA87` `F2 0F 59 45 A0 mulsd xmm0,[ebp-0x60]`
@@ -223,7 +223,7 @@
     `damage = ceil( base * coe[ebp-0x2c](GetShipDamageCoe skillType=2) * coe[ebp-0x34](GetAmmounitionEffect 68) * coe[ebp-0x3c](GetDamageOdd_BCS 0x524BF0) * coe[ebp-0x4c]*[ebp-0x54]*[ebp-0x5c] * damageFac )`，
     base = `Max(0, exporter.GetAttribute(65) + const - target.GetAttribute(103))`（近似）。
   - `__IsHit`（0x5281B0）照常命中；但伤害乘 0 → isMiss。
-- 修复（payload，`native/Payload/hooks.cpp` 的 `TryApplyMainGunDamageFacPatch`）：
+- 修复（payload，`native/Payload/hooks_debug.cpp` 的 `TryApplyMainGunDamageFacPatch`）：
   - 新增 slot `0x52430C { F2 0F 59 48 28 }`（mulsd xmm1,[eax+0x28]，5 字节）→ NOP（等价 damageFac=1.0）。
   - 注意与主炮/空袭不同：副炮 **inline** 读取 damageFac（不经 `0x1052f5a0` 读取器），故只需 NOP 乘法，无需 hook 读取器。
 - 已构建 payload（bin-x86/BlueOath.Payload.dll）。待实测：副炮应有伤害数字。

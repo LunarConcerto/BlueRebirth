@@ -8,8 +8,8 @@ $root = Split-Path -Parent $PSScriptRoot
 
 # ---------------------------------------------------------------- build ----
 if (-not $SkipBuild) {
-  Write-Host '[1/5] building native payload...' -ForegroundColor Cyan
-  & (Join-Path $PSScriptRoot 'build-native.ps1')
+  Write-Host '[1/5] building native payload (debug hooks)...' -ForegroundColor Cyan
+  & (Join-Path $PSScriptRoot 'build-native.ps1') -DebugHooks
   Write-Host '[1/5] building local server...' -ForegroundColor Cyan
   & dotnet build (Join-Path $root 'src\BlueOath.Server\BlueOath.Server.csproj') -c Debug *> $null
   if ($LASTEXITCODE -ne 0) { throw "Build failed: $LASTEXITCODE" }

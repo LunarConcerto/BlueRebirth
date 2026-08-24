@@ -24,7 +24,10 @@ internal sealed partial class GameLoginMessageHandler
     private readonly Dictionary<int, (int Type, int ConfigId, int Num)> _gmGoodsMap;
     private readonly Dictionary<int, int> _fashionSfIdMap;
     private readonly IReadOnlyList<GmMailConfig> _gmMails;
-    private readonly Dictionary<int, BuildShipPool> _buildPools;
+    private readonly Dictionary<int, ConfigExtractShip> _extractShips;
+    private readonly Dictionary<int, ConfigDropItem> _dropItems;
+    private readonly Dictionary<int, ConfigSpecialdraw> _specialDraws;
+    private readonly Dictionary<int, ConfigShipInfo> _shipInfos;
     private readonly Dictionary<int, int> _expPerItem;
     private readonly Dictionary<int, int> _expNeeded;
     private readonly Dictionary<int, List<RandomFactorEntry>> _copyRandomFactors;
@@ -39,7 +42,7 @@ internal sealed partial class GameLoginMessageHandler
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId, g => (g.Type, g.ItemId, g.Num));
         _fashionSfIdMap = _gmGoods.FashionSfId.ToDictionary(kv => kv.Key, kv => kv.Value);
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
-        _buildPools = GmBuildPoolLoader.Load(options.DataRoot);
+        (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(options.DataRoot);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
         _copyRandomFactors = RandomFactorLoader.Load(options.DataRoot);
         ChapterCopyLoader.Load(options.DataRoot);
@@ -112,6 +115,94 @@ internal sealed partial class GameLoginMessageHandler
         {
             ret = await BuildMarryRetAsync(request, profileId, now, ct);
         }
+        else if (request.Method == "hero.HeroIntensify")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.HeroAdvance")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.HeroAdvanceMUB")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.LockHero")
+        {
+            ret = await BuildLockHeroRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "hero.RetireHero")
+        {
+            ret = await BuildRetireHeroRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "hero.ChangeName")
+        {
+            ret = await BuildChangeNameRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "hero.StudySkill")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.AutoEquip")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.AutoUnEquip")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.HeroAdvMaxLv")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.HeroEquipEffect")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.HeroRemould")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.EquipBinding")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.EquipUnBinding")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.EquipLockTransplant")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.HeroCombineUpLv")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.HeroCombineQuickLevelUp")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.HeroCombineBreak")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.HeroCombine")
+        {
+            ret = await BuildSimpleRet();
+        }
+        else if (request.Method == "hero.AddAffection")
+        {
+            ret = await BuildAddAffectionRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "hero.GetHeroInfo")
+        {
+            ret = await BuildGetHeroInfoRetAsync(profileId, ct);
+        }
+        else if (request.Method == "hero.GetHeroInfoByHeroIdArray")
+        {
+            ret = await BuildGetHeroInfoByHeroIdArrayRetAsync(profileId, ct);
+        }
         else if (request.Method == "tactic.GetHerosTactic")
         {
             ret = await BuildGetHerosTacticAsync(profileId, ct);
@@ -168,9 +259,17 @@ internal sealed partial class GameLoginMessageHandler
         {
             ret = BuildQuitBaseRet(request.Args);
         }
-        else if (request.Method == "copy.GetRandomFactors")
+        else if (request.Method == "shop.GetShopsInfo")
         {
-            ret = EncodeGetRandomFactors(request.Args);
+            ret = BuildShopsInfoRet(checked((uint)now));
+        }
+        else if (request.Method == "bag.GetBagInfo")
+        {
+            ret = await BuildGetBagInfoRetAsync(request, profileId, ct);
+        }
+        else if (request.Method == "fashion.Equip")
+        {
+            ret = await BuildFashionEquipRetAsync(request, profileId, ct);
         }
         else
         {
@@ -198,6 +297,412 @@ internal sealed partial class GameLoginMessageHandler
                 "guide.Setting" => [],
                 "cachedata.CacheData" => EncodeCacheDataRet(),
                 "battle.CreateMutiBattle" => [],
+                // Friend module (multiplayer social system, offline mode not applicable)
+                "friend.GetFriendMainData" => [],
+                "friend.GetRecommendList" => [],
+                "friend.Apply" => [],
+                "friend.Accept" => [],
+                "friend.Refuse" => [],
+                "friend.DeleteFriend" => [],
+                "friend.SetBlack" => [],
+                "friend.DeleteBlack" => [],
+                "friend.SearchUser" => [],
+                "friend.GetFriendList" => [],
+                "friend.UpdateUserState" => [],
+                // Chat module (multiplayer chat system, offline mode not applicable)
+                "chat.ChangeWorldChannel" => [],
+                "chat.SendMessage" => [],
+                "chat.SendBarrage" => [],
+                "chat.GetBarrageById" => [],
+                // Discuss module (multiplayer discussion system, offline mode not applicable)
+                "discuss.GetDiscuss" => [],
+                "discuss.Discuss" => [],
+                "discuss.HeroLike" => [],
+                "discuss.Like" => [],
+                "discuss.Dislike" => [],
+                // Task module (return empty task list / success)
+                "task.TaskInfo" => [],
+                "task.TaskReward" => [],
+                "task.TaskTrigger" => [],
+                "task.TaskRewardByDaysActivity" => [],
+                "task.TaskSevenDayActivity" => [],
+                "task.TaskRewardByReturnActivity" => [],
+                "task.TaskAllReward" => [],
+                "task.GetPtReward" => [],
+                "task.GetTeachingTask" => [],
+                // ── Building: C# 3D building scene logic, offline mode not applicable ──
+                "building.AddBuilding" => [],
+                "building.UpgradeBuilding" => [],
+                "building.DegradeBuilding" => [],
+                "building.SetHero" => [],
+                "building.SetBuildingListHero" => [],
+                "building.FinishBuilding" => [],
+                "building.ReceiveBuilding" => [],
+                "building.ProduceItem" => [],
+                "building.ComposeItem" => [],
+                "building.ReceiveItem" => [],
+                "building.ReceiveAll" => [],
+                "building.ReceiveResource" => [],
+                "building.UpdateHeroAddition" => [],
+                "building.UseStrengthSpeedup" => [],
+                "building.TriggerNormalHeroPlot" => [],
+                "building.TriggerSpecialHeroPlot" => [],
+                "building.SaveTactic" => [],
+                "building.SetTacticName" => [],
+                "building.RemoveTactic" => [],
+                // ── Bathroom: C# bathroom UI and timer logic, offline mode not applicable ──
+                "bathroom.BathStart" => [],
+                "bathroom.BathEnd" => [],
+                "bathroom.BathService" => [],
+                "bathroom.BathAuto" => [],
+                "bathroom.GetBathroomInfo" => [],
+                "bathroom.BathChangeHero" => [],
+                "bathroom.BathAllAuto" => [],
+                "bathroom.BathStartAll" => [],
+                // ── Study: C# study timer and skill system, offline mode not applicable ──
+                "study.GetStudyInfo" => [],
+                "study.StartStudyPSkill" => [],
+                "study.CancelStudyPSkill" => [],
+                "study.EndStudyPSkill" => [],
+                "study.SpeedUpStudy" => [],
+                // ── Strategy: C# strategy tree UI logic, offline mode not applicable ──
+                "strategy.Learn" => [],
+                "strategy.Upgrade" => [],
+                "strategy.Reset" => [],
+                "strategy.Apply" => [],
+                "strategy.GetStrategy" => [],
+                // ── Build: C# build queue timer logic, offline mode not applicable ──
+                "build.BuildingByFormula" => [],
+                "build.BuildReceive" => [],
+                "build.BuildQuicklyFinish" => [],
+                // ── BuildNotes: C# social notes UI, offline mode not applicable ──
+                "buildnotes.GetNotesList" => [],
+                "buildnotes.GiveLike" => [],
+                // ── Supply: C# supply switching UI, offline mode not applicable ──
+                "supply.SupplySwitch" => [],
+                // ── Repair: C# repair timer and dock UI, offline mode not applicable ──
+                "repair.RepairHero" => [],
+                // ── Shop: refresh ──
+                "shop.RefreshShop" => [],
+                // ── Equip: rise star, enhance, enhance bind, dismantle ──
+                "equip.RiseStar" => [],
+                "equip.Enhance" => [],
+                "equip.EnhanceBind" => [],
+                "equip.Dismantle" => [],
+                // ── Bag: treasure, composite, sale ──
+                "bag.GetNormalTreasureInfo" => [],
+                "bag.GetSelectTreasureInfo" => [],
+                "bag.CompositeItem" => [],
+                "bag.SaleBagItem" => [],
+                // ── Fashion: update data push, replace reward ──
+                "fashion.updateData" => [],
+                "fashion.fashionReplaceReward" => [],
+                // ── Illustrate: client-side display features ──
+                "illustrate.IllustrateNew" => [],
+                "illustrate.AddBehaviour" => [],
+                "illustrate.EquipNew" => [],
+                "illustrate.VowHero" => [],
+                "illustrate.VowDecTime" => [],
+                "illustrate.ModiVowHeroList" => [],
+                "illustrate.Memory" => [],
+                // ── Guild module (multiplayer social system, offline mode not applicable) ──
+                "guild.Create" => [],
+                "guild.Search" => [],
+                "guild.GetList" => [],
+                "guild.Apply" => [],
+                "guild.CancelApply" => [],
+                "guild.Verify" => [],
+                "guild.Dismiss" => [],
+                "guild.Modify" => [],
+                "guild.Appoint" => [],
+                "guild.Remove" => [],
+                "guild.Transfer" => [],
+                "guild.Upgrade" => [],
+                "guild.Quit" => [],
+                "guild.GetApplyList" => [],
+                "guild.GetMemberList" => [],
+                "guild.RejectAll" => [],
+                "guild.AcceptAll" => [],
+                "guild.Publicity" => [],
+                "guild.SetGuildLevelOfShow" => [],
+                "guild.Impeach" => [],
+                "guild.AcceptAllMsg" => [],
+                "guild.UpdateOurGuildData" => [],
+                "guild.UpdateMyGuildData" => [],
+                // ── Guild War module (multiplayer guild war, offline mode not applicable) ──
+                "guildwar.GetGuildwarInfo" => [],
+                "guildwar.GetRankList" => [],
+                "guildwar.GetBaseInfo" => [],
+                "guildwar.GetHeroLockInfo" => [],
+                "guildwar.GetBattleReport" => [],
+                "guildwar.BattleReport" => [],
+                "guildwar.GetGuildReward" => [],
+                "guildwar.GetRankUserList" => [],
+                "guildwar.GetHaveScores" => [],
+                "guildwar.GetHaveGuildReward" => [],
+                "guildwar.GetGuildGradeId" => [],
+                "guildwar.UpdateBaseInfo" => [],
+                // ── Guild Offer/Box/Task/BigActivity (multiplayer guild subsystems, offline mode not applicable) ──
+                "guildOffer.GetOfferList" => [],
+                "guildOffer.SubmitOffer" => [],
+                "guildOffer.ReceiveOffer" => [],
+                "guildOffer.RefreshOffer" => [],
+                "guildbox.GetGuildBox" => [],
+                "guildbox.OpenBox" => [],
+                "guildbox.ReceiveBox" => [],
+                "guildbigactivity.GetInfo" => [],
+                "guildbigactivity.Join" => [],
+                "guildbigactivity.ReceiveReward" => [],
+                "guildofferrank.GetRankList" => [],
+                "guildofferrank.GetSelfRank" => [],
+                "guildbigactivityrank.GetRankList" => [],
+                "guildbigactivityrank.GetSelfRank" => [],
+                "guildtask.GetTaskList" => [],
+                "guildtask.GetTaskReward" => [],
+                "guildtask.TaskTrigger" => [],
+                // ── Teaching module (multiplayer teaching/mentoring system, offline mode not applicable) ──
+                "teachingsvr.TeachingInfo" => [],
+                "teachingsvr.MyTeacher" => [],
+                "teachingsvr.TeacherList" => [],
+                "teachingsvr.Apply" => [],
+                "teachingsvr.Agree" => [],
+                "teachingsvr.Refuse" => [],
+                "teachingsvr.Delete" => [],
+                "user.TeacherRank" => [],
+                "teachingsvr.Appraise" => [],
+                "teachingsvr.MyStudent" => [],
+                "teachingsvr.StudentList" => [],
+                "teachingsvr.PersonalInfo" => [],
+                "teachingsvr.Search" => [],
+                "teachingsvr.ApplyList" => [],
+                "teachingsvr.GetOtherInfo" => [],
+                "teachingsvr.TaskReward" => [],
+                // ── Match/Room/Multiplayer (multiplayer matchmaking and room system, offline mode not applicable) ──
+                "matchsvr.CreateRoom" => [],
+                "matchsvr.EnterRoom" => [],
+                "matchsvr.ExitRoom" => [],
+                "matchsvr.DismissRoom" => [],
+                "matchsvr.Ready" => [],
+                "matchsvr.Cancel" => [],
+                "matchsvr.Kick" => [],
+                "matchsvr.UploadTactic" => [],
+                "matchsvr.GetRoomList" => [],
+                "matchsvr.SwitchRoomPublicState" => [],
+                "matchsvr.Start" => [],
+                "match.UpdateRoomInfo" => [],
+                "match.pveMatchRoomTimeout" => [],
+                "room.GetRoomInfo" => [],
+                "room.CreateRoom" => [],
+                "room.EnterRoom" => [],
+                "room.ExitRoom" => [],
+                "room.DismissRoom" => [],
+                "room.Ready" => [],
+                "room.Cancel" => [],
+                "room.Kick" => [],
+                "room.Start" => [],
+                "room.GetRoomList" => [],
+                "room.SwitchRoomPublicState" => [],
+                "room.UploadTactic" => [],
+                "room.UpdateRoomInfo" => [],
+                // ── Battle Multiplayer (multiplayer battle system, offline mode not applicable) ──
+                "battle.CreateRoom" => [],
+                "battle.JoinRoom" => [],
+                "battle.MatchJoin" => [],
+                "battle.MatchLeave" => [],
+                "battle.createBattleInfo" => [],
+                "battle.LeaveRoom" => [],
+                // ── Copy module (remaining) ──
+                "copy.StarReward" => [],
+                "copy.FetchRewardBox" => [],
+                "copy.DeleteRecord" => [],
+                "copy.GetRecord" => [],
+                "copy.TacticOn" => [],
+                "copy.ChooseSfLv" => [],
+                "copy.PassMiniGame" => [],
+                "copy.PvpStartBase" => [],
+                "copy.DotBase" => [],
+                // ── CopyExtra ──
+                "copyextra.AddCopyRewardCount" => [],
+                "copyextra.UpdateCopyExtraInfo" => [],
+                // ── ArchiveCopy ──
+                "archiveCopy.ArchiveCopyData" => [],
+                "archiveCopy.UpdataArchiveCopy" => [],
+                "archiveCopy.IsLoad" => [],
+                // ── MopUp ──
+                "mopUp.GetMopUpData" => [],
+                "mopUp.StartSweep" => [],
+                "mopUp.CheckSweep" => [],
+                "mopUp.StopSweep" => [],
+                // ── Boss ──
+                "boss.GetBossData" => [],
+                "boss.UpdateBossData" => [],
+                "boss.GetBossUserDamageRankList" => [],
+                "boss.GetBossGuildDamageRankList" => [],
+                // ── Tower ──
+                "tower.GetTowerInfo" => [],
+                "tower.Receive" => [],
+                "tower.Replacement" => [],
+                "tower.ReceiveBuff" => [],
+                "tower.ResetChangeHeroIdList" => [],
+                "tower.Reset" => [],
+                "tower.SendUpgrade" => [],
+                // ── ActivityTower ──
+                "activityTower.GetActivityTower" => [],
+                "activityTower.ReceiveBuff" => [],
+                "activityTower.QuickPass" => [],
+                "activityTower.ActivityTower" => [],
+                "activityTower.Reset" => [],
+                // ── ActivityBattlePass ──
+                "activitybattlepass.GetActivityBattlePassInfo" => [],
+                "activitybattlepass.GetActivityBattlePassReward" => [],
+                "activitybattlepass.BuyActivityBattlePass" => [],
+                "activitybattlepass.BuyActivityBattlePassGold" => [],
+                "activitybattlepass.GetActivityBattlePassLevelReward" => [],
+                "activitybattlepass.GetActivityBattlePassTaskReward" => [],
+                // ── BattlePass ──
+                "battlepass.GetBattlePassInfo" => [],
+                "battlepass.GetBattlePassReward" => [],
+                "battlepass.BuyBattlePass" => [],
+                "battlepass.BuyBattlePassGold" => [],
+                "battlepass.GetBattlePassLevelReward" => [],
+                "battlepass.GetBattlePassTaskReward" => [],
+                // ── ActivityVideo ──
+                "activityVideo.SetActivityVideo" => [],
+                // ── ShipTask ──
+                "shiptask.GetShipTask" => [],
+                "shiptask.ShipTaskReward" => [],
+                "shiptask.ShipTaskTrigger" => [],
+                "shiptask.ShipTaskAllReward" => [],
+                // ── Exchange ──
+                "exchange.GetExchangeInfo" => [],
+                "exchange.Exchange" => [],
+                "exchange.GetExchange" => [],
+                // ── EquipActivity ──
+                "equipactivity.GetReward" => [],
+                "equipactivity.UpdateEquipActivityInfo" => [],
+                // ── EquipTestCopy ──
+                "equiptestcopy.GetEquipTestCopyInfo" => [],
+                "equiptestcopy.StartEquipTestCopy" => [],
+                "equiptestcopy.EndEquipTestCopy" => [],
+                "equiptestcopy.PassEquipTestCopy" => [],
+                // ── EquipNewTestCopy ──
+                "equipnewtestcopy.GetEquipNewTestCopyInfo" => [],
+                "equipnewtestcopy.StartEquipNewTestCopy" => [],
+                "equipnewtestcopy.EndEquipNewTestCopy" => [],
+                "equipnewtestcopy.PassEquipNewTestCopy" => [],
+                // ── GoodsCopy ──
+                "goodscopy.UpdateData" => [],
+                // ── WalkDogCopy ──
+                "walkdogcopy.UpdateData" => [],
+                // ── FoodCompose ──
+                "foodCompose.GetFoodComposeInfo" => [],
+                "foodCompose.ComposeFood" => [],
+                // ── MiniGame ──
+                "miniGame.StartMiniGame" => [],
+                // ── BigActivity ──
+                "bigactivity.GetBigActivityInfo" => [],
+                "bigactivity.GetBigActivityReward" => [],
+                "bigactivity.BigActivity" => [],
+                // ── InviteScore ──
+                "invitescore.GetInviteScore" => [],
+                "invitescore.GetInviteScoreReward" => [],
+                "invitescore.InviteScore" => [],
+                // ── TalentTree ──
+                "talentTree.GetTalentTree" => [],
+                "talentTree.TalentTreeLearn" => [],
+                "talentTree.TalentTreeUpgrade" => [],
+                "talentTree.TalentTreeReset" => [],
+                "talentTree.TalentTreeApply" => [],
+                "talentTree.TalentTreeTitle" => [],
+                // ── Jopen ──
+                "jopen.GetJopenInfo" => [],
+                "jopen.JopenStart" => [],
+                "jopen.JopenEnd" => [],
+                // ── Magazine ──
+                "magazine.GetMagazine" => [],
+                "magazine.MagazineBuy" => [],
+                "magazine.MagazineSell" => [],
+                "magazine.MagazineCompose" => [],
+                "magazine.MagazineEquip" => [],
+                "magazine.MagazineUnEquip" => [],
+                // ── InteractionItem ──
+                "interactionitem.GetInteractionItem" => [],
+                "interactionitem.InteractionItemBuy" => [],
+                "interactionitem.InteractionItemSell" => [],
+                "interactionitem.InteractionItemUse" => [],
+                "interactionitem.InteractionItemCompose" => [],
+                "interactionitem.InteractionItemEquip" => [],
+                "interactionitem.InteractionItemUnEquip" => [],
+                // ── Outpost ──
+                "outpost.GetOutpost" => [],
+                "outpost.OutpostStart" => [],
+                "outpost.OutpostEnd" => [],
+                "outpost.OutpostReceive" => [],
+                "outpost.OutpostSpeedUp" => [],
+                "outpost.OutpostSetHero" => [],
+                "outpost.OutpostChangeHero" => [],
+                "outpost.OutpostAll" => [],
+                // ── PlayerHeadFrame ──
+                "playerheadframe.RefreshPlayerHeadFrame" => [],
+                // ── Prefs ──
+                "prefs.SavePrefs" => [],
+                "prefs.UpdatePrefsInfo" => [],
+                // ── PresetFleet ──
+                "presetfleet.SetPresetFleets" => [],
+                "presetfleet.PresetFleetsInfo" => [],
+                // ── SportsMeet & SportsMeetRank ──
+                "sportsmeet.GetSportsMeet" => [],
+                "sportsmeet.SportsMeetStart" => [],
+                "sportsmeet.SportsMeetEnd" => [],
+                "sportsmeet.SportsMeetReceive" => [],
+                "sportsmeetrank.GetSportsMeetRank" => [],
+                "sportsmeetrank.SportsMeetRankReward" => [],
+                "sportsmeetrank.SportsMeetRankList" => [],
+                "sportsmeetrank.SportsMeetRankInfo" => [],
+                // ── SupportFleet ──
+                "supportfleet.GetSupportFleet" => [],
+                "supportfleet.SupportFleetSet" => [],
+                "supportfleet.SupportFleetStart" => [],
+                "supportfleet.SupportFleetEnd" => [],
+                // ── Alchemy ──
+                "alchemy.GetAlchemy" => [],
+                "alchemy.AlchemyStart" => [],
+                // ── Adventure ──
+                "adventure.GetAdventure" => [],
+                "adventure.AdventureStart" => [],
+                "adventure.AdventureEnd" => [],
+                // ── DailyCopy ──
+                "dailycopy.GetDailyCopy" => [],
+                "dailycopy.DailyCopyStart" => [],
+                "dailycopy.DailyCopyEnd" => [],
+                // ── SyncJson ──
+                "syncJson.GetSyncJson" => [],
+                // ── Update ──
+                "update.UpdateGameAdvList" => [],
+                "update.UpdateWebActivity" => [],
+                "update.UpdateGMAnswer" => [],
+                // ── User (remaining) ──
+                "user.Logoff" => [],
+                "user.BuyGold" => [],
+                "user.BuySupply" => [],
+                "user.BuyPvePt" => [],
+                "user.GetSupply" => [],
+                "user.Refresh" => [],
+                "user.SetUserOrderRecord" => [],
+                "user.KickInfo" => [],
+                "user.InitQueueInfo" => [],
+                "user.UpdateQueueInfo" => [],
+                "user.MedalReplaceReward" => [],
+                "user.NewHeadUnlock" => [],
+                "usersvr.GetOtherInfo" => [],
+                "user.GetMiniGameScoreRank" => [],
+                "user.GetMiniGameScore" => [],
+                "user.SetMiniGameScore" => [],
+                // ── Battle (PvP / auto msg) ──
+                "battle.pvpMatchReadyTimeout" => [],
+                "battle.pvpMatchReady" => [],
+                "battle.receiveAutoMsg" => [],
+                "battle.SendAutoMsg" => [],
                 _ => []
             };
         }
@@ -427,7 +932,7 @@ internal sealed partial class GameLoginMessageHandler
     private static HeroGrid ToHeroGrid(Hero hero) =>
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
             hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType,
-            hero.EquipSlots);
+            hero.EquipSlots, hero.Name, hero.Lock);
 
     /// <summary>
     /// 由舰娘 TemplateId（config_ship_main 的 key）推导图鉴 IllustrateId

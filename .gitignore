@@ -28,6 +28,7 @@ __pycache__/
 /tmp-server/
 /config-excel/
 /excel/
+/config-backup/
 
 # ---- Native build outputs and backups ----
 /native/bin-x86/
