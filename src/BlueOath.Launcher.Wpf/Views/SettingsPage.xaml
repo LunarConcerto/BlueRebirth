@@ -5,35 +5,15 @@
     <Grid>
         <Rectangle Fill="{StaticResource BgDarkBrush}" />
 
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <Grid Margin="24">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="24,16" MaxWidth="800">
 
-                <TextBlock Grid.Row="0" Text="设置"
-                           Style="{StaticResource TitleTextStyle}" FontSize="22" Margin="0,0,0,16" />
+                <TextBlock Text="设置" Style="{StaticResource TitleTextStyle}" FontSize="22" Margin="0,0,0,16" />
 
                 <!-- Game Client Path -->
-                <TextBlock Grid.Row="1" Text="游戏客户端目录" Style="{StaticResource BodyTextStyle}"
+                <TextBlock Text="游戏客户端目录" Style="{StaticResource BodyTextStyle}"
                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Grid.Row="2" Margin="0,0,0,8">
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -46,9 +26,9 @@
                 </Grid>
 
                 <!-- Server DLL Path -->
-                <TextBlock Grid.Row="3" Text="服务器 DLL 路径" Style="{StaticResource BodyTextStyle}"
+                <TextBlock Text="服务器 DLL 路径" Style="{StaticResource BodyTextStyle}"
                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Grid.Row="4" Margin="0,0,0,8">
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -61,15 +41,15 @@
                 </Grid>
 
                 <!-- Python Path -->
-                <TextBlock Grid.Row="5" Text="Python 可执行路径" Style="{StaticResource BodyTextStyle}"
+                <TextBlock Text="Python 可执行路径" Style="{StaticResource BodyTextStyle}"
                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <TextBox Grid.Row="6" Text="{Binding Settings.PythonPath, UpdateSourceTrigger=PropertyChanged}"
-                         Style="{StaticResource SettingTextBoxStyle}" Margin="0,0,0,8" />
+                <TextBox Text="{Binding Settings.PythonPath, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource SettingTextBoxStyle}" Margin="0,0,0,12" />
 
                 <!-- Injector Path -->
-                <TextBlock Grid.Row="7" Text="注入器路径" Style="{StaticResource BodyTextStyle}"
+                <TextBlock Text="注入器路径" Style="{StaticResource BodyTextStyle}"
                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Grid.Row="8" Margin="0,0,0,8">
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -82,9 +62,9 @@
                 </Grid>
 
                 <!-- Payload Path -->
-                <TextBlock Grid.Row="9" Text="Payload DLL 路径" Style="{StaticResource BodyTextStyle}"
+                <TextBlock Text="Payload DLL 路径" Style="{StaticResource BodyTextStyle}"
                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Grid.Row="10" Margin="0,0,0,8">
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -97,9 +77,9 @@
                 </Grid>
 
                 <!-- Proxy Script Path -->
-                <TextBlock Grid.Row="11" Text="代理脚本路径" Style="{StaticResource BodyTextStyle}"
+                <TextBlock Text="代理脚本路径" Style="{StaticResource BodyTextStyle}"
                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Grid.Row="12" Margin="0,0,0,8">
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -112,9 +92,9 @@
                 </Grid>
 
                 <!-- Data Root -->
-                <TextBlock Grid.Row="13" Text="数据目录" Style="{StaticResource BodyTextStyle}"
+                <TextBlock Text="数据目录" Style="{StaticResource BodyTextStyle}"
                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Grid.Row="14" Margin="0,0,0,8">
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -127,9 +107,9 @@
                 </Grid>
 
                 <!-- Baseline Path -->
-                <TextBlock Grid.Row="15" Text="基线文件路径" Style="{StaticResource BodyTextStyle}"
+                <TextBlock Text="基线文件路径" Style="{StaticResource BodyTextStyle}"
                            Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Grid.Row="16" Margin="0,0,0,8">
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -142,7 +122,7 @@
                 </Grid>
 
                 <!-- Region + Ports Row -->
-                <Grid Grid.Row="17" Margin="0,0,0,8">
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
@@ -172,7 +152,7 @@
                 </Grid>
 
                 <!-- Checkboxes -->
-                <StackPanel Grid.Row="18" Orientation="Horizontal" Margin="0,0,0,8">
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
                     <CheckBox IsChecked="{Binding Settings.SkipBuild}" Foreground="{StaticResource TextSecondaryBrush}"
                               Content="跳过构建" Margin="0,0,20,0" />
                     <CheckBox IsChecked="{Binding Settings.KeepLog}" Foreground="{StaticResource TextSecondaryBrush}"
@@ -180,11 +160,11 @@
                 </StackPanel>
 
                 <!-- Validation -->
-                <TextBlock Grid.Row="19" Text="{Binding ValidationMessage}" FontSize="12"
+                <TextBlock Text="{Binding ValidationMessage}" FontSize="12"
                            Foreground="{StaticResource SuccessBrush}" Margin="0,0,0,8" />
 
                 <!-- Buttons -->
-                <StackPanel Grid.Row="20" Orientation="Horizontal" Margin="0,0,0,16">
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
                     <Button Content="保存设置" Style="{StaticResource PrimaryLaunchButtonStyle}"
                             Width="140" Height="36" FontSize="14" Command="{Binding SaveCommand}" />
                     <Button Content="恢复默认" Style="{StaticResource SecondaryButtonStyle}"
@@ -193,7 +173,7 @@
                             Width="100" Height="36" FontSize="13" Command="{Binding BackCommand}" Margin="12,0,0,0" />
                 </StackPanel>
 
-            </Grid>
+            </StackPanel>
         </ScrollViewer>
     </Grid>
 </UserControl>

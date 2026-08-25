@@ -1,0 +1,239 @@
+using System.Diagnostics;
+using System.Text.Json;
+
+var root = FindRoot();
+var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+var outputArg = args.FirstOrDefault(a => a.StartsWith("--output=", StringComparison.OrdinalIgnoreCase));
+var outputDir = outputArg is not null
+    ? outputArg[9..]
+    : Path.Combine(root, "release", stamp);
+
+var skipBuild = args.Contains("--skip-build", StringComparer.OrdinalIgnoreCase);
+var skipNative = args.Contains("--skip-native", StringComparer.OrdinalIgnoreCase);
+
+Console.WriteLine($"=== Blue Oath Release Publisher ===");
+Console.WriteLine($"  Output: {outputDir}");
+Console.WriteLine();
+
+Directory.CreateDirectory(outputDir);
+
+// Step 1: Build native components (product config)
+if (!skipNative)
+{
+    Console.WriteLine("[1/5] Building native components (product)...");
+    var buildNativePs1 = Path.Combine(root, "tools", "build-native.ps1");
+    if (!File.Exists(buildNativePs1))
+    {
+        Console.Error.WriteLine("  ERROR: build-native.ps1 not found");
+        return 1;
+    }
+    var psi = new ProcessStartInfo("powershell")
+    {
+        Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{buildNativePs1}\"",
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true
+    };
+    var proc = Process.Start(psi)!;
+    proc.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine($"  {e.Data}"); };
+    proc.ErrorDataReceived += (s, e) => { if (e.Data != null) Console.Error.WriteLine($"  {e.Data}"); };
+    proc.BeginOutputReadLine();
+    proc.BeginErrorReadLine();
+    await proc.WaitForExitAsync();
+    if (proc.ExitCode != 0)
+    {
+        Console.Error.WriteLine("  Native build failed.");
+        return 1;
+    }
+    Console.WriteLine("  Native build OK.");
+}
+else
+{
+    Console.WriteLine("[1/5] Native build skipped.");
+}
+
+// Step 2: Publish server
+if (!skipBuild)
+{
+    Console.WriteLine("[2/5] Publishing server...");
+    var serverProj = Path.Combine(root, "src", "BlueOath.Server", "BlueOath.Server.csproj");
+    var serverOutput = Path.Combine(outputDir, "server");
+    var psi = new ProcessStartInfo("dotnet")
+    {
+        Arguments = $"publish \"{serverProj}\" -c Release -o \"{serverOutput}\" --no-restore",
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true
+    };
+    var proc = Process.Start(psi)!;
+    proc.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine($"  {e.Data}"); };
+    proc.ErrorDataReceived += (s, e) => { if (e.Data != null) Console.Error.WriteLine($"  {e.Data}"); };
+    proc.BeginOutputReadLine();
+    proc.BeginErrorReadLine();
+    await proc.WaitForExitAsync();
+    if (proc.ExitCode != 0)
+    {
+        Console.Error.WriteLine("  Server publish failed.");
+        return 1;
+    }
+    Console.WriteLine("  Server publish OK.");
+}
+else
+{
+    Console.WriteLine("[2/5] Server publish skipped.");
+}
+
+// Step 3: Publish WPF launcher
+if (!skipBuild)
+{
+    Console.WriteLine("[3/5] Publishing WPF launcher...");
+    var launcherProj = Path.Combine(root, "src", "BlueOath.Launcher.Wpf", "BlueOath.Launcher.Wpf.csproj");
+    var launcherOutput = Path.Combine(outputDir, "launcher");
+    var psi = new ProcessStartInfo("dotnet")
+    {
+        Arguments = $"publish \"{launcherProj}\" -c Release -o \"{launcherOutput}\" --no-restore",
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true
+    };
+    var proc = Process.Start(psi)!;
+    proc.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine($"  {e.Data}"); };
+    proc.ErrorDataReceived += (s, e) => { if (e.Data != null) Console.Error.WriteLine($"  {e.Data}"); };
+    proc.BeginOutputReadLine();
+    proc.BeginErrorReadLine();
+    await proc.WaitForExitAsync();
+    if (proc.ExitCode != 0)
+    {
+        Console.Error.WriteLine("  Launcher publish failed.");
+        return 1;
+    }
+    Console.WriteLine("  Launcher publish OK.");
+}
+else
+{
+    Console.WriteLine("[3/5] Launcher publish skipped.");
+}
+
+// Step 4: Copy runtime files
+Console.WriteLine("[4/5] Copying runtime files...");
+
+// Native components
+var nativeSrc = Path.Combine(root, "native", "bin-x86");
+var nativeDst = Path.Combine(outputDir, "native");
+Directory.CreateDirectory(nativeDst);
+CopyIfExists(Path.Combine(nativeSrc, "BlueOath.Injector.exe"), nativeDst);
+CopyIfExists(Path.Combine(nativeSrc, "BlueOath.Payload.dll"), nativeDst);
+CopyIfExists(Path.Combine(root, "native", "bootstrap.ini"), nativeDst);
+
+// TLS proxy script
+var toolsDst = Path.Combine(outputDir, "tools");
+Directory.CreateDirectory(toolsDst);
+CopyIfExists(Path.Combine(root, "tools", "tls-loopback-proxy.py"), toolsDst);
+
+// Runtime data
+var dataSrc = Path.Combine(root, "runtime", "jp");
+var dataDst = Path.Combine(outputDir, "runtime", "jp");
+Directory.CreateDirectory(dataDst);
+if (Directory.Exists(dataSrc))
+{
+    foreach (var file in Directory.GetFiles(dataSrc))
+        File.Copy(file, Path.Combine(dataDst, Path.GetFileName(file)), true);
+    foreach (var dir in Directory.GetDirectories(dataSrc))
+        CopyDirectory(dir, Path.Combine(dataDst, Path.GetFileName(dir)));
+}
+
+Console.WriteLine("  Runtime files copied.");
+
+// Step 5: Generate launcher settings
+Console.WriteLine("[5/5] Generating launcher settings...");
+
+// Move launcher exe to root and clean up
+var launcherDir = Path.Combine(outputDir, "launcher");
+var launcherExe = Path.Combine(launcherDir, "BlueOath.Launcher.Wpf.exe");
+var rootExe = Path.Combine(outputDir, "BlueOath.Launcher.Wpf.exe");
+if (File.Exists(launcherExe) && !File.Exists(rootExe))
+{
+    File.Move(launcherExe, rootExe);
+    // Move all other files from launcher dir to root
+    foreach (var file in Directory.GetFiles(launcherDir))
+    {
+        var dest = Path.Combine(outputDir, Path.GetFileName(file));
+        if (!File.Exists(dest))
+            File.Move(file, dest);
+    }
+    foreach (var dir in Directory.GetDirectories(launcherDir))
+    {
+        CopyDirectory(dir, Path.Combine(outputDir, Path.GetFileName(dir)));
+    }
+    Directory.Delete(launcherDir, true);
+}
+
+var settings = new
+{
+    gameClientPath = "..\\..\\blueoath\\blueoath",
+    serverDllPath = "server\\BlueOath.Server.dll",
+    pythonPath = "python",
+    injectorPath = "native\\BlueOath.Injector.exe",
+    payloadPath = "native\\BlueOath.Payload.dll",
+    proxyScriptPath = "tools\\tls-loopback-proxy.py",
+    dataRoot = "runtime\\jp",
+    baselinePath = "..\\..\\baseline.json",
+    region = "jp",
+    serverPort = 0,
+    gameLoginPort = 7201,
+    gmPort = 9780,
+    skipBuild = true,
+    keepLog = false
+};
+
+var settingsPath = Path.Combine(outputDir, "launcher-settings.json");
+var jsonOptions = new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings, jsonOptions));
+Console.WriteLine($"  Settings written to {settingsPath}");
+
+// Create start batch
+var batchPath = Path.Combine(outputDir, "启动游戏.bat");
+File.WriteAllText(batchPath, "@echo off\r\ncd /d \"%~dp0\"\r\nstart \"\" \"BlueOath.Launcher.Wpf.exe\"\r\n");
+Console.WriteLine($"  Start script: {batchPath}");
+
+Console.WriteLine();
+Console.WriteLine("=== Publish complete ===");
+Console.WriteLine($"  Output: {outputDir}");
+return 0;
+
+static string FindRoot()
+{
+    var current = new DirectoryInfo(AppContext.BaseDirectory);
+    while (current is not null)
+    {
+        if (Directory.Exists(Path.Combine(current.FullName, "blueoath")))
+            return current.FullName;
+        current = current.Parent;
+    }
+    return Environment.CurrentDirectory;
+}
+
+static void CopyIfExists(string src, string dstDir)
+{
+    if (File.Exists(src))
+    {
+        File.Copy(src, Path.Combine(dstDir, Path.GetFileName(src)), true);
+        Console.WriteLine($"  Copied: {Path.GetFileName(src)}");
+    }
+    else
+    {
+        Console.WriteLine($"  WARNING: not found: {src}");
+    }
+}
+
+static void CopyDirectory(string src, string dst)
+{
+    Directory.CreateDirectory(dst);
+    foreach (var file in Directory.GetFiles(src))
+        File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
+    foreach (var dir in Directory.GetDirectories(src))
+        CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
+}

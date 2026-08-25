@@ -29,6 +29,7 @@ __pycache__/
 /config-excel/
 /excel/
 /config-backup/
+/release/
 
 # ---- Native build outputs and backups ----
 /native/bin-x86/
