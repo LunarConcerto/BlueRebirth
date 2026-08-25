@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using BlueOath.Launcher.Wpf.Services;
@@ -19,15 +18,7 @@ public partial class MainWindow : Window
         var rootDir = FindRoot();
         var settingsService = new SettingsService();
         var settings = settingsService.Load();
-        var localExecutable = Process.GetCurrentProcess().MainModule?.FileName ?? Path.Combine(rootDir, "BlueOath.Launcher.Wpf.exe");
-        var updateService = new LauncherUpdateService(rootDir, settings.UpdateManifestUrl, settings.AutoUpdateEnabled);
-
-        Loaded += async (_, _) =>
-        {
-            var shouldExitForUpdate = await updateService.TrySelfUpdateAsync(this, localExecutable);
-            if (shouldExitForUpdate) return;
-            InitializeViews(rootDir, settingsService, settings);
-        };
+        InitializeViews(rootDir, settingsService, settings);
     }
 
     private void InitializeViews(string rootDir, SettingsService settingsService, BlueOath.Launcher.Wpf.Models.SettingsConfig settings)

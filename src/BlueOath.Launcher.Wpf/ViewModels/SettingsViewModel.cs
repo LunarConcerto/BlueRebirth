@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using BlueOath.Launcher.Wpf.Models;
 using BlueOath.Launcher.Wpf.Services;
 
@@ -15,6 +16,7 @@ public class SettingsViewModel : ViewModelBase
     private SettingsConfig _settings;
     private string _validationMessage = "";
     private string _updateStatus = "尚未检测更新";
+    private Brush _updateStatusBrush = Brushes.Gray;
 
     public SettingsConfig Settings
     {
@@ -32,6 +34,12 @@ public class SettingsViewModel : ViewModelBase
     {
         get => _updateStatus;
         set => SetProperty(ref _updateStatus, value);
+    }
+
+    public Brush UpdateStatusBrush
+    {
+        get => _updateStatusBrush;
+        set => SetProperty(ref _updateStatusBrush, value);
     }
 
     public string CurrentVersion => VersionInfo.Version;
@@ -80,6 +88,7 @@ public class SettingsViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(Settings.UpdateManifestUrl))
         {
             UpdateStatus = "未配置更新地址";
+            UpdateStatusBrush = Brushes.Red;
             return;
         }
 
@@ -89,12 +98,31 @@ public class SettingsViewModel : ViewModelBase
             var rootDir = AppContext.BaseDirectory;
             var executablePath = Path.Combine(rootDir, "BlueOath.Launcher.Wpf.exe");
             var updateService = new LauncherUpdateService(rootDir, Settings.UpdateManifestUrl, true);
-            var updateStarted = await updateService.TrySelfUpdateAsync(Application.Current.MainWindow, executablePath);
-            UpdateStatus = updateStarted ? "正在准备更新..." : "当前已是最新版本或暂时无法连接更新服务";
+            var result = await updateService.TrySelfUpdateAsync(Application.Current.MainWindow, executablePath);
+            switch (result)
+            {
+                case UpdateCheckResult.UpToDate:
+                    UpdateStatus = "当前已是最新版";
+                    UpdateStatusBrush = Brushes.Gray;
+                    break;
+                case UpdateCheckResult.Updating:
+                    UpdateStatus = "正在准备更新...";
+                    UpdateStatusBrush = Brushes.Gray;
+                    break;
+                case UpdateCheckResult.Cancelled:
+                    UpdateStatus = "已取消更新";
+                    UpdateStatusBrush = Brushes.Gray;
+                    break;
+                default:
+                    UpdateStatus = "无法连接更新服务";
+                    UpdateStatusBrush = Brushes.Red;
+                    break;
+            }
         }
         catch (Exception ex)
         {
             UpdateStatus = $"更新检测失败：{ex.Message}";
+            UpdateStatusBrush = Brushes.Red;
         }
     }
 
