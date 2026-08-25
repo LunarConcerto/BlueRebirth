@@ -270,15 +270,27 @@ internal sealed class HeroService(GameServices services)
         List<PSkillEntry> skills = (hero.PSkills ?? []).ToList();
         int skillIdx = skills.FindIndex(s => s.PSkillId == skillId);
 
+        Console.WriteLine(skillIdx);
+
         if (skillIdx < 0)
-            skills.Add(new PSkillEntry((uint)skillId, Level: 1));
+            skills.Add(new PSkillEntry((uint)skillId, level: 1));
         else
-            skills[skillIdx] = skills[skillIdx] with { Level = skills[skillIdx].Level + 1 };
+            skills[skillIdx].Level += 1;
 
         heroList[heroIdx] = hero with { PSkills = skills };
         account = account with { Dock = dock with { Heroes = heroList } };
 
         await services.SaveAccountAsync(account, ct);
-        return [];
+        byte[] ret = EncodeStudySkillRet(heroId, skillId);
+        return ret;
+    }
+
+    /// <summary>编码 hero.StudySkill 响应 (THeroSkill): HeroId(1, uint32), SkillId(2, int32)。</summary>
+    private static byte[] EncodeStudySkillRet(uint heroId, int skillId)
+    {
+        using var ms = new System.IO.MemoryStream();
+        if (heroId != 0) { ms.WriteByte(0x08); ProtocolPackage.WriteVarint(ms, heroId); }
+        if (skillId != 0) { ms.WriteByte(0x10); ProtocolPackage.WriteVarint(ms, unchecked((ulong)skillId)); }
+        return ms.ToArray();
     }
 }

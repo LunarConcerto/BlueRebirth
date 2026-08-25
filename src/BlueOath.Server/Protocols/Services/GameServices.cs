@@ -67,12 +67,11 @@ internal sealed class GameServices
     /// <summary>时装 FashionTid → SfId 映射。</summary>
     internal IReadOnlyDictionary<int, int> FashionSfIdMap => _fashionSfIdMap;
 
-    /// <summary>持久化账号（供各模块修改后落盘）。同时更新内存缓存。DB 写入异步执行不阻塞响应。</summary>
-    internal Task SaveAccountAsync(PlayerAccount account, CancellationToken ct = default)
+    /// <summary>持久化账号（供各模块修改后落盘）。同时更新内存缓存。</summary>
+    internal async Task SaveAccountAsync(PlayerAccount account, CancellationToken ct = default)
     {
         _accountCache[account.ProfileId] = account;
-        _ = _repo.SaveAccountAsync(account, ct);
-        return Task.CompletedTask;
+        await _repo.SaveAccountAsync(account, ct);
     }
 
     /// <summary>抽卡模板配置（供 BuildShipService）。</summary>
@@ -470,14 +469,37 @@ internal sealed class GameServices
         return account with { Dock = dock with { Heroes = heroes }, Equip = equip with { Items = equipItems } };
     }
 
-    /// <summary>从 config_ship_main.pskill_show_id 创建默认技能列表（Level=1）。</summary>
+    /// <summary>从 config_ship_main 读取默认技能列表（匹配客户端 GetAllPSkillArrbyShipMainId：pskill_show_id + direct_activate_talent_id + condition_activate_talent_id）。Level=1。</summary>
     internal static List<PSkillEntry> CreateDefaultPSkills(int templateId)
     {
         var skills = new List<PSkillEntry>();
-        if (ShipMainLoader.Get(templateId) is { PskillShowId: { Count: > 0 } psIds })
-            foreach (long psId in psIds)
-                if (psId > 0)
-                    skills.Add(new PSkillEntry((uint)psId, Level: 1));
+        var cfg = ShipMainLoader.Get(templateId);
+        if (cfg is null) return skills;
+
+        var allIds = new List<long>();
+
+        // pskill_show_id
+        if (cfg.PskillShowId is { Count: > 0 } psIds)
+            allIds.AddRange(psIds);
+
+        // direct_activate_talent_id
+        if (cfg.DirectActivateTalentId is { Count: > 0 } daIds)
+            allIds.AddRange(daIds);
+
+        // condition_activate_talent_id
+        if (cfg.ConditionActivateTalentId is { Count: > 0 } caIds)
+            foreach (var obj in caIds)
+            {
+                if (obj is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    allIds.Add(je.GetInt64());
+                else if (obj is long l)
+                    allIds.Add(l);
+            }
+
+        foreach (long psId in allIds)
+            if (psId > 0)
+                skills.Add(new PSkillEntry((uint)psId, level: 1));
+
         return skills;
     }
 

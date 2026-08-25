@@ -3,11 +3,27 @@ using System.Text;
 namespace BlueOath.Protocol;
 
 /// <summary>单个技能记录（PSkillId → Level/Exp）。</summary>
-public sealed record PSkillEntry(
-    uint PSkillId,
-    uint PSkillExp = 0,
-    int Level = 0,
-    int Replace = 0);
+public sealed class PSkillEntry
+{
+    public uint PSkillId { get; set; }
+    public uint PSkillExp { get; set; }
+    public int Level { get; set; }
+    public int Replace { get; set; }
+
+    public PSkillEntry() { }
+    public PSkillEntry(uint pSkillId, uint pSkillExp = 0, int level = 0, int replace = 0)
+    {
+        PSkillId = pSkillId;
+        PSkillExp = pSkillExp;
+        Level = level;
+        Replace = replace;
+    }
+
+    public override string ToString() {
+        return
+            $"{nameof(PSkillId)}: {PSkillId}, {nameof(PSkillExp)}: {PSkillExp}, {nameof(Level)}: {Level}, {nameof(Replace)}: {Replace}";
+    }
+}
 
 /// <summary>
 /// Resources consumed by a single build formula. Currently empty; extend with the
@@ -330,23 +346,20 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         WriteVarintField(output, 5, unchecked((ulong)value.Exp));
         if (value.CreateTime != 0) WriteVarintField(output, 8, unchecked((ulong)value.CreateTime));
         if (value.CurHp != 0) WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
-        // PSkill (field 13, repeated TMapFiledPSkillExp)：编码实际技能数据。
-        if (value.PSkills is { Count: > 0 })
+        // PSkill (field 13, repeated TMapFiledPSkillExp)：编码所有实际技能数据。
+        if (value.PSkills is { Count: > 0 } skills)
         {
-            foreach (PSkillEntry sk in value.PSkills)
+            foreach (PSkillEntry sk in skills)
             {
-                using MemoryStream ps = new();
-                WriteVarintField(ps, 1, sk.PSkillId != 0 ? sk.PSkillId : 41210);
-                WriteVarintField(ps, 2, sk.PSkillExp);
-                WriteVarintField(ps, 3, unchecked((ulong)(sk.Level != 0 ? sk.Level : 1)));
-                WriteVarintField(ps, 4, unchecked((ulong)sk.Replace));
-                byte[] psb = ps.ToArray();
-                WriteMessage(output, 13, psb);
+                uint psId = sk.PSkillId != 0 ? sk.PSkillId : 41210;
+                byte[] psBody = BuildPSkillBytes(psId, sk.PSkillExp, sk.Level, sk.Replace);
+                WriteVarint(output, 0x6A);
+                WriteVarint(output, (ulong)psBody.Length);
+                output.Write(psBody);
             }
         }
         else
         {
-            // 无技能数据时编码一个 dummy PSkill，避免 nil 导致崩溃
             output.Write(new byte[] { 0x6A, 0x0A, 0x08, 0xFA, 0xC1, 0x02, 0x10, 0x00, 0x18, 0x00, 0x20, 0x00 });
         }
         if (value.Affection != 0) WriteVarintField(output, 17, unchecked((ulong)value.Affection));
@@ -644,12 +657,26 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         output.WriteByte((byte)value);
     }
 
-    private static void WriteStringField(Stream output, int field, string value)
+private static void WriteStringField(Stream output, int field, string value)
     {
         var bytes = System.Text.Encoding.UTF8.GetBytes(value);
         WriteVarint(output, (ulong)((field << 3) | 2));
         WriteVarint(output, (ulong)bytes.Length);
         output.Write(bytes);
+    }
+
+private static byte[] BuildPSkillBytes(uint psId, uint exp, int level, int replace)
+    {
+        using var ms = new MemoryStream();
+        WriteVarint(ms, 0x08);
+        WriteVarint(ms, psId);
+        WriteVarint(ms, 0x10);
+        WriteVarint(ms, exp);
+        WriteVarint(ms, 0x18);
+        WriteVarint(ms, unchecked((ulong)(level > 0 ? level : 1)));
+        WriteVarint(ms, 0x20);
+        WriteVarint(ms, unchecked((ulong)replace));
+        return ms.ToArray();
     }
 
     /// <summary>Encode building.UpdateBuildingInfo push (TUserBuildingInfo).</summary>

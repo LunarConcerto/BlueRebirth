@@ -21,11 +21,12 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     PostPushes = await services.BuildPostEquipPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
                 };
                 break;
-            case "hero.AddExp":
-                result = await UpdateHero(ctx, await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct));
-                break;
             case "hero.Marry":
-                result = await UpdateHero(ctx, await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct));
+            case "hero.AddExp":
+                byte[] ret = request.Method == "hero.AddExp" ?
+                    await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct) :
+                    await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
+                result = await UpdateHero(ctx, ret);
                 break;
             case "hero.LockHero":
                 result = ModuleResult.Ok(await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
