@@ -21,12 +21,13 @@ internal sealed class LauncherUpdateService
     public LauncherUpdateService(string rootDir, string manifestUrl, bool enabled)
     {
         _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("BlueOath-Launcher/1.0");
         _rootDir = rootDir;
         _manifestUrl = manifestUrl;
         _enabled = enabled;
     }
 
-    public async Task<bool> TrySelfUpdateAsync(Window owner, string localExecutable, CancellationToken cancellationToken = default)
+    public async Task<bool> TrySelfUpdateAsync(Window? owner, string localExecutable, CancellationToken cancellationToken = default)
     {
         if (!_enabled || string.IsNullOrWhiteSpace(_manifestUrl))
             return false;
@@ -118,11 +119,39 @@ internal sealed class LauncherUpdateService
             using var response = await _httpClient.GetAsync(_manifestUrl, cancellationToken);
             if (!response.IsSuccessStatusCode) return null;
 
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            return await JsonSerializer.DeserializeAsync<LauncherUpdateManifest>(
-                stream,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true },
-                cancellationToken);
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("tag_name", out var tagName))
+            {
+                var packageUrl = string.Empty;
+                if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var asset in assets.EnumerateArray())
+                    {
+                        var assetName = asset.TryGetProperty("name", out var name) ? name.GetString() : null;
+                        if (assetName?.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) == true &&
+                            asset.TryGetProperty("browser_download_url", out var downloadUrl))
+                        {
+                            packageUrl = downloadUrl.GetString() ?? string.Empty;
+                            break;
+                        }
+                    }
+                }
+
+                return new LauncherUpdateManifest
+                {
+                    Version = tagName.GetString(),
+                    PackageUrl = packageUrl,
+                    ReleaseNotes = root.TryGetProperty("body", out var body) ? body.GetString() : null,
+                    ExecutableName = "BlueOath.Launcher.Wpf.exe"
+                };
+            }
+
+            return JsonSerializer.Deserialize<LauncherUpdateManifest>(
+                json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         }
         catch
         {

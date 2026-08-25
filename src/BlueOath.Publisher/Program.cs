@@ -12,6 +12,10 @@ var configurationArgIndex = Array.FindIndex(args, a => a.Equals("--configuration
 var configuration = configurationArgIndex >= 0
     ? GetOptionValue(args, configurationArgIndex, "--configuration")
     : "Release";
+var updateManifestArgIndex = Array.FindIndex(args, a => a.Equals("--update-manifest-url", StringComparison.OrdinalIgnoreCase) || a.StartsWith("--update-manifest-url=", StringComparison.OrdinalIgnoreCase));
+var updateManifestUrl = updateManifestArgIndex >= 0
+    ? GetOptionValue(args, updateManifestArgIndex, "--update-manifest-url")
+    : string.Empty;
 if (!string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase) &&
     !string.Equals(configuration, "Release", StringComparison.OrdinalIgnoreCase))
 {
@@ -218,7 +222,7 @@ var settings = new
     proxyScriptPath = "tools\\tls-loopback-proxy.py",
     dataRoot = "runtime\\jp",
     baselinePath = "baseline.json",
-    updateManifestUrl = "",
+    updateManifestUrl,
     autoUpdateEnabled = true,
     region = "jp",
     serverPort = 0,

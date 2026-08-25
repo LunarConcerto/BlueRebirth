@@ -16,12 +16,12 @@
 
 ## 配置字段（`launcher-settings.json`）
 
-- `updateManifestUrl`：版本清单地址（当前暂时建议直接使用 GitHub Raw，后续可切到国内镜像站）
+- `updateManifestUrl`：版本清单地址；当前 Release CI 使用 GitHub Releases API，后续可切到国内镜像站
 - `autoUpdateEnabled`：是否开启自动更新检测
 
 ## 清单文件格式
 
-清单使用 JSON，字段如下：
+清单使用 JSON，字段如下；启动器同时兼容自定义清单和 GitHub `releases/latest` API 响应：
 
 ```json
 {
@@ -36,8 +36,8 @@
 ## 建议镜像策略（国内访问）
 
 1. 当前可直接使用 GitHub：
-   - `updateManifestUrl` 指向 GitHub Raw：`https://raw.githubusercontent.com/BlueRebirth/BlueRebirth/main/spec/docs/launcher-update-manifest.json`
-   - `packageUrl` 指向 GitHub Releases 下载页直链；
+   - `updateManifestUrl` 指向 GitHub Releases API：`https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/latest`
+   - 启动器自动从最新 Release 的 ZIP asset 中读取 `browser_download_url`；
 2. 如后续需要国内镜像站，仅需修改清单地址与下载地址即可，无需改代码；
 3. 建议统一通过同一个域名承载清单和安装包，减少域名切换维护成本。
 
@@ -73,7 +73,7 @@
 
 ```json
 {
-  "updateManifestUrl": "https://raw.githubusercontent.com/BlueRebirth/BlueRebirth/main/spec/docs/launcher-update-manifest.json",
+  "updateManifestUrl": "https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/latest",
   "autoUpdateEnabled": true
 }
 ```

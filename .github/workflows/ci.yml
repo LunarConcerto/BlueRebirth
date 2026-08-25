@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
@@ -63,7 +63,7 @@ jobs:
         run: |
           $OutputDir = Join-Path $env:RUNNER_TEMP ("BlueOath-Release-" + $env:GITHUB_RUN_NUMBER)
           New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- "--output=$OutputDir\BlueOath-Release" "--configuration=Release"
+          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- "--output=$OutputDir\BlueOath-Release" "--configuration=Release" "--update-manifest-url=https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/latest"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $bundleDir = Join-Path $OutputDir "BlueOath-Release"
           if (-not (Test-Path (Join-Path $bundleDir "launcher-settings.json"))) {
@@ -81,6 +81,29 @@ jobs:
           name: launcher-bundle-${{ github.run_number }}
           path: ${{ runner.temp }}/BlueOath-Release-${{ github.run_number }}/BlueOath-Release
           if-no-files-found: error
+
+      - name: Prepare GitHub Release package
+        id: release_meta
+        shell: pwsh
+        run: |
+          $tagName = if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $env:GITHUB_REF_NAME
+          } else {
+            "v1.0.$env:GITHUB_RUN_NUMBER"
+          }
+          $bundleDir = Join-Path $env:RUNNER_TEMP "BlueOath-Release-$env:GITHUB_RUN_NUMBER\BlueOath-Release"
+          $packagePath = Join-Path $env:RUNNER_TEMP "BlueOath-Release-$env:GITHUB_RUN_NUMBER\BlueOath-Release-$tagName.zip"
+          Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $packagePath -Force
+          "tag_name=$tagName" >> $env:GITHUB_OUTPUT
+          "package_path=$packagePath" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag_name }}
+          name: BlueOath ${{ steps.release_meta.outputs.tag_name }}
+          generate_release_notes: true
+          files: ${{ steps.release_meta.outputs.package_path }}
 
   publish_debug:
     name: Publish Launcher Bundle (Debug)
