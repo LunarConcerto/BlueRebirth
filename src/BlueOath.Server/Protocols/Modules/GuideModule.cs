@@ -6,7 +6,7 @@ namespace BlueOath.Server.Protocols;
 /// <summary>引导模块：guide.*（PlotReward / Setting）。</summary>
 internal sealed class GuideModule(GameServices services) : IGameModule
 {
-    public string Prefix => "guide";
+    public IReadOnlyList<string> Prefixes => ["guide"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {

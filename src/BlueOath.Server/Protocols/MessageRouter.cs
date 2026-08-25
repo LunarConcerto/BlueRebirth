@@ -32,7 +32,8 @@ internal sealed class MessageRouter
             Ct = ct,
             Services = _services,
         };
-        var module = _modules.FirstOrDefault(m => request.Method.StartsWith(m.Prefix + ".", StringComparison.Ordinal));
+        var module = _modules.FirstOrDefault(m =>
+            m.Prefixes.Any(p => request.Method.StartsWith(p + ".", StringComparison.Ordinal)));
         return (module ?? _stub).HandleAsync(ctx, request);
     }
 }

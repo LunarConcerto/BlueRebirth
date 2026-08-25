@@ -6,7 +6,7 @@ namespace BlueOath.Server.Protocols;
 /// <summary>关卡/战斗模块：copy.* / copyinfo.* / battle.*。</summary>
 internal sealed class CopyModule(BattleService battle) : IGameModule
 {
-    public string Prefix => "copy";
+    public IReadOnlyList<string> Prefixes => ["copy", "copyinfo", "battle"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {

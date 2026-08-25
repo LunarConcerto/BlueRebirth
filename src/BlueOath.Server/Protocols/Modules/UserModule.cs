@@ -6,7 +6,7 @@ namespace BlueOath.Server.Protocols;
 /// <summary>玩家模块：user.*（登录/信息/档案更新）。</summary>
 internal sealed class UserModule(UserService user, GameServices services) : IGameModule
 {
-    public string Prefix => "user";
+    public IReadOnlyList<string> Prefixes => ["user"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {

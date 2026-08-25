@@ -214,6 +214,10 @@ public sealed record GmMailConfig(ulong Mid, int CurrencyType, int Num, string S
 /// <summary>GM 邮件配置集合。</summary>
 public sealed record GmMailsConfig(IReadOnlyList<GmMailConfig> Mails);
 
+public enum GmMailType {
+    Currency, Item
+}
+
 /// <summary>单个编队条目（TTactic）。</summary>
 public sealed record FleetEntry(
     int ModeId,

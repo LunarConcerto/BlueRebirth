@@ -7,7 +7,7 @@ namespace BlueOath.Server.Protocols;
 /// <summary>抽卡模块：buildship.*（BuildShip / BuildShipInfo / BuildShipBox / BuildShipReward）。</summary>
 internal sealed class BuildShipModule(BuildShipService buildShip, GameServices services) : IGameModule
 {
-    public string Prefix => "buildship";
+    public IReadOnlyList<string> Prefixes => ["buildship"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {

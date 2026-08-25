@@ -6,7 +6,7 @@ namespace BlueOath.Server.Protocols;
 /// <summary>时装模块：fashion.*（Equip / updateData / fashionReplaceReward）。</summary>
 internal sealed class FashionModule(GameServices services) : IGameModule
 {
-    public string Prefix => "fashion";
+    public IReadOnlyList<string> Prefixes => ["fashion"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {

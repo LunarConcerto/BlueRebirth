@@ -22,7 +22,8 @@ var tests = new (string Name, Func<Task> Run)[]
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
-    ("protobuf login server creates a local profile", GameLoginIntegrationTest)];
+    ("protobuf login server creates a local profile", GameLoginIntegrationTest),
+    ("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -282,6 +283,94 @@ static async Task GameLoginIntegrationTest()
         if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
         if (Directory.Exists(data)) Directory.Delete(data, true);
     }
+}
+
+static async Task TacticIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var data = Path.Combine(Path.GetTempPath(), "blueoath-tactic-" + Guid.NewGuid().ToString("N"));
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "tactic test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        var port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        var stream = client.GetStream();
+
+        async Task<TResponse> RoundTrip(string method, byte[]? args)
+        {
+            var request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                var response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1)
+                    return response;
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin("tactic-player", 1, "open", "hash")));
+        await RoundTrip("player.GetUserList", null);
+        await RoundTrip("player.CreateUser",
+            new byte[] { 0x0A, 0x04, (byte)'t', (byte)'a', (byte)'c', (byte)'1', 0x10, 0x01 });
+        await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
+
+        // tactic.SetHerosTactic: tactics[0] { heroInfo=[1], modeId=1, strategyId=0, formationId=2, type=1 }
+        var entry = new ProtocolPackage();
+        entry.Write(0x10, 1UL); // heroInfo (2)
+        entry.Write(0x18, 1UL); // modeId (3)
+        entry.Write(0x20, 0UL); // strategyId (4)
+        entry.Write(0x28, 2UL); // formationId (5)
+        entry.Write(0x30, 1UL); // type (6)
+        var pkg = new ProtocolPackage();
+        pkg.Write(0x0A, entry.ToArray()); // tactics (1)
+
+        var set = await RoundTrip("tactic.SetHerosTactic", pkg.ToArray());
+        Assert(set.Method == "tactic.SetHerosTactic", "set tactic response method mismatch");
+        Assert(set.Ret is { Length: > 0 }, "set tactic response was empty");
+
+        var get = await RoundTrip("tactic.GetHerosTactic", null);
+        Assert(get.Method == "tactic.GetHerosTactic", "get tactic response method mismatch");
+        byte[] marker = [0x10, 0x01, 0x18, 0x01]; // heroInfo=1 + modeId=1
+        Assert(get.Ret is { Length: > 0 } && ContainsSequence(get.Ret, marker),
+            "tactic.GetHerosTactic did not include saved hero info");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+static bool ContainsSequence(byte[] haystack, byte[] needle)
+{
+    for (int i = 0; i + needle.Length <= haystack.Length; i++)
+    {
+        bool match = true;
+        for (int j = 0; j < needle.Length; j++)
+            if (haystack[i + j] != needle[j]) { match = false; break; }
+        if (match) return true;
+    }
+    return false;
 }
 
 static async Task TlsCaptureIntegrationTest()

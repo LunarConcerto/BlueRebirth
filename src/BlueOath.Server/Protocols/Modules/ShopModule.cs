@@ -6,7 +6,7 @@ namespace BlueOath.Server.Protocols;
 /// <summary>商店/仓库模块：shop.*（购买/商店信息）与 bag.GetBagInfo。</summary>
 internal sealed class ShopModule(ShopService shop, GameServices services) : IGameModule
 {
-    public string Prefix => "shop";
+    public IReadOnlyList<string> Prefixes => ["shop", "bag"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {

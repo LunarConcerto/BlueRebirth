@@ -9,7 +9,7 @@ namespace BlueOath.Server.Protocols;
 /// </summary>
 internal sealed class OfflineStubModule : IGameModule
 {
-    public string Prefix => "";
+    public IReadOnlyList<string> Prefixes => [];
 
     public Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {

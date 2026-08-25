@@ -6,7 +6,7 @@ namespace BlueOath.Server.Protocols;
 /// <summary>娴村妯″潡锛歜athroom.*锛堝紑濮?缁撴潫/鏈嶅姟/鑷姩/鎵归噺锛夈€?/summary>
 internal sealed class BathroomModule(GameServices services) : IGameModule
 {
-    public string Prefix => "bathroom";
+    public IReadOnlyList<string> Prefixes => ["bathroom"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {

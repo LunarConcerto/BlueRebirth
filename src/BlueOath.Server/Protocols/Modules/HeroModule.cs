@@ -7,7 +7,7 @@ namespace BlueOath.Server.Protocols;
 /// <summary>舰娘模块：hero.* 与 tactic.*。</summary>
 internal sealed class HeroModule(HeroService hero, GameServices services) : IGameModule
 {
-    public string Prefix => "hero";
+    public IReadOnlyList<string> Prefixes => ["hero", "tactic"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {

@@ -6,7 +6,7 @@ namespace BlueOath.Server.Protocols;
 /// <summary>邮件模块：mail.*（列表/打开/删除/领取）。</summary>
 internal sealed class MailModule(GameServices services) : IGameModule
 {
-    public string Prefix => "mail";
+    public IReadOnlyList<string> Prefixes => ["mail"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {
