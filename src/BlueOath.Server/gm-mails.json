@@ -1,0 +1,165 @@
+{
+    "mails": [
+        {
+            "mid": 1,
+            "currencyType": 1,
+            "num": 100000,
+            "subject": "金币x100000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 2,
+            "currencyType": 2,
+            "num": 10000,
+            "subject": "钻石x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 3,
+            "currencyType": 5,
+            "num": 10000,
+            "subject": "石油x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 4,
+            "currencyType": 8,
+            "num": 10000,
+            "subject": "装备代币x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 5,
+            "currencyType": 9,
+            "num": 10000,
+            "subject": "高级装备代币x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 6,
+            "currencyType": 10,
+            "num": 10000,
+            "subject": "舰载机代币x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 7,
+            "currencyType": 11,
+            "num": 10000,
+            "subject": "设备代币x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 8,
+            "currencyType": 12,
+            "num": 10000,
+            "subject": "退役币x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 9,
+            "currencyType": 13,
+            "num": 10000,
+            "subject": "温泉币x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 10,
+            "currencyType": 14,
+            "num": 10000,
+            "subject": "战略点数x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 12,
+            "currencyType": 18,
+            "num": 10000,
+            "subject": "功勋点x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 13,
+            "currencyType": 22,
+            "num": 10000,
+            "subject": "演习点数x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 14,
+            "currencyType": 23,
+            "num": 10000,
+            "subject": "时装券x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 15,
+            "currencyType": 24,
+            "num": 10000,
+            "subject": "公会贡献点x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 16,
+            "currencyType": 25,
+            "num": 10000,
+            "subject": "福袋币x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 17,
+            "currencyType": 26,
+            "num": 10000,
+            "subject": "教师勋章x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 18,
+            "currencyType": 27,
+            "num": 10000,
+            "subject": "教师声望x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 19,
+            "currencyType": 28,
+            "num": 10000,
+            "subject": "指令点x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 20,
+            "currencyType": 29,
+            "num": 10000,
+            "subject": "朝日的御札券x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 21,
+            "currencyType": 30,
+            "num": 10000,
+            "subject": "共斗RPx10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 22,
+            "currencyType": 31,
+            "num": 10000,
+            "subject": "公会币IIx10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 23,
+            "currencyType": 32,
+            "num": 10000,
+            "subject": "豪华装备代币x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        },
+        {
+            "mid": 24,
+            "currencyType": 33,
+            "num": 10000,
+            "subject": "特殊指令点x10000",
+            "content": "这是可以无限领取的资源，享受游戏吧，指挥官。"
+        }
+    ]
+}

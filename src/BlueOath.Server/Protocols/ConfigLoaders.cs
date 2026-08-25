@@ -9,23 +9,52 @@ using Microsoft.Extensions.Logging;
 
 namespace BlueOath.Server.Protocols;
 
+internal static class EmbeddedResourceHelper
+{
+    public static string? TryLoadEmbedded(string resourceName)
+    {
+        try
+        {
+            var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+            using var stream = assembly.GetManifestResourceStream(resourceName);
+            if (stream is null) return null;
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+}
+
 internal static class GmGoodsConfigLoader
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public static GmGoodsConfig Load(string dataRoot)
     {
-        var path = Path.Combine(dataRoot, "gm-goods.json");
-        if (!File.Exists(path))
-            return new GmGoodsConfig([], new Dictionary<int, int>());
+        var json = EmbeddedResourceHelper.TryLoadEmbedded("BlueOath.Server.gm-goods.json");
+        if (json is null)
+        {
+            var path = Path.Combine(dataRoot, "gm-goods.json");
+            if (!File.Exists(path))
+                return new GmGoodsConfig([], new Dictionary<int, int>());
+            try { json = File.ReadAllText(path); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[gm-goods] failed to read {path}: {ex.Message}");
+                return new GmGoodsConfig([], new Dictionary<int, int>());
+            }
+        }
         try
         {
-            return JsonSerializer.Deserialize<GmGoodsConfig>(File.ReadAllText(path), JsonOptions)
+            return JsonSerializer.Deserialize<GmGoodsConfig>(json, JsonOptions)
                 ?? new GmGoodsConfig([], new Dictionary<int, int>());
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[gm-goods] failed to parse {path}: {ex.Message}");
+            Console.Error.WriteLine($"[gm-goods] failed to parse: {ex.Message}");
             return new GmGoodsConfig([], new Dictionary<int, int>());
         }
     }
@@ -37,17 +66,27 @@ internal static class GmMailsConfigLoader
 
     public static GmMailsConfig Load(string dataRoot)
     {
-        var path = Path.Combine(dataRoot, "gm-mails.json");
-        if (!File.Exists(path))
-            return new GmMailsConfig([]);
+        var json = EmbeddedResourceHelper.TryLoadEmbedded("BlueOath.Server.gm-mails.json");
+        if (json is null)
+        {
+            var path = Path.Combine(dataRoot, "gm-mails.json");
+            if (!File.Exists(path))
+                return new GmMailsConfig([]);
+            try { json = File.ReadAllText(path); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[gm-mails] failed to read {path}: {ex.Message}");
+                return new GmMailsConfig([]);
+            }
+        }
         try
         {
-            return JsonSerializer.Deserialize<GmMailsConfig>(File.ReadAllText(path), JsonOptions)
+            return JsonSerializer.Deserialize<GmMailsConfig>(json, JsonOptions)
                 ?? new GmMailsConfig([]);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[gm-mails] failed to parse {path}: {ex.Message}");
+            Console.Error.WriteLine($"[gm-mails] failed to parse: {ex.Message}");
             return new GmMailsConfig([]);
         }
     }

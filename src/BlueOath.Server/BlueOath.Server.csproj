@@ -14,5 +14,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="announcements.json" />
+    <EmbeddedResource Include="gm-goods.json" />
+    <EmbeddedResource Include="gm-mails.json" />
   </ItemGroup>
 </Project>
