@@ -141,7 +141,8 @@ internal sealed class LauncherUpdateService
                 }
 
                 var releaseVersion = tagName.GetString();
-                if (string.IsNullOrWhiteSpace(NormalizeVersion(releaseVersion)) &&
+                var normalizedTagVersion = NormalizeVersion(releaseVersion);
+                if ((!Version.TryParse(normalizedTagVersion, out _) || string.IsNullOrWhiteSpace(normalizedTagVersion)) &&
                     root.TryGetProperty("name", out var releaseName))
                 {
                     releaseVersion = releaseName.GetString();

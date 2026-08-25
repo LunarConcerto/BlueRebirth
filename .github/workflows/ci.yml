@@ -48,6 +48,8 @@ jobs:
     name: Publish Launcher Bundle (Release)
     runs-on: windows-latest
     needs: build
+    permissions:
+      contents: write
     if: (github.event_name == 'push' && github.ref == 'refs/heads/master') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
@@ -105,10 +107,44 @@ jobs:
           generate_release_notes: true
           files: ${{ steps.release_meta.outputs.package_path }}
 
+      - name: Sync release package to Gitee
+        shell: pwsh
+        env:
+          GITEE_API: ${{ secrets.GITEE_API }}
+        run: |
+          $ownerRepo = 'asa233/blue-rebirth'
+          $headers = @{ Authorization = "Bearer $env:GITEE_API"; Accept = 'application/json' }
+          $baseUrl = "https://gitee.com/api/v5/repos/$ownerRepo"
+          $tagName = '${{ steps.release_meta.outputs.tag_name }}'
+          $packagePath = '${{ steps.release_meta.outputs.package_path }}'
+          $release = $null
+          try { $release = Invoke-RestMethod -Uri "$baseUrl/releases/tags/$tagName" -Headers $headers -Method Get } catch { }
+          if ($release) {
+            foreach ($asset in @($release.assets)) {
+              Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files/$($asset.id)" -Headers $headers -Method Delete | Out-Null
+            }
+          } else {
+            $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath $tagName"; body = 'Automated release mirror'; target_commitish = 'master' }
+          }
+          $upload = Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files" -Headers $headers -Method Post -Form @{ file = Get-Item -LiteralPath $packagePath }
+          $manifest = [ordered]@{ version = $tagName; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
+          $mirrorRoot = Join-Path $env:RUNNER_TEMP 'gitee-update-mirror-release'
+          git clone --branch master "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
+          Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-release.json') -Value $manifest -Encoding UTF8
+          Push-Location $mirrorRoot
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add launcher-update-release.json
+          git commit -m "chore: update release manifest" 2>$null
+          if ($LASTEXITCODE -eq 0) { git push origin master }
+          Pop-Location
+
   publish_debug:
     name: Publish Launcher Bundle (Debug)
     runs-on: windows-latest
     needs: build
+    permissions:
+      contents: write
     if: github.event_name == 'push' && github.ref == 'refs/heads/WakabaMutsumi'
     steps:
       - name: Checkout
@@ -148,9 +184,22 @@ jobs:
         shell: pwsh
         run: |
           $bundleDir = Join-Path $env:RUNNER_TEMP "BlueOath-Debug-$env:GITHUB_RUN_NUMBER\BlueOath-Release"
-          $packagePath = Join-Path $env:RUNNER_TEMP "BlueOath-Debug-$env:GITHUB_RUN_NUMBER\BlueOath-Debug-$env:GITHUB_RUN_NUMBER.zip"
+          $packagePath = Join-Path $env:RUNNER_TEMP "BlueOath-Debug-$env:GITHUB_RUN_NUMBER\BlueOath-Debug-latest.zip"
           Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $packagePath -Force
           "package_path=$packagePath" >> $env:GITHUB_OUTPUT
+
+      - name: Remove old Debug prerelease packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseJson = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/debug-latest" 2>$null
+          if ($LASTEXITCODE -eq 0 -and $releaseJson) {
+            $release = $releaseJson | ConvertFrom-Json
+            foreach ($asset in $release.assets | Where-Object { $_.name -like 'BlueOath-Debug-*.zip' }) {
+              gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)"
+            }
+          }
 
       - name: Publish Debug GitHub prerelease
         uses: softprops/action-gh-release@v2
@@ -159,4 +208,37 @@ jobs:
           name: BlueOath Debug v1.0.${{ github.run_number }}
           prerelease: true
           make_latest: false
+          overwrite_files: true
           files: ${{ steps.debug_release_meta.outputs.package_path }}
+
+      - name: Sync Debug package to Gitee
+        shell: pwsh
+        env:
+          GITEE_API: ${{ secrets.GITEE_API }}
+        run: |
+          $ownerRepo = 'asa233/blue-rebirth'
+          $headers = @{ Authorization = "Bearer $env:GITEE_API"; Accept = 'application/json' }
+          $baseUrl = "https://gitee.com/api/v5/repos/$ownerRepo"
+          $tagName = 'debug-latest'
+          $packagePath = '${{ steps.debug_release_meta.outputs.package_path }}'
+          $release = $null
+          try { $release = Invoke-RestMethod -Uri "$baseUrl/releases/tags/$tagName" -Headers $headers -Method Get } catch { }
+          if ($release) {
+            foreach ($asset in @($release.assets)) {
+              Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files/$($asset.id)" -Headers $headers -Method Delete | Out-Null
+            }
+          } else {
+            $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath Debug v1.0.${{ github.run_number }}"; body = 'Automated Debug mirror'; target_commitish = 'master'; prerelease = 'true' }
+          }
+          $upload = Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files" -Headers $headers -Method Post -Form @{ file = Get-Item -LiteralPath $packagePath }
+          $manifest = [ordered]@{ version = "v1.0.${{ github.run_number }}"; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
+          $mirrorRoot = Join-Path $env:RUNNER_TEMP 'gitee-update-mirror-debug'
+          git clone --branch master "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
+          Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-debug.json') -Value $manifest -Encoding UTF8
+          Push-Location $mirrorRoot
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add launcher-update-debug.json
+          git commit -m "chore: update debug manifest" 2>$null
+          if ($LASTEXITCODE -eq 0) { git push origin master }
+          Pop-Location
