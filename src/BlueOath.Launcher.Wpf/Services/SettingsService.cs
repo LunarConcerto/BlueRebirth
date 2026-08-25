@@ -63,7 +63,7 @@ public class SettingsService
             DataRoot = Path.Combine(rootDir, "runtime", "jp"),
             BaselinePath = Path.Combine(rootDir, "baseline.json"),
             Region = "jp",
-            UpdateManifestUrl = "https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/tags/debug-latest",
+            UpdateManifestUrl = LoadUpdateManifestUrl(rootDir),
             AutoUpdateEnabled = true,
             ServerPort = 0,
             GameLoginPort = 7201,
@@ -83,5 +83,24 @@ public class SettingsService
             current = current.Parent;
         }
         return Environment.CurrentDirectory;
+    }
+
+    private static string LoadUpdateManifestUrl(string rootDir)
+    {
+        var configPath = Path.Combine(rootDir, "launcher-update.json");
+        if (!File.Exists(configPath))
+            return string.Empty;
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+            return document.RootElement.TryGetProperty("debugManifestUrl", out var value)
+                ? value.GetString() ?? string.Empty
+                : string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 }

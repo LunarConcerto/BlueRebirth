@@ -1,0 +1,4 @@
+{
+  "debugManifestUrl": "https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/tags/debug-latest",
+  "releaseManifestUrl": "https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/latest"
+}

@@ -15,7 +15,7 @@ var configuration = configurationArgIndex >= 0
 var updateManifestArgIndex = Array.FindIndex(args, a => a.Equals("--update-manifest-url", StringComparison.OrdinalIgnoreCase) || a.StartsWith("--update-manifest-url=", StringComparison.OrdinalIgnoreCase));
 var updateManifestUrl = updateManifestArgIndex >= 0
     ? GetOptionValue(args, updateManifestArgIndex, "--update-manifest-url")
-    : "https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/tags/debug-latest";
+    : LoadUpdateManifestUrl(root, configuration);
 if (!string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase) &&
     !string.Equals(configuration, "Release", StringComparison.OrdinalIgnoreCase))
 {
@@ -287,6 +287,28 @@ static void CopyDirectory(string src, string dst)
         File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
     foreach (var dir in Directory.GetDirectories(src))
         CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
+}
+
+static string LoadUpdateManifestUrl(string root, string configuration)
+{
+    var configPath = Path.Combine(root, "launcher-update.json");
+    if (!File.Exists(configPath))
+        return string.Empty;
+
+    try
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        var propertyName = string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)
+            ? "debugManifestUrl"
+            : "releaseManifestUrl";
+        return document.RootElement.TryGetProperty(propertyName, out var value)
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+    }
+    catch
+    {
+        return string.Empty;
+    }
 }
 
 static string GetOptionValue(string[] options, int index, string optionName)
