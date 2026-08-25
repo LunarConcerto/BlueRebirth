@@ -133,7 +133,14 @@ jobs:
           } else {
             $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath $tagName"; body = 'Automated release mirror'; target_commitish = 'master' }
           }
-          $upload = Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files" -Headers $headers -Method Post -Form @{ file = Get-Item -LiteralPath $packagePath }
+          $uploadJson = & curl.exe --fail-with-body --silent --show-error `
+            -X POST `
+            -H "Authorization: Bearer $env:GITEE_API" `
+            -H "Accept: application/json" `
+            -F "file=@$packagePath" `
+            "$baseUrl/releases/$($release.id)/attach_files"
+          if ($LASTEXITCODE -ne 0) { throw "Gitee release attachment upload failed." }
+          $upload = $uploadJson | ConvertFrom-Json
           $manifest = [ordered]@{ version = $tagName; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
           Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-release.json') -Value $manifest -Encoding UTF8
           git config user.name 'github-actions[bot]'
@@ -240,7 +247,14 @@ jobs:
           } else {
             $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath Debug v1.0.${{ github.run_number }}"; body = 'Automated Debug mirror'; target_commitish = 'master'; prerelease = 'true' }
           }
-          $upload = Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files" -Headers $headers -Method Post -Form @{ file = Get-Item -LiteralPath $packagePath }
+          $uploadJson = & curl.exe --fail-with-body --silent --show-error `
+            -X POST `
+            -H "Authorization: Bearer $env:GITEE_API" `
+            -H "Accept: application/json" `
+            -F "file=@$packagePath" `
+            "$baseUrl/releases/$($release.id)/attach_files"
+          if ($LASTEXITCODE -ne 0) { throw "Gitee release attachment upload failed." }
+          $upload = $uploadJson | ConvertFrom-Json
           $manifest = [ordered]@{ version = "v1.0.${{ github.run_number }}"; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
           Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-debug.json') -Value $manifest -Encoding UTF8
           git config user.name 'github-actions[bot]'
