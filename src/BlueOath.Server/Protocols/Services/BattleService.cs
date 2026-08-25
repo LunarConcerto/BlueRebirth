@@ -28,7 +28,7 @@ internal sealed class BattleService(GameServices services)
             // 而不是从玩家编队猜。请求未带时回退到全部船。
             services.CopyRandomFactors.TryGetValue(arg.CopyId, out List<RandomFactorEntry>? randomFactors);
             return ProtocolEncoder.EncodeStartBaseRet(arg.CopyId, heroList, account.Character, arg.DeployHeroIds, arg.IsRunningFight,
-                arg.BattleMode, arg.MatchType, randomFactors);
+                arg.BattleMode, arg.MatchType, randomFactors, account.Equip);
         }
         catch (Exception ex)
         {

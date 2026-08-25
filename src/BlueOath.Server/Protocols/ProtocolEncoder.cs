@@ -86,7 +86,8 @@ internal static class ProtocolEncoder
     internal static byte[] EncodeStartBaseRet(int copyId, List<Hero> heroes, PlayerCharacter character,
         IReadOnlyList<int>? deployHeroIds = null,
         bool isRunningFight = false, int battleMode = 1, int matchType = 0,
-        IReadOnlyList<RandomFactorEntry>? randomFactors = null)
+        IReadOnlyList<RandomFactorEntry>? randomFactors = null,
+        PlayerEquip? playerEquip = null)
     {
         // 本关全部敌舰队 id（config_copy → fleet_id 数组）。客户端
         // BattleStartData.enemyFleetId 是 int[]，PlayerInterface.InitNpc 遍历它逐个生成
@@ -227,30 +228,51 @@ internal static class ProtocolEncoder
             ship.Write(0x42, pskillBytes);
             // Equips (7) — TBattleEquip[]。临时/支援舰船用 config_assist_ship_info.equip。
             // 航母的空袭依赖飞机装备（PlaneNum），否则空袭技能不出现。
+            // 玩家自有舰船从 EquipSlots → EquipItem.TemplateId → ConfigEquip 读取装备。
+            var equipById = playerEquip?.Items.ToDictionary(e => e.EquipId) ?? new Dictionary<uint, EquipItem>();
+            List<ConfigEquip> shipEquips = [];
             if (assist?.Equip is { Count: > 0 })
+            {
                 for (int ei = 0; ei < assist.Equip.Count; ei++)
                 {
                     int eid = checked((int)assist.Equip[ei]);
                     if (eid == 0) continue;
                     ConfigEquip? ecfg = EquipLoader.Get(eid);
-                    ProtocolPackage eq = new();
-                    eq.Write(0x08, unchecked((ulong)eid)); // EquipTid(1)
-                    eq.Write(0x10, unchecked((ulong)ei)); // EquipIndex(2)
-                    eq.Write(0x18, 100UL); // PlaneNum(3)
-                    if (ecfg?.EquipProp is { Count: > 0 })
-                        foreach (List<long> ap in ecfg.EquipProp)
-                            if (ap is { Count: >= 2 })
-                            {
-                                ProtocolPackage av = new();
-                                av.Write(0x08, unchecked((ulong)ap[0])); // propId
-                                av.Write(0x10, unchecked((ulong)ap[1])); // value
-                                byte[] avb = av.ToArray();
-                                eq.Write(0x22, avb);
-                            }
-
-                    byte[] eqb = eq.ToArray();
-                    ship.Write(0x3A, eqb);
+                    if (ecfg is not null) shipEquips.Add(ecfg);
                 }
+            }
+            else if (h.EquipSlots is { Count: > 0 })
+            {
+                foreach (uint slotId in h.EquipSlots)
+                {
+                    if (slotId == 0) continue;
+                    if (!equipById.TryGetValue(slotId, out EquipItem? eqItem)) continue;
+                    ConfigEquip? ecfg = EquipLoader.Get(eqItem.TemplateId);
+                    if (ecfg is not null) shipEquips.Add(ecfg);
+                }
+            }
+
+            for (int ei = 0; ei < shipEquips.Count; ei++)
+            {
+                ConfigEquip ecfg = shipEquips[ei];
+                ProtocolPackage eq = new();
+                eq.Write(0x08, unchecked((ulong)ecfg.EId)); // EquipTid(1)
+                eq.Write(0x10, unchecked((ulong)ei)); // EquipIndex(2)
+                eq.Write(0x18, 100UL); // PlaneNum(3)
+                if (ecfg.EquipProp is { Count: > 0 })
+                    foreach (List<long> ap in ecfg.EquipProp)
+                        if (ap is { Count: >= 2 })
+                        {
+                            ProtocolPackage av = new();
+                            av.Write(0x08, unchecked((ulong)ap[0])); // propId
+                            av.Write(0x10, unchecked((ulong)ap[1])); // value
+                            byte[] avb = av.ToArray();
+                            eq.Write(0x22, avb);
+                        }
+
+                byte[] eqb = eq.ToArray();
+                ship.Write(0x3A, eqb);
+            }
 
             byte[] sb = ship.ToArray();
             fleet.Write(0x22, sb);
