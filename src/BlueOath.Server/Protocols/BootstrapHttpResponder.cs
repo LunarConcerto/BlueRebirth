@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BlueOath.Server.Hosting;
 
 namespace BlueOath.Server.Protocols;
@@ -11,7 +12,7 @@ internal sealed record BootstrapHttpResponse(
 /// 服务器列表、登录角色等）。所有响应体都经过逆向确认，字段类型（字符串/数字）需与客户端
 /// 解析方式精确匹配。
 /// </summary>
-internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints)
+internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints, AnnouncementConfig announcementConfig)
 {
     private readonly ServerEndpoints _endpoints = endpoints;
 
@@ -57,12 +58,20 @@ internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints)
                 "\"static_url\":\"\",\"spare_static_url\":\"\"}");
 
         if (requestLine.Contains("/phone/getPlData/getPlData", StringComparison.OrdinalIgnoreCase))
+        {
+            var noticeBoardJson = "null";
+            if (announcementConfig.NoticeBoard is { } nb)
+            {
+                noticeBoardJson = JsonSerializer.Serialize(nb);
+            }
             return new(200, "OK", "application/json; charset=utf-8",
                 "{\"errornu\":0,\"errordesc\":\"\",\"networkCheck\":\"1\"," +
                 "\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"pid\":\"local-player\"," +
                 "\"serverId\":\"jp\",\"pl\":\"google_windows\",\"os\":\"android\",\"gn\":\"jpshipgirl\"," +
                 "\"sensorInfo\":\"\",\"localInfo\":\"\",\"timeZoneId\":\"\"," +
-                "\"screenWidth\":\"1920\",\"screenHeight\":\"1080\",\"dangerWidth\":\"0\",\"strDeviceInfo\":\"\"}");
+                "\"screenWidth\":\"1920\",\"screenHeight\":\"1080\",\"dangerWidth\":\"0\",\"strDeviceInfo\":\"\"," +
+                "\"noticeBoard\":" + noticeBoardJson + "}");
+        }
 
         if (requestLine.Contains("/login?", StringComparison.OrdinalIgnoreCase))
             return new(200, "OK", "application/json; charset=utf-8",
@@ -114,16 +123,18 @@ internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints)
                 "\"isFastUser\":1,\"idcardStatus\":1,\"isAdult\":1,\"OnNoRealnameLogin\":0}}");
 
         if (requestLine.Contains("/phone/platform/getGameMaintainNotice", StringComparison.OrdinalIgnoreCase))
-            // 游戏维护/公告通知（事件 1006）。AnnouncementManager._SuperNoticeCallBack 读取
-            // result.data（数组）；空数组表示无操作。Lua 的 getResult 路径要求 errornu == "0"（字符串）。
+        {
+            var dataJson = JsonSerializer.Serialize(announcementConfig.MaintainNotices);
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":\"0\",\"errordesc\":\"\",\"data\":[]}");
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"data\":" + dataJson + "}");
+        }
 
         if (requestLine.Contains("/phone/innerbrowse", StringComparison.OrdinalIgnoreCase))
-            // 浏览活动信息（事件 22）。PlatformManager.getBrowseActive 读取 result.noticear
-            // （数组）；空数组表示无活动横幅。
+        {
+            var noticearJson = JsonSerializer.Serialize(announcementConfig.InnerBrowse);
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":\"0\",\"errordesc\":\"\",\"noticear\":[]}");
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"noticear\":" + noticearJson + "}");
+        }
 
         if (requestLine.Contains("/phone/getuserextra/", StringComparison.OrdinalIgnoreCase))
             // 用户附加功能状态（事件 1008，LoginOk 之后）。PlatformManager.CheckUserExtraFunctionState

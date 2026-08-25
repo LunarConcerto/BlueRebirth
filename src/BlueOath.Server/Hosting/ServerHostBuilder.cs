@@ -35,6 +35,7 @@ internal static class ServerHostBuilder
 
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<ServerEndpoints>();
+        builder.Services.AddSingleton(_ => AnnouncementConfigLoader.Load());
         builder.Services.AddSingleton<SqliteGameRepository>(sp =>
             new SqliteGameRepository(sp.GetRequiredService<ServerOptions>().DataRoot));
         builder.Services.AddSingleton<GameService>(sp =>
@@ -49,7 +50,10 @@ internal static class ServerHostBuilder
 
         // 协议/会话处理器（无状态，单例共享）。
         builder.Services.AddSingleton<GameServices>();
-        builder.Services.AddSingleton<BootstrapHttpResponder>();
+        builder.Services.AddSingleton<BootstrapHttpResponder>(sp =>
+            new BootstrapHttpResponder(
+                sp.GetRequiredService<ServerEndpoints>(),
+                sp.GetRequiredService<AnnouncementConfig>()));
         builder.Services.AddSingleton<JsonGameSession>();
         builder.Services.AddSingleton<BootstrapHttpSession>();
 
