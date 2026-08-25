@@ -245,7 +245,7 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 | 公会 (Guild) | 22 | 最大模块，含捐献/任务/公会战/公会商店 |
 | 好友 (Friend) | 1 | 好友列表/申请/搜索 |
 | 聊天 (Chat) | 6 | 含公会频道/弹幕 |
-| 邮件 (Mail) | 2 | 含附件领取；**已打通**（24 封货币邮件 + 无限领取，见会话记录） |
+| 邮件 (Mail) | 2 | 含附件领取；**已打通**（23 封货币邮件 + 3 封道具邮件 + 无限领取，`GmMailType` 标志位区分，见会话记录） |
 | 排行 (Rank) | 4 | 含活动 Boss 排行/小游戏排行 |
 | 竞技场 (Sport) | 6 | 含挑战/排行/积分奖励 |
 | 教学 (Teaching) | 13 | 师徒系统 |

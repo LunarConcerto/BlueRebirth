@@ -371,9 +371,12 @@ internal sealed class GameServices
         return account with { Equip = equip with { Items = items } };
     }
 
-    // GoodsType 常量（constants.lua）。ITEM=1, EQUIP=2, SHIP=3, DROP=4, CURRENCY=5, FASHION=18。
+    // GoodsType 常量（constants.lua）。ITEM=1, EQUIP=2, SHIP=3, DROP=4, CURRENCY=5,
+    // EQUIP_ENHANCE_ITEM=6, REWARD_SHIPLEVELUP_ITEM=15（舰船经验书，config_ship_exp_item）, FASHION=18。
+    internal const int GoodsTypeItem = 1;
     internal const int GoodsTypeShip = 3;
     internal const int GoodsTypeDrop = 4;
+    internal const int GoodsTypeRewardShipLevelUp = 15;
 
     // ExtractType 常量（constants.lua）
     internal const int ExtractTypeShip = 2;

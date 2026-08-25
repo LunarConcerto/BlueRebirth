@@ -25,7 +25,7 @@ internal sealed class MailModule(GameServices services) : IGameModule
                 result = new ModuleResult
                 {
                     Ret = await BuildFetchMailRetAsync(ctx, request),
-                    PostPushes = [await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)],
+                    PostPushes = await BuildFetchPostPushesAsync(ctx),
                 };
                 break;
             default:
@@ -44,7 +44,7 @@ internal sealed class MailModule(GameServices services) : IGameModule
             ReceiveTime: now,
             ReadTime: 0,
             IsGotReawrd: 0,
-            Items: [new MailItem(GameServices.GoodsTypeCurrency, m.CurrencyType, m.Num)],
+            Items: [ToMailItem(m)],
             DeleteTime: 0)).ToList();
 
     /// <summary>邮件列表响应（mail.GetMailList/OpenMail/DeleteMail/DeleteAllMail/ReceiveNewMail 共用）。</summary>
@@ -55,8 +55,9 @@ internal sealed class MailModule(GameServices services) : IGameModule
     }
 
     /// <summary>
-    /// 邮件领取（mail.FetchItem / mail.FetchAllItems）：发放对应邮件的货币并落盘，邮件不删除
-    /// （IsGotReawrd 保持 0，客户端仍显示"领取"按钮，实现无限领取）。返回 TMailListRet{list, Reward}。
+    /// 邮件领取（mail.FetchItem / mail.FetchAllItems）：按配置发放对应邮件的货币或道具并落盘，
+    /// 邮件不删除（IsGotReawrd 保持 0，客户端仍显示"领取"按钮，实现无限领取）。
+    /// 返回 TMailListRet{list, Reward}。
     /// </summary>
     private async Task<byte[]> BuildFetchMailRetAsync(GameContext ctx, TRequest request)
     {
@@ -67,8 +68,8 @@ internal sealed class MailModule(GameServices services) : IGameModule
         {
             if (request.Method == "mail.FetchItem" && mail.Mid != mid)
                 continue;
-            account = GameServices.AddCurrency(account, mail.CurrencyType, mail.Num);
-            rewards.Add(new CommonReward(GameServices.GoodsTypeCurrency, mail.CurrencyType, mail.Num));
+            account = ApplyMailReward(account, mail);
+            rewards.Add(ToCommonReward(mail));
         }
 
         if (rewards.Count > 0)
@@ -76,4 +77,27 @@ internal sealed class MailModule(GameServices services) : IGameModule
         IReadOnlyList<MailList> list = BuildMailEntities(ctx.Now);
         return PlayerDataCodec.Encode(new MailListRet(list.Count, List: list, Reward: rewards));
     }
+
+    /// <summary>领取后的数据推送：用户信息（货币）+ 仓库（道具），供客户端刷新。</summary>
+    private async Task<IReadOnlyList<byte[]>> BuildFetchPostPushesAsync(GameContext ctx)
+    {
+        var account = await ctx.GetAccountAsync();
+        return
+        [
+            await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
+            services.BuildBagPush(account, (uint)ctx.Now),
+        ];
+    }
+
+    /// <summary>邮件附件实体：直接用配置的 GoodsType（客户端按 config_table_index[GoodsType] 渲染）。</summary>
+    private static MailItem ToMailItem(GmMailConfig mail) => new(mail.GoodsType, mail.ConfigId, mail.Num);
+
+    /// <summary>发放邮件奖励到账号：货币走 AddCurrency，其余（道具/材料）走 AddBagItem。</summary>
+    private static PlayerAccount ApplyMailReward(PlayerAccount account, GmMailConfig mail) =>
+        mail.GoodsType == GameServices.GoodsTypeCurrency
+            ? GameServices.AddCurrency(account, mail.ConfigId, mail.Num)
+            : GameServices.AddBagItem(account, mail.ConfigId, mail.Num);
+
+    /// <summary>领取奖励的 CommonReward（返回给客户端的 Reward 列表）。</summary>
+    private static CommonReward ToCommonReward(GmMailConfig mail) => new(mail.GoodsType, mail.ConfigId, mail.Num);
 }

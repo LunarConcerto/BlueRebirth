@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace BlueOath.Core;
 
 /// <summary>
@@ -208,15 +210,22 @@ public sealed record GmGoodsConfig(
     IReadOnlyList<GmGoodConfig> Goods,
     IReadOnlyDictionary<int, int> FashionSfId);
 
-/// <summary>单封 GM 邮件配置（数据驱动，来自 gm-mails.json）。</summary>
-public sealed record GmMailConfig(ulong Mid, int CurrencyType, int Num, string Subject, string Content);
+/// <summary>GM 邮件奖励类型（标志位）：Currency = 货币，Item = 道具/材料。</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum GmMailType
+{
+    Currency,
+    Item,
+}
+
+/// <summary>单封 GM 邮件配置（数据驱动，来自 gm-mails.json）。
+/// <see cref="Type"/> 为高级分类标志；<see cref="GoodsType"/> 是发给客户端的 GoodsType
+/// （见 constants.lua，如 CURRENCY=5 / ITEM=1 / REWARD_SHIPLEVELUP_ITEM=15），客户端据此查
+/// config_table_index[GoodsType].file_name 渲染图标；<see cref="ConfigId"/> 为该表内的 id。</summary>
+public sealed record GmMailConfig(ulong Mid, GmMailType Type, int GoodsType, int ConfigId, int Num, string Subject, string Content);
 
 /// <summary>GM 邮件配置集合。</summary>
 public sealed record GmMailsConfig(IReadOnlyList<GmMailConfig> Mails);
-
-public enum GmMailType {
-    Currency, Item
-}
 
 /// <summary>单个编队条目（TTactic）。</summary>
 public sealed record FleetEntry(
