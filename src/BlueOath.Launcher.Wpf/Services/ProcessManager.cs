@@ -84,7 +84,7 @@ public class ProcessStateInfo : INotifyPropertyChanged
 public class ProcessManager
 {
     private readonly string _rootDir;
-    private readonly Models.SettingsConfig _settings;
+    private Models.SettingsConfig _settings;
     private Process? _serverProcess;
     private Process? _proxyProcess;
     private int _gamePid;
@@ -126,6 +126,29 @@ public class ProcessManager
     public ProcessManager(string rootDir, Models.SettingsConfig settings)
     {
         _rootDir = rootDir;
+        _settings = settings;
+    }
+
+    public string ResolvePath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+        if (Path.IsPathRooted(path)) return path;
+        return Path.GetFullPath(Path.Combine(_rootDir, path));
+    }
+
+    public string MakeRelativePath(string absolutePath)
+    {
+        if (string.IsNullOrEmpty(absolutePath)) return absolutePath;
+        if (!Path.IsPathRooted(absolutePath)) return absolutePath;
+        var rootUri = new Uri(_rootDir.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar);
+        var pathUri = new Uri(absolutePath);
+        if (rootUri.Scheme != pathUri.Scheme) return absolutePath;
+        var relative = rootUri.MakeRelativeUri(pathUri).ToString();
+        return Uri.UnescapeDataString(relative).Replace('/', Path.DirectorySeparatorChar);
+    }
+
+    public void UpdateSettings(Models.SettingsConfig settings)
+    {
         _settings = settings;
     }
 

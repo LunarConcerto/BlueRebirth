@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Windows;
 using System.Threading.Tasks;
 using System.Windows.Input;
@@ -11,6 +12,7 @@ public class LaunchViewModel : ViewModelBase
 {
     private readonly ProcessManager _processManager;
     private readonly MainViewModel _mainViewModel;
+    private readonly SettingsService _settingsService;
 
     private List<Announcement> _announcements = new();
     private Announcement? _selectedAnnouncement;
@@ -57,10 +59,11 @@ public class LaunchViewModel : ViewModelBase
     public ICommand LaunchCommand { get; }
     public ICommand DebugLaunchCommand { get; }
 
-    public LaunchViewModel(ProcessManager processManager, MainViewModel mainViewModel)
+    public LaunchViewModel(ProcessManager processManager, MainViewModel mainViewModel, SettingsService settingsService)
     {
         _processManager = processManager;
         _mainViewModel = mainViewModel;
+        _settingsService = settingsService;
 
         LaunchCommand = new RelayCommand(async () => await Launch(true));
         DebugLaunchCommand = new RelayCommand(async () => await Launch(false));
@@ -91,9 +94,41 @@ public class LaunchViewModel : ViewModelBase
             SelectedAnnouncement = announcements[0];
     }
 
+    private bool TryResolveGameClientPath()
+    {
+        var settings = _settingsService.Load();
+        var clientDir = _processManager.ResolvePath(settings.GameClientPath);
+        string exe = settings.Region == "cn" ? "clsy.exe" : "blueoath.exe";
+        string exePath = Path.Combine(clientDir, exe);
+        if (File.Exists(exePath)) return true;
+
+        var result = MessageBox.Show("游戏客户端路径未设置或无效，是否现在选择？", "路径缺失",
+            MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (result != MessageBoxResult.Yes) return false;
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择游戏客户端 (blueoath.exe 或 clsy.exe)",
+            Filter = "游戏客户端|blueoath.exe;clsy.exe",
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog() != true) return false;
+
+        var selectedExe = dialog.FileName;
+        var selectedDir = Path.GetDirectoryName(selectedExe) ?? "";
+        settings.GameClientPath = _processManager.MakeRelativePath(selectedDir);
+        if (Path.GetFileName(selectedExe).StartsWith("clsy", StringComparison.OrdinalIgnoreCase))
+            settings.Region = "cn";
+        _settingsService.Save(settings);
+        _processManager.UpdateSettings(settings);
+        return true;
+    }
+
     private async Task Launch(bool startServer)
     {
         if (IsLaunching) return;
+
+        if (!TryResolveGameClientPath()) return;
 
         var validationError = _processManager.ValidatePaths(_config, startServer);
         if (validationError is not null)

@@ -18,7 +18,7 @@ public partial class MainWindow : Window
 
         var mainViewModel = new MainViewModel();
 
-        var launchViewModel = new LaunchViewModel(processManager, mainViewModel);
+        var launchViewModel = new LaunchViewModel(processManager, mainViewModel, settingsService);
         mainViewModel.RegisterLaunchViewModel(launchViewModel);
         var announcementService = new AnnouncementService();
         launchViewModel.LoadAnnouncements(announcementService.LoadAnnouncements());

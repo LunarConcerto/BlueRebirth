@@ -133,18 +133,6 @@ var toolsDst = Path.Combine(outputDir, "tools");
 Directory.CreateDirectory(toolsDst);
 CopyIfExists(Path.Combine(root, "tools", "tls-loopback-proxy.py"), toolsDst);
 
-// Runtime data
-var dataSrc = Path.Combine(root, "runtime", "jp");
-var dataDst = Path.Combine(outputDir, "runtime", "jp");
-Directory.CreateDirectory(dataDst);
-if (Directory.Exists(dataSrc))
-{
-    foreach (var file in Directory.GetFiles(dataSrc))
-        File.Copy(file, Path.Combine(dataDst, Path.GetFileName(file)), true);
-    foreach (var dir in Directory.GetDirectories(dataSrc))
-        CopyDirectory(dir, Path.Combine(dataDst, Path.GetFileName(dir)));
-}
-
 Console.WriteLine("  Runtime files copied.");
 
 // Step 5: Generate launcher settings
