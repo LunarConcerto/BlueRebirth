@@ -4,8 +4,13 @@ on:
   push:
     branches:
       - master
+      - WakabaMutsumi
     tags:
       - 'v*'
+  pull_request:
+    branches:
+      - master
+      - WakabaMutsumi
   workflow_dispatch:
 
 permissions:
