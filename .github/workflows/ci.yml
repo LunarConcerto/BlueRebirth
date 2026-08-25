@@ -63,7 +63,7 @@ jobs:
         run: |
           $OutputDir = Join-Path $env:RUNNER_TEMP ("BlueOath-Release-" + $env:GITHUB_RUN_NUMBER)
           New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- --output "$OutputDir\BlueOath-Release" --configuration Release
+          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- "--output=$OutputDir\BlueOath-Release" "--configuration=Release"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $bundleDir = Join-Path $OutputDir "BlueOath-Release"
           if (-not (Test-Path (Join-Path $bundleDir "launcher-settings.json"))) {
@@ -101,7 +101,7 @@ jobs:
         run: |
           $OutputDir = Join-Path $env:RUNNER_TEMP ("BlueOath-Debug-" + $env:GITHUB_RUN_NUMBER)
           New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- --output "$OutputDir\BlueOath-Release" --configuration Debug
+          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- "--output=$OutputDir\BlueOath-Release" "--configuration=Debug"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $bundleDir = Join-Path $OutputDir "BlueOath-Release"
           if (-not (Test-Path (Join-Path $bundleDir "launcher-settings.json"))) {

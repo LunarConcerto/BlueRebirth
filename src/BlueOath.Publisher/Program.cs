@@ -3,14 +3,14 @@ using System.Text.Json;
 
 var root = FindRoot();
 var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-var outputArg = args.FirstOrDefault(a => a.StartsWith("--output=", StringComparison.OrdinalIgnoreCase));
-var outputDir = outputArg is not null
-    ? outputArg[9..]
+var outputArgIndex = Array.FindIndex(args, a => a.Equals("--output", StringComparison.OrdinalIgnoreCase) || a.StartsWith("--output=", StringComparison.OrdinalIgnoreCase));
+var outputDir = outputArgIndex >= 0
+    ? GetOptionValue(args, outputArgIndex, "--output")
     : Path.Combine(root, "release", stamp);
 
-var configurationArg = args.FirstOrDefault(a => a.StartsWith("--configuration=", StringComparison.OrdinalIgnoreCase));
-var configuration = configurationArg is not null
-    ? configurationArg["--configuration=".Length..]
+var configurationArgIndex = Array.FindIndex(args, a => a.Equals("--configuration", StringComparison.OrdinalIgnoreCase) || a.StartsWith("--configuration=", StringComparison.OrdinalIgnoreCase));
+var configuration = configurationArgIndex >= 0
+    ? GetOptionValue(args, configurationArgIndex, "--configuration")
     : "Release";
 if (!string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase) &&
     !string.Equals(configuration, "Release", StringComparison.OrdinalIgnoreCase))
@@ -283,4 +283,17 @@ static void CopyDirectory(string src, string dst)
         File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
     foreach (var dir in Directory.GetDirectories(src))
         CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
+}
+
+static string GetOptionValue(string[] options, int index, string optionName)
+{
+    var option = options[index];
+    var prefix = optionName + "=";
+    if (option.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        return option[prefix.Length..];
+
+    if (index + 1 < options.Length && !options[index + 1].StartsWith("--", StringComparison.Ordinal))
+        return options[index + 1];
+
+    return string.Empty;
 }
