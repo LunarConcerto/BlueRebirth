@@ -213,4 +213,42 @@ internal sealed class HeroService(GameServices services)
         List<HeroGrid> heroes = account.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
         return PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize));
     }
+
+    /// <summary>处理 hero.HeroAdvance：突破升星。消耗材料英雄，扣除金币，Advance+1，TemplateId+1。</summary>
+    internal async Task<byte[]> BuildAdvanceRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        var (heroId, consumedHeros, consumeItems) = ProtocolDecoder.DecodeAdvanceArg(request.Args);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+
+        HeroDock dock = account.Dock;
+        List<Hero> heroList = dock.Heroes.ToList();
+        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return [];
+
+        Hero hero = heroList[heroIdx];
+        int newAdvance = hero.Advance + 1;
+        int newTemplateId = hero.TemplateId + 1;
+
+        // 移除消耗的英雄
+        foreach (uint consumedId in consumedHeros)
+            heroList.RemoveAll(h => h.HeroId == consumedId);
+
+        // 更新主英雄
+        heroList[heroIdx] = hero with { Advance = newAdvance, TemplateId = newTemplateId };
+
+        account = account with { Dock = dock with { Heroes = heroList } };
+
+        // 扣除消耗的道具
+        foreach (uint itemId in consumeItems)
+            account = GameServices.AddBagItem(account, (int)itemId, -1);
+
+        // 扣除金币（config_ship_break.break_cost 默认约 10000）
+        account = GameServices.AddCurrency(account, 1, -10000);
+
+        await services.SaveAccountAsync(account, ct);
+        return [];
+    }
 }

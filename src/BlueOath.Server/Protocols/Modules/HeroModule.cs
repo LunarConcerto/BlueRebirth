@@ -22,17 +22,10 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 };
                 break;
             case "hero.AddExp":
+                result = await UpdateHero(ctx, await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct));
+                break;
             case "hero.Marry":
-                var ret = request.Method == "hero.AddExp"
-                    ? await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct)
-                    : await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
-                var updatedAccount = await ctx.GetAccountAsync();
-                var updatedHeroes = updatedAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
-                result = new ModuleResult
-                {
-                    Ret = ret,
-                    PrePushes = BuildHeroBagPushes(updatedAccount, updatedHeroes, (uint)ctx.Now),
-                };
+                result = await UpdateHero(ctx, await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.LockHero":
                 result = ModuleResult.Ok(await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
@@ -59,6 +52,18 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 result = ModuleResult.Ok(await hero.BuildSetHerosTacticAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.HeroAdvance":
+                result = new ModuleResult
+                {
+                    Ret = await hero.BuildAdvanceRetAsync(request, ctx.ProfileId, ctx.Ct),
+                };
+                var advAccount = await ctx.GetAccountAsync();
+                var advHeroes = advAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+                result = new ModuleResult
+                {
+                    Ret = result.Ret,
+                    PrePushes = BuildHeroBagPushes(advAccount, advHeroes, (uint)ctx.Now),
+                };
+                break;
             case "hero.HeroIntensify":
             case "hero.HeroAdvanceMUB":
             case "hero.StudySkill":
@@ -80,6 +85,17 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 result = ModuleResult.Empty;
                 break;
         }
+        return result;
+    }
+
+    private static async Task<ModuleResult> UpdateHero(GameContext ctx, byte[] ret) {
+        PlayerAccount updatedAccount = await ctx.GetAccountAsync();
+        List<HeroGrid> updatedHeroes = updatedAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+        ModuleResult result = new()
+        {
+            Ret = ret,
+            PrePushes = BuildHeroBagPushes(updatedAccount, updatedHeroes, (uint)ctx.Now),
+        };
         return result;
     }
 

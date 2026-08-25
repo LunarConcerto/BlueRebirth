@@ -66,7 +66,9 @@ public sealed record Hero(
     long CurHp = 0,
     IReadOnlyList<uint>? EquipSlots = null,
     string Name = "",
-    bool Lock = false);
+    bool Lock = false,
+    int Advance = 0,
+    int AdvLv = 0);
 
 /// <summary>
 /// 船坞（玩家拥有的全部舰娘）。对应 <c>hero.UpdateHeroBagData</c> 的 HeroBag

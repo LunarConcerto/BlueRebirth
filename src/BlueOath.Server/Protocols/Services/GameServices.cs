@@ -354,7 +354,7 @@ internal sealed class GameServices
     internal static HeroGrid ToHeroGrid(Hero hero) =>
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
             hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType,
-            hero.EquipSlots, hero.Name, hero.Lock);
+            hero.EquipSlots, hero.Name, hero.Lock, hero.Advance, hero.AdvLv);
 
     /// <summary>
     /// 由舰娘 TemplateId（config_ship_main 的 key）推导图鉴 IllustrateId
