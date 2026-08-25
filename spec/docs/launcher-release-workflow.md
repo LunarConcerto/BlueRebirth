@@ -11,7 +11,7 @@
 
 ## 2. 相关文件与职责
 
-- `publish-release.bat`
+- `src/BlueOath.Publisher/BlueOath.Publisher.csproj`
   - 调用发布器并在最终目录进行关键文件存在性校验（`launcher-settings.json` 与启动器 exe）。
 - `src/BlueOath.Publisher/Program.cs`
   - 负责拼装 `release` 目录内容；
@@ -29,23 +29,22 @@
 
 ### 3.1 版本与本地准备
 
-1. 确认启动器版本基线 `src/BlueOath.Launcher.Wpf/version.txt` 已设置到本次发布目标版本。
+1. 启动器版本由 `src/BlueOath.Launcher.Wpf/version.txt` 的生成规则自动增量，无需手工设置目标版本。
 2. 确认仓库根目录下 `baseline.json`、原始配置文件、运行时文件准备就绪。
 3. 检查 `autoUpdate` 配置策略是否已确定（默认关闭空值）：
    - 若发版后立即启用自动更新，请先准备 manifest 链接。
 
 ### 3.2 执行发布脚本
 
-```bat
-publish-release.bat [可选:输出目录]
+```powershell
+dotnet run --project src\BlueOath.Publisher\BlueOath.Publisher.csproj -- --output "D:\tmp\release\BlueOath-Release" --configuration Release
 ```
 
-- 默认输出：`release\BlueOath-Release`（若未传参数）。
-- `publish-release.bat [D:\tmp\release]` 可定向到固定目录便于后续打包。
+- 默认输出：`release\BlueOath-Release`（可通过 `--output` 指定到固定目录便于后续打包）。
 
 ### 3.3 脚本执行内含阶段
 
-`publish-release.bat` 内部执行两层流程：
+发布器内置执行两层流程：
 
 1. 根目录 `dotnet restore` / `dotnet build -c Release --no-restore`；
 2. 调用 `BlueOath.Publisher`：
@@ -89,7 +88,7 @@ BlueOath-Release
 
 ## 5. 发布后验收清单
 
-- [ ] `publish-release.bat` 执行成功退出码 0；
+- [ ] 发布器执行成功退出码 0；
 - [ ] 输出目录存在 `launcher-settings.json`、`BlueOath.Launcher.Wpf.exe`；
 - [ ] 启动 `启动游戏.bat` 可正常打开启动器；
 - [ ] `launcher-settings.json` 中 `updateManifestUrl`/`autoUpdateEnabled` 如期配置；
@@ -100,7 +99,7 @@ BlueOath-Release
 ## 6. 常见问题与修正
 
 - 未见 `launcher-settings.json`：优先检查
-  - `publish-release.bat` 是否通过 `--output` 写入到预期目录；
+  - 发布器是否通过 `--output` 写入到预期目录；
   - `BlueOath.Publisher/Program.cs` 是否完整执行到 `Step 6`；
   - 目标目录写权限是否充足。
 - 自动更新不触发：

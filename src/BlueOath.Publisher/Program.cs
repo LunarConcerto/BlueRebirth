@@ -8,6 +8,16 @@ var outputDir = outputArg is not null
     ? outputArg[9..]
     : Path.Combine(root, "release", stamp);
 
+var configurationArg = args.FirstOrDefault(a => a.StartsWith("--configuration=", StringComparison.OrdinalIgnoreCase));
+var configuration = configurationArg is not null
+    ? configurationArg["--configuration=".Length..]
+    : "Release";
+if (!string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase) &&
+    !string.Equals(configuration, "Release", StringComparison.OrdinalIgnoreCase))
+{
+    configuration = "Release";
+}
+
 var skipBuild = args.Contains("--skip-build", StringComparer.OrdinalIgnoreCase);
 var skipNative = args.Contains("--skip-native", StringComparer.OrdinalIgnoreCase);
 
@@ -61,7 +71,7 @@ if (!skipBuild)
     var serverOutput = Path.Combine(outputDir, "server");
     var psi = new ProcessStartInfo("dotnet")
     {
-        Arguments = $"publish \"{serverProj}\" -c Release -o \"{serverOutput}\"",
+        Arguments = $"publish \"{serverProj}\" -c {configuration} -o \"{serverOutput}\"",
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,
@@ -93,7 +103,7 @@ if (!skipBuild)
     var launcherOutput = Path.Combine(outputDir, "launcher");
     var psi = new ProcessStartInfo("dotnet")
     {
-        Arguments = $"publish \"{launcherProj}\" -c Release -o \"{launcherOutput}\"",
+        Arguments = $"publish \"{launcherProj}\" -c {configuration} -o \"{launcherOutput}\"",
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,

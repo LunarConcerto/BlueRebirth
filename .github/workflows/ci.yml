@@ -9,8 +9,7 @@ on:
       - 'v*'
   pull_request:
     branches:
-      - master
-      - WakabaMutsumi
+      - '**'
   workflow_dispatch:
 
 permissions:
@@ -46,10 +45,10 @@ jobs:
         run: dotnet test BlueOath.Local.sln --no-build -c ${{ matrix.configuration }} --verbosity normal
 
   publish:
-    name: Publish Launcher Bundle
+    name: Publish Launcher Bundle (Release)
     runs-on: windows-latest
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/master') || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,7 +63,7 @@ jobs:
         run: |
           $OutputDir = Join-Path $env:RUNNER_TEMP ("BlueOath-Release-" + $env:GITHUB_RUN_NUMBER)
           New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-          & "$PWD\publish-release.bat" $OutputDir
+          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- --output "$OutputDir\BlueOath-Release" --configuration Release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $bundleDir = Join-Path $OutputDir "BlueOath-Release"
           if (-not (Test-Path (Join-Path $bundleDir "launcher-settings.json"))) {
@@ -81,4 +80,42 @@ jobs:
         with:
           name: launcher-bundle-${{ github.run_number }}
           path: ${{ runner.temp }}/BlueOath-Release-${{ github.run_number }}/BlueOath-Release
+          if-no-files-found: error
+
+  publish_debug:
+    name: Publish Launcher Bundle (Debug)
+    runs-on: windows-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/WakabaMutsumi'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build & publish debug bundle
+        shell: pwsh
+        run: |
+          $OutputDir = Join-Path $env:RUNNER_TEMP ("BlueOath-Debug-" + $env:GITHUB_RUN_NUMBER)
+          New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- --output "$OutputDir\BlueOath-Release" --configuration Debug
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $bundleDir = Join-Path $OutputDir "BlueOath-Release"
+          if (-not (Test-Path (Join-Path $bundleDir "launcher-settings.json"))) {
+            Write-Error "ERROR: launcher-settings.json is missing."
+            exit 1
+          }
+          if (-not (Test-Path (Join-Path $bundleDir "BlueOath.Launcher.Wpf.exe"))) {
+            Write-Error "ERROR: BlueOath.Launcher.Wpf.exe is missing."
+            exit 1
+          }
+
+      - name: Upload debug artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: launcher-bundle-debug-${{ github.run_number }}
+          path: ${{ runner.temp }}/BlueOath-Debug-${{ github.run_number }}/BlueOath-Release
           if-no-files-found: error
