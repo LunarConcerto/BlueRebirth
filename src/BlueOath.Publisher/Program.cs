@@ -61,7 +61,7 @@ if (!skipBuild)
     var serverOutput = Path.Combine(outputDir, "server");
     var psi = new ProcessStartInfo("dotnet")
     {
-        Arguments = $"publish \"{serverProj}\" -c Release -o \"{serverOutput}\" --no-restore",
+        Arguments = $"publish \"{serverProj}\" -c Release -o \"{serverOutput}\"",
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,
@@ -93,7 +93,7 @@ if (!skipBuild)
     var launcherOutput = Path.Combine(outputDir, "launcher");
     var psi = new ProcessStartInfo("dotnet")
     {
-        Arguments = $"publish \"{launcherProj}\" -c Release -o \"{launcherOutput}\" --no-restore",
+        Arguments = $"publish \"{launcherProj}\" -c Release -o \"{launcherOutput}\"",
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,

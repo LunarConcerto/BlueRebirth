@@ -103,14 +103,11 @@ public class LaunchViewModel : ViewModelBase
         }
 
         IsLaunching = true;
+        _mainViewModel.NavigateTo(1);
 
         await _processManager.LaunchAsync(_config, startServer);
 
-        if (_processManager.Stage == ProcessStage.Running)
-        {
-            _mainViewModel.NavigateTo(1);
-        }
-        else if (_processManager.Stage == ProcessStage.Failed)
+        if (_processManager.Stage == ProcessStage.Failed)
         {
             var error = _processManager.LastError;
             if (!string.IsNullOrEmpty(error))

@@ -360,7 +360,9 @@ public class ProcessManager
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
         };
 
         var proc = Process.Start(psi);
@@ -421,7 +423,9 @@ public class ProcessManager
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            WorkingDirectory = _rootDir
+            WorkingDirectory = _rootDir,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
         };
 
         _serverProcess = Process.Start(psi);
@@ -491,7 +495,9 @@ public class ProcessManager
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            WorkingDirectory = _rootDir
+            WorkingDirectory = _rootDir,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
         };
 
         _proxyProcess = Process.Start(psi);
@@ -603,13 +609,16 @@ public class ProcessManager
 
         var psi = new ProcessStartInfo(injector)
         {
-            Arguments = $"\"--exe={exePath}\" \"--payload={payload}\" \"--game-hash={gameHash}\"",
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            WorkingDirectory = nativeDir
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
         };
+        psi.ArgumentList.Add("--exe=" + exePath);
+        psi.ArgumentList.Add("--payload=" + payload);
+        psi.ArgumentList.Add("--game-hash=" + gameHash);
 
         var proc = Process.Start(psi);
         if (proc is null) return -1;
