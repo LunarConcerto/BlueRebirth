@@ -118,9 +118,10 @@ jobs:
           $tagName = '${{ steps.release_meta.outputs.tag_name }}'
           $packagePath = '${{ steps.release_meta.outputs.package_path }}'
           $mirrorRoot = Join-Path $env:RUNNER_TEMP 'gitee-update-mirror-release'
-          git clone --branch master "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
+          $mirrorBranch = 'master'
+          git clone --branch $mirrorBranch "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
           Push-Location $mirrorRoot
-          git tag -f $tagName origin/master
+          git tag -f $tagName origin/HEAD
           git push origin "refs/tags/$tagName" --force
           Pop-Location
           $release = $null
@@ -135,13 +136,11 @@ jobs:
           $upload = Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files" -Headers $headers -Method Post -Form @{ file = Get-Item -LiteralPath $packagePath }
           $manifest = [ordered]@{ version = $tagName; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
           Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-release.json') -Value $manifest -Encoding UTF8
-          Push-Location $mirrorRoot
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add launcher-update-release.json
           git commit -m "chore: update release manifest" 2>$null
-          if ($LASTEXITCODE -eq 0) { git push origin master }
-          Pop-Location
+          if ($LASTEXITCODE -eq 0) { git push origin "HEAD:$mirrorBranch" }
 
   publish_debug:
     name: Publish Launcher Bundle (Debug)
@@ -226,9 +225,10 @@ jobs:
           $tagName = 'debug-latest'
           $packagePath = '${{ steps.debug_release_meta.outputs.package_path }}'
           $mirrorRoot = Join-Path $env:RUNNER_TEMP 'gitee-update-mirror-debug'
-          git clone --branch master "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
+          $mirrorBranch = 'master'
+          git clone --branch $mirrorBranch "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
           Push-Location $mirrorRoot
-          git tag -f $tagName origin/master
+          git tag -f $tagName origin/HEAD
           git push origin "refs/tags/$tagName" --force
           Pop-Location
           $release = $null
@@ -243,10 +243,8 @@ jobs:
           $upload = Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files" -Headers $headers -Method Post -Form @{ file = Get-Item -LiteralPath $packagePath }
           $manifest = [ordered]@{ version = "v1.0.${{ github.run_number }}"; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
           Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-debug.json') -Value $manifest -Encoding UTF8
-          Push-Location $mirrorRoot
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add launcher-update-debug.json
           git commit -m "chore: update debug manifest" 2>$null
-          if ($LASTEXITCODE -eq 0) { git push origin master }
-          Pop-Location
+          if ($LASTEXITCODE -eq 0) { git push origin "HEAD:$mirrorBranch" }
