@@ -57,8 +57,8 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
             case "tactic.SetHerosTactic":
                 result = ModuleResult.Ok(await hero.BuildSetHerosTacticAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
-            case "hero.HeroIntensify":
             case "hero.HeroAdvance":
+            case "hero.HeroIntensify":
             case "hero.HeroAdvanceMUB":
             case "hero.StudySkill":
             case "hero.AutoEquip":

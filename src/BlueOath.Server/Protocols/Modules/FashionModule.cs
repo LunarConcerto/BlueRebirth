@@ -23,20 +23,20 @@ internal sealed class FashionModule(GameServices services) : IGameModule
     private async Task<byte[]> BuildFashionEquipRetAsync(GameContext ctx, TRequest request)
     {
         if (request.Args is null) return [];
-        var (fashionTid, _, heroId) = DecodeFashionEquipArg(request.Args);
-        if (heroId == 0) return [];
+        FashionEquipArg arg = DecodeFashionEquipArg(request.Args);
+        if (arg.HeroId == 0) return [];
         var account = await ctx.GetAccountAsync();
         var dock = account.Dock;
         var heroList = dock.Heroes.ToList();
-        var idx = heroList.FindIndex(h => h.HeroId == heroId);
+        var idx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
         if (idx < 0) return [];
-        heroList[idx] = heroList[idx] with { Fashioning = fashionTid };
+        heroList[idx] = heroList[idx] with { Fashioning = arg.FashionTid };
         account = account with { Dock = dock with { Heroes = heroList } };
         await services.SaveAccountAsync(account, ctx.Ct);
         return [];
     }
 
-    private static (int FashionTid, int EquipStatus, uint HeroId) DecodeFashionEquipArg(ReadOnlySpan<byte> data)
+    private static FashionEquipArg DecodeFashionEquipArg(ReadOnlySpan<byte> data)
     {
         ProtocolDecoder.ProtoReader reader = new(data);
         int fashionTid = 0, equipStatus = 0;
@@ -49,6 +49,6 @@ internal sealed class FashionModule(GameServices services) : IGameModule
                 case 3 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
                 default: reader.Skip(wire); break;
             }
-        return (fashionTid, equipStatus, heroId);
+        return new FashionEquipArg(fashionTid, equipStatus, heroId);
     }
 }

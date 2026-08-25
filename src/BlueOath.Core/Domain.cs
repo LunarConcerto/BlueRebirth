@@ -8,6 +8,9 @@ public sealed record PlayerState(string ProfileId, string Name, int Level, int F
 public sealed record Stage(int Id, string Name, IReadOnlyList<Ship> Enemies, int FuelCost, int CoinReward);
 public sealed record BattleOutcome(bool Victory, int FuelSpent, int CoinsGained, int CompletedStages, string Message);
 
+/// <summary>战斗结算结果：结算后的玩家状态 + 战斗结算明细。</summary>
+public sealed record BattleResolution(PlayerState State, BattleOutcome Outcome);
+
 public interface IGameRepository
 {
     Task<PlayerState?> LoadAsync(string profileId, CancellationToken ct = default);
@@ -49,7 +52,7 @@ public sealed class GameService(IGameRepository repository, ProtocolProfile prof
         return stage;
     }
 
-    public async Task<(PlayerState State, BattleOutcome Outcome)> ResolveBattleAsync(string profileId, int stageId, bool win, CancellationToken ct = default)
+    public async Task<BattleResolution> ResolveBattleAsync(string profileId, int stageId, bool win, CancellationToken ct = default)
     {
         var state = await RequireState(profileId, ct);
         var stage = StageCatalog.Get(stageId);
@@ -57,7 +60,7 @@ public sealed class GameService(IGameRepository repository, ProtocolProfile prof
         var completed = Math.Max(state.CompletedStages, win ? stage.Id : state.CompletedStages);
         var updated = state with { Fuel = state.Fuel - stage.FuelCost, Coins = state.Coins + (win ? stage.CoinReward : 0), CompletedStages = completed };
         await repository.SaveAsync(updated, ct);
-        return (updated, new BattleOutcome(win, stage.FuelCost, win ? stage.CoinReward : 0, completed, win ? "Victory" : "Defeat"));
+        return new BattleResolution(updated, new BattleOutcome(win, stage.FuelCost, win ? stage.CoinReward : 0, completed, win ? "Victory" : "Defeat"));
     }
 
     private async Task<PlayerState> RequireState(string id, CancellationToken ct) => await repository.LoadAsync(id, ct) ?? throw new KeyNotFoundException("Profile not found");

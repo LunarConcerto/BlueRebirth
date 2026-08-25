@@ -64,19 +64,19 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
-    internal static byte[] EncodeHeroAddExpRet(uint heroId, List<(int Id, int Num)> items)
+    internal static byte[] EncodeHeroAddExpRet(uint heroId, List<ItemCount> items)
     {
         ProtocolPackage output = new();
         if (heroId != 0)
             output.Write(0x08, heroId);
-        foreach ((int id, int num) in items)
+        foreach (ItemCount item in items)
         {
-            ProtocolPackage item = new();
-            if (id != 0)
-                item.Write(0x10, unchecked((ulong)id));
-            if (num != 0)
-                item.Write(0x18, unchecked((ulong)num));
-            byte[] body = item.ToArray();
+            ProtocolPackage itemMsg = new();
+            if (item.Id != 0)
+                itemMsg.Write(0x10, unchecked((ulong)item.Id));
+            if (item.Num != 0)
+                itemMsg.Write(0x18, unchecked((ulong)item.Num));
+            byte[] body = itemMsg.ToArray();
             output.Write(0x12, body);
         }
 

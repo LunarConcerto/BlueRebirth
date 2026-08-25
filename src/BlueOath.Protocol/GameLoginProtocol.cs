@@ -214,7 +214,7 @@ public static class TMessageCodec
     }
 
     // TBuyGoodsArg: ShopId(1)/GoodId(2)/BuyNum(3)/PriceIndex(5)。
-    public static (int ShopId, int GoodId, int BuyNum, int PriceIndex) DecodeBuyGoodsArg(ReadOnlySpan<byte> payload)
+    public static BuyGoodsArg DecodeBuyGoodsArg(ReadOnlySpan<byte> payload)
     {
         var reader = new PbReader(payload);
         int shopId = 0, goodId = 0, buyNum = 0, priceIndex = 0;
@@ -229,7 +229,7 @@ public static class TMessageCodec
                 default: reader.Skip(wire); break;
             }
         }
-        return (shopId, goodId, buyNum, priceIndex);
+        return new BuyGoodsArg(shopId, goodId, buyNum, priceIndex);
     }
 
     // TFetchMailArg/TOpenMailArg/TDeleteMailArg: Mid(1, uint64)。
@@ -246,7 +246,7 @@ public static class TMessageCodec
     }
 
     // THeroChangeEquipArgs: HeroId(1, uint32), Index(2, int32), EquipId(3, uint32), Type(4, int32)。
-    public static (uint HeroId, int Index, uint EquipId, int Type) DecodeHeroChangeEquipArgs(ReadOnlySpan<byte> payload)
+    public static HeroChangeEquipArgs DecodeHeroChangeEquipArgs(ReadOnlySpan<byte> payload)
     {
         var reader = new PbReader(payload);
         uint heroId = 0, equipId = 0;
@@ -262,7 +262,7 @@ public static class TMessageCodec
                 default: reader.Skip(wire); break;
             }
         }
-        return (heroId, index, equipId, type);
+        return new HeroChangeEquipArgs(heroId, index, equipId, type);
     }
 
     // TBuyGoodsRet: Reward(1, repeated TCommonReward)/GoodId(2)/BuyNum(3)。
@@ -276,7 +276,7 @@ public static class TMessageCodec
     }
 
     // TQualityBuyGoodsArg: ShopId(1)/GoodIdList(2, repeated int32)。
-    public static (int ShopId, IReadOnlyList<int> GoodIdList) DecodeQualityBuyGoodsArg(ReadOnlySpan<byte> payload)
+    public static QualityBuyGoodsArg DecodeQualityBuyGoodsArg(ReadOnlySpan<byte> payload)
     {
         var reader = new PbReader(payload);
         int shopId = 0;
@@ -290,7 +290,7 @@ public static class TMessageCodec
                 default: reader.Skip(wire); break;
             }
         }
-        return (shopId, goodIds);
+        return new QualityBuyGoodsArg(shopId, goodIds);
     }
 
     // TQualityBuyGoodsRet: Reward(1, repeated TCommonReward)/GoodIdList(2, repeated int32)。

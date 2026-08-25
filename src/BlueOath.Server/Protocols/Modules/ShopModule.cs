@@ -6,6 +6,9 @@ namespace BlueOath.Server.Protocols;
 /// <summary>商店/仓库模块：shop.*（购买/商店信息）与 bag.GetBagInfo。</summary>
 internal sealed class ShopModule(ShopService shop, GameServices services) : IGameModule
 {
+    /// <summary>发放结果：更新后的账号 + 生成的奖励（无效商品 Type=0）。</summary>
+    private sealed record GoodsGrant(PlayerAccount Account, CommonReward Reward);
+
     public IReadOnlyList<string> Prefixes => ["shop", "bag"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
@@ -47,64 +50,64 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
     private async Task<byte[]> BuildBuyGoodsRetAsync(GameContext ctx, TRequest request)
     {
         if (request.Args is null) return [];
-        var (_, goodId, buyNum, _) = TMessageCodec.DecodeBuyGoodsArg(request.Args);
-        if (buyNum <= 0) buyNum = 1;
+        BuyGoodsArg arg = TMessageCodec.DecodeBuyGoodsArg(request.Args);
+        if (arg.BuyNum <= 0) arg = arg with { BuyNum = 1 };
 
         var account = await ctx.GetAccountAsync();
-        var (newAccount, reward) = ApplyGoods(account, goodId, buyNum);
-        if (reward.Type == 0) return [];
-        await services.SaveAccountAsync(newAccount, ctx.Ct);
+        var grant = ApplyGoods(account, arg.GoodId, arg.BuyNum);
+        if (grant.Reward.Type == 0) return [];
+        await services.SaveAccountAsync(grant.Account, ctx.Ct);
 
-        return TMessageCodec.EncodeBuyGoodsRet(reward, goodId, buyNum);
+        return TMessageCodec.EncodeBuyGoodsRet(grant.Reward, arg.GoodId, arg.BuyNum);
     }
 
     /// <summary>处理 shop.QualityBuyGoods（多选/批量购买）：对每个 GoodId 免费发放。</summary>
     private async Task<byte[]> BuildQualityBuyGoodsRetAsync(GameContext ctx, TRequest request)
     {
         if (request.Args is null) return [];
-        var (_, goodIds) = TMessageCodec.DecodeQualityBuyGoodsArg(request.Args);
-        if (goodIds.Count == 0) return [];
+        QualityBuyGoodsArg arg = TMessageCodec.DecodeQualityBuyGoodsArg(request.Args);
+        if (arg.GoodIdList.Count == 0) return [];
 
         var account = await ctx.GetAccountAsync();
         var rewards = new List<CommonReward>();
-        foreach (var goodId in goodIds)
+        foreach (var goodId in arg.GoodIdList)
         {
-            var (newAccount, reward) = ApplyGoods(account, goodId, 1);
-            if (reward.Type == 0) continue;
-            account = newAccount;
-            rewards.Add(reward);
+            var grant = ApplyGoods(account, goodId, 1);
+            if (grant.Reward.Type == 0) continue;
+            account = grant.Account;
+            rewards.Add(grant.Reward);
         }
         await services.SaveAccountAsync(account, ctx.Ct);
 
-        return TMessageCodec.EncodeQualityBuyGoodsRet(rewards, goodIds);
+        return TMessageCodec.EncodeQualityBuyGoodsRet(rewards, arg.GoodIdList);
     }
 
     /// <summary>发放单个 GM 商品，返回更新后的账号和奖励。无效商品返回 Type=0 的空奖励。</summary>
-    private (PlayerAccount Account, CommonReward Reward) ApplyGoods(PlayerAccount account, int goodId, int buyNum)
+    private GoodsGrant ApplyGoods(PlayerAccount account, int goodId, int buyNum)
     {
         if (!services.GmGoodsMap.TryGetValue(goodId, out var goods))
-            return (account, new CommonReward());
+            return new GoodsGrant(account, new CommonReward());
         if (buyNum <= 0) buyNum = 1;
         var totalNum = goods.Num * buyNum;
 
         if (goods.Type == GameServices.GoodsTypeCurrency)
         {
-            account = GameServices.AddCurrency(account, goods.ConfigId, totalNum);
+            account = GameServices.AddCurrency(account, goods.ItemId, totalNum);
         }
         else if (goods.Type == GameServices.GoodsTypeFashion)
         {
-            account = AddFashion(account, goods.ConfigId);
+            account = AddFashion(account, goods.ItemId);
         }
         else if (goods.Type == GameServices.GoodsTypeEquip)
         {
             for (var i = 0; i < totalNum; i++)
-                account = AddEquipItem(account, goods.ConfigId);
+                account = AddEquipItem(account, goods.ItemId);
         }
         else
         {
-            account = GameServices.AddBagItem(account, goods.ConfigId, totalNum);
+            account = GameServices.AddBagItem(account, goods.ItemId, totalNum);
         }
-        return (account, new CommonReward(goods.Type, goods.ConfigId, totalNum));
+        return new GoodsGrant(account, new CommonReward(goods.Type, goods.ItemId, totalNum));
     }
 
     /// <summary>装备入库：创建一件装备实例（EquipId 自增），存入装备仓库。</summary>

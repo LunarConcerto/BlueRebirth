@@ -1,4 +1,5 @@
-﻿using BlueOath.Core;
+﻿using System.Collections.Concurrent;
+using BlueOath.Core;
 using BlueOath.Protocol;
 using BlueOath.Server.Configs;
 using BlueOath.Storage;
@@ -20,7 +21,7 @@ internal sealed class GameServices
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
     private readonly GmGoodsConfig _gmGoods;
-    private readonly Dictionary<int, (int Type, int ConfigId, int Num)> _gmGoodsMap;
+    private readonly Dictionary<int, GmGoodConfig> _gmGoodsMap;
     private readonly Dictionary<int, int> _fashionSfIdMap;
     private readonly IReadOnlyList<GmMailConfig> _gmMails;
     private readonly Dictionary<int, ConfigExtractShip> _extractShips;
@@ -38,7 +39,7 @@ internal sealed class GameServices
         _logger = loggerFactory.CreateLogger<GameServices>();
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
         _gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
-        _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId, g => (g.Type, g.ItemId, g.Num));
+        _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
         _fashionSfIdMap = _gmGoods.FashionSfId.ToDictionary(kv => kv.Key, kv => kv.Value);
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(options.DataRoot);
@@ -60,14 +61,19 @@ internal sealed class GameServices
     /// <summary>GM 邮件配置（供 MailModule 等使用）。</summary>
     internal IReadOnlyList<GmMailConfig> GmMails => _gmMails;
 
-    /// <summary>GM 商品映射：GoodId → (Type, ConfigId, Num)。</summary>
-    internal IReadOnlyDictionary<int, (int Type, int ConfigId, int Num)> GmGoodsMap => _gmGoodsMap;
+    /// <summary>GM 商品映射：GoodId → GmGoodConfig。</summary>
+    internal IReadOnlyDictionary<int, GmGoodConfig> GmGoodsMap => _gmGoodsMap;
 
     /// <summary>时装 FashionTid → SfId 映射。</summary>
     internal IReadOnlyDictionary<int, int> FashionSfIdMap => _fashionSfIdMap;
 
-    /// <summary>持久化账号（供各模块修改后落盘）。</summary>
-    internal Task SaveAccountAsync(PlayerAccount account, CancellationToken ct = default) => _repo.SaveAccountAsync(account, ct);
+    /// <summary>持久化账号（供各模块修改后落盘）。同时更新内存缓存。DB 写入异步执行不阻塞响应。</summary>
+    internal Task SaveAccountAsync(PlayerAccount account, CancellationToken ct = default)
+    {
+        _accountCache[account.ProfileId] = account;
+        _ = _repo.SaveAccountAsync(account, ct);
+        return Task.CompletedTask;
+    }
 
     /// <summary>抽卡模板配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigExtractShip> ExtractShips => _extractShips;
@@ -97,7 +103,7 @@ internal sealed class GameServices
     /// 处理登录操作码：解码 <c>TArgLogin</c>，按 <c>Pid</c> 创建/加载本地档案，
     /// 返回 <c>TRetLogin</c> 编码结果与解析出的 profileId（供会话后续关联账号）。
     /// </summary>
-    public async Task<(int Operation, byte[] Payload, string ProfileId)> BuildLoginPayloadAsync(byte[] payload, CancellationToken ct)
+    public async Task<LoginPayload> BuildLoginPayloadAsync(byte[] payload, CancellationToken ct)
     {
         var request = GameLoginCodec.DecodeLogin(payload);
         var profileId = string.IsNullOrWhiteSpace(request.Pid) ? PlayerAccountFactory.DefaultProfileId : request.Pid;
@@ -105,7 +111,7 @@ internal sealed class GameServices
         if (await _repo.LoadAsync(profileId, ct) is null)
             await _repo.CreateAsync(profileId, profileId, ct);
         var response = new TRetLogin("0", profileId);
-        return (GameOperationCodes.Login, GameLoginCodec.Encode(response), profileId);
+        return new LoginPayload(GameOperationCodes.Login, GameLoginCodec.Encode(response), profileId);
     }
 
     /// <summary>解析 <c>player.Login</c> 参数中的 Pid，返回关联的 profileId。</summary>
@@ -275,30 +281,39 @@ internal sealed class GameServices
         ];
     }
 
-    /// <summary>加载账号；不存在时按默认工厂创建并落盘（兼容旧存档）。</summary>
+    /// <summary>加载账号；不存在时按默认工厂创建并落盘。优先从内存缓存读取。</summary>
     internal async Task<PlayerAccount> GetOrCreateAccountAsync(string profileId, CancellationToken ct)
     {
+        if (_accountCache.TryGetValue(profileId, out var cached))
+            return cached;
+
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is not null)
         {
             EnsureEquipIdFromAccount(account);
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
+            _accountCache[profileId] = account;
             return account;
         }
         var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
     }
 
-    /// <summary>仅加载账号（不创建），供会话层在推送时读取最新数据。</summary>
+    /// <summary>仅加载账号（不创建），供会话层在推送时读取最新数据。优先从内存缓存读取。</summary>
     public async Task<PlayerAccount> GetAccountAsync(string profileId, CancellationToken ct)
     {
+        if (_accountCache.TryGetValue(profileId, out var cached))
+            return cached;
+
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is null)
             return PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
+        _accountCache[profileId] = account;
         return account;
     }
 
@@ -398,6 +413,23 @@ internal sealed class GameServices
     }
 
     private List<uint> _lastBuildHeroIds = [];
+
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _accountLocks = new();
+
+    private readonly ConcurrentDictionary<string, PlayerAccount> _accountCache = new();
+
+    /// <summary>获取指定账号的互斥锁，用于序列化并发写操作（如 hero.AddExp 快速连续升级）。</summary>
+    internal async Task<IDisposable> LockAccountAsync(string profileId, CancellationToken ct)
+    {
+        var sem = _accountLocks.GetOrAdd(profileId, _ => new SemaphoreSlim(1, 1));
+        await sem.WaitAsync(ct);
+        return new AccountLockReleaser(sem);
+    }
+
+    private sealed class AccountLockReleaser(SemaphoreSlim sem) : IDisposable
+    {
+        public void Dispose() => sem.Release();
+    }
 
     /// <summary>舰娘加入船坞：创建 Hero 实例，并按 config_ship_info（键 = ship_info_id = (templateId-1)/10）
     /// 的 equip1..equip6 发放默认装备（分配实例 ID 入装备仓库 + 填入 EquipSlots）。

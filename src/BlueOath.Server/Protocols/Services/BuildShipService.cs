@@ -18,11 +18,12 @@ internal sealed class BuildShipService(GameServices services)
     {
         if (request.Args is null)
             return [];
-        (int extractId, int num, _) = ProtocolDecoder.DecodeBuildShipArg(request.Args);
+        BuildShipArg arg = ProtocolDecoder.DecodeBuildShipArg(request.Args);
+        int num = arg.Num;
         if (num <= 0) num = 1;
         if (num > 10) num = 10;
 
-        if (!services.ExtractShips.TryGetValue(extractId, out var extractConfig))
+        if (!services.ExtractShips.TryGetValue(arg.Id, out var extractConfig))
             return [];
 
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);

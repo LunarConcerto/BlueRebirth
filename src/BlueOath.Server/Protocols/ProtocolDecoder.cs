@@ -45,7 +45,7 @@ internal static class ProtocolDecoder
     }
 
     /// <summary>解码 hero.Marry 参数：HeroId(1, uint32), MarryType(2, int32)。</summary>
-    internal static (uint HeroId, int MarryType) DecodeMarryArg(ReadOnlySpan<byte> payload)
+    internal static MarryArg DecodeMarryArg(ReadOnlySpan<byte> payload)
     {
         ProtoReader reader = new(payload);
         uint heroId = 0;
@@ -57,11 +57,11 @@ internal static class ProtocolDecoder
                 case 2 when wire == 0: marryType = checked((int)reader.ReadVarint()); break;
                 default: reader.Skip(wire); break;
             }
-        return (heroId, marryType);
+        return new MarryArg(heroId, marryType);
     }
 
     /// <summary>解码 TBuildShipArg: Id(1, int32), Num(2, int32), CacheId(3, string)。</summary>
-    internal static (int Id, int Num, string CacheId) DecodeBuildShipArg(ReadOnlySpan<byte> payload)
+    internal static BuildShipArg DecodeBuildShipArg(ReadOnlySpan<byte> payload)
     {
         ProtoReader reader = new(payload);
         int id = 0, num = 1;
@@ -75,15 +75,15 @@ internal static class ProtocolDecoder
                 default: reader.Skip(wire); break;
             }
 
-        return (id, num, cacheId);
+        return new BuildShipArg(id, num, cacheId);
     }
 
     /// <summary>解码 hero.AddExp 参数：HeroId(1, uint32), Items(2, repeated {ItemId(2), Num(3)})。</summary>
-    internal static (uint HeroId, List<(int Id, int Num)> Items) DecodeHeroAddExp(ReadOnlySpan<byte> data)
+    internal static HeroAddExpArg DecodeHeroAddExp(ReadOnlySpan<byte> data)
     {
         ProtoReader reader = new(data);
         uint heroId = 0;
-        List<(int, int)> items = new();
+        List<ItemCount> items = new();
         while (reader.TryReadField(out int field, out int wire))
             if (field == 1 && wire == 0)
             {
@@ -98,14 +98,14 @@ internal static class ProtocolDecoder
                     if (f == 2 && w == 0) curId = checked((int)itemReader.ReadVarint());
                     else if (f == 3 && w == 0) curNum = checked((int)itemReader.ReadVarint());
                     else itemReader.Skip(w);
-                if (curId > 0 && curNum > 0) items.Add((curId, curNum));
+                if (curId > 0 && curNum > 0) items.Add(new ItemCount(curId, curNum));
             }
             else
             {
                 reader.Skip(wire);
             }
 
-        return (heroId, items);
+        return new HeroAddExpArg(heroId, items);
     }
 
     /// <summary>解码 copy.StartBase 请求的 CopyId（仅 field 2）。</summary>
@@ -125,8 +125,7 @@ internal static class ProtocolDecoder
     ///  - 关卡出战舰队 HeroList(13) 中第一个 TStartBaseHeroList 的 HeroIdList(1, repeated uint32)
     /// 客户端在请求里已指定本关可出战的舰船（剧情关限制），服务端必须回环它而非自行猜测。
     /// </summary>
-    internal static (int CopyId, List<int>? DeployHeroIds, bool IsRunningFight, int BattleMode, int MatchType)
-        DecodeStartBaseArg(byte[] args)
+    internal static StartBaseArg DecodeStartBaseArg(byte[] args)
     {
         ProtoReader reader = new(args);
         int copyId = 0;
@@ -163,7 +162,7 @@ internal static class ProtocolDecoder
                     break;
             }
 
-        return (copyId, deployHeroIds, isRunningFight, battleMode, matchType);
+        return new StartBaseArg(copyId, deployHeroIds, isRunningFight, battleMode, matchType);
     }
 
     /// <summary>
@@ -432,7 +431,7 @@ internal static class ProtocolDecoder
     }
 
     /// <summary>解码 hero.LockHero 参数：HeroId(1, uint32), Lock(2, bool)。</summary>
-    internal static (uint HeroId, bool Lock) DecodeLockHeroArg(ReadOnlySpan<byte> data)
+    internal static LockHeroArg DecodeLockHeroArg(ReadOnlySpan<byte> data)
     {
         ProtoReader reader = new(data);
         uint heroId = 0;
@@ -444,7 +443,7 @@ internal static class ProtocolDecoder
                 case 2 when wire == 0: isLock = reader.ReadVarint() != 0; break;
                 default: reader.Skip(wire); break;
             }
-        return (heroId, isLock);
+        return new LockHeroArg(heroId, isLock);
     }
 
     /// <summary>解码 hero.RetireHero 参数：HeroId(1, repeated uint32)。</summary>
@@ -459,7 +458,7 @@ internal static class ProtocolDecoder
     }
 
     /// <summary>解码 hero.ChangeName 参数：HeroId(1, uint32), Name(2, string)。</summary>
-    internal static (uint HeroId, string Name) DecodeChangeHeroNameArg(ReadOnlySpan<byte> data)
+    internal static ChangeHeroNameArg DecodeChangeHeroNameArg(ReadOnlySpan<byte> data)
     {
         ProtoReader reader = new(data);
         uint heroId = 0;
@@ -471,11 +470,11 @@ internal static class ProtocolDecoder
                 case 2 when wire == 2: name = reader.ReadString(); break;
                 default: reader.Skip(wire); break;
             }
-        return (heroId, name);
+        return new ChangeHeroNameArg(heroId, name);
     }
 
     /// <summary>解码 hero.AddAffection 参数：HeroId(1, uint32), TemplateId(2, int32), Num(3, int32)。</summary>
-    internal static (uint HeroId, int TemplateId, int Num) DecodeHeroAddAffectionArg(ReadOnlySpan<byte> data)
+    internal static HeroAddAffectionArg DecodeHeroAddAffectionArg(ReadOnlySpan<byte> data)
     {
         ProtoReader reader = new(data);
         uint heroId = 0;
@@ -488,7 +487,7 @@ internal static class ProtocolDecoder
                 case 3 when wire == 0: num = checked((int)reader.ReadVarint()); break;
                 default: reader.Skip(wire); break;
             }
-        return (heroId, templateId, num);
+        return new HeroAddAffectionArg(heroId, templateId, num);
     }
 
     /// <summary>

@@ -10,16 +10,16 @@ internal sealed class HeroService(GameServices services)
     {
         if (request.Args is null)
             return [];
-        (uint heroId, int luaIndex, uint equipId, _) = TMessageCodec.DecodeHeroChangeEquipArgs(request.Args);
+        HeroChangeEquipArgs arg = TMessageCodec.DecodeHeroChangeEquipArgs(request.Args);
         // Lua 客户端发送 1-based 索引，C# 数组是 0-based，需要转换。
-        int index = luaIndex - 1;
+        int index = arg.Index - 1;
         if (index < 0 || index >= 6)
             return [];
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
 
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
-        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        int heroIdx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
         if (heroIdx < 0)
             return [];
         Hero hero = heroList[heroIdx];
@@ -36,10 +36,10 @@ internal sealed class HeroService(GameServices services)
         }
 
         // 新装备上装
-        if (equipId != 0)
+        if (arg.EquipId != 0)
         {
-            account = GameServices.SetEquipHeroId(account, equipId, heroId);
-            slots[index] = equipId;
+            account = GameServices.SetEquipHeroId(account, arg.EquipId, arg.HeroId);
+            slots[index] = arg.EquipId;
         }
 
         heroList[heroIdx] = hero with { EquipSlots = slots };
@@ -51,17 +51,17 @@ internal sealed class HeroService(GameServices services)
 
     internal async Task<byte[]> BuildMarryRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
     {
-        var (heroId, marryType) = ProtocolDecoder.DecodeMarryArg(request.Args ?? []);
+        MarryArg arg = ProtocolDecoder.DecodeMarryArg(request.Args ?? []);
         var account = await services.GetOrCreateAccountAsync(profileId, ct);
 
         var heroes = account.Dock.Heroes.ToList();
-        var heroIdx = heroes.FindIndex(h => h.HeroId == heroId);
+        var heroIdx = heroes.FindIndex(h => h.HeroId == arg.HeroId);
         if (heroIdx < 0) return TMessageCodec.EncodeResponse(new TResponse(Err: 1, ErrMsg: "hero not found"));
 
         var hero = heroes[heroIdx];
         if (hero.MarryTime != 0) return TMessageCodec.EncodeResponse(new TResponse(Err: 2, ErrMsg: "already married"));
 
-        heroes[heroIdx] = hero with { MarryTime = now, MarryType = marryType };
+        heroes[heroIdx] = hero with { MarryTime = now, MarryType = arg.MarryType };
         account = account with { Dock = account.Dock with { Heroes = heroes } };
         account = account with { Character = account.Character with { MarriedNum = account.Character.MarriedNum + 1 } };
         account = GameServices.AddBagItem(account, 10180, -1);
@@ -73,27 +73,29 @@ internal sealed class HeroService(GameServices services)
     internal async Task<byte[]> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
-        (uint heroId, List<(int Id, int Num)> items) = ProtocolDecoder.DecodeHeroAddExp(request.Args);
-        if (heroId == 0 || items.Count == 0) return [];
+        HeroAddExpArg arg = ProtocolDecoder.DecodeHeroAddExp(request.Args);
+        if (arg.HeroId == 0 || arg.Items.Count == 0) return [];
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
 
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
-        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        int heroIdx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
         if (heroIdx < 0) return [];
         Hero hero = heroList[heroIdx];
 
         int totalExp = 0;
         PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
         List<BagItem> bagItems = bag.Items.ToList();
-        foreach ((int itemId, int num) in items)
+        foreach (ItemCount item in arg.Items)
         {
-            if (!services.ExpPerItem.TryGetValue(itemId, out int perExp)) continue;
-            totalExp += perExp * num;
-            int bagIdx = bagItems.FindIndex(i => i.TemplateId == itemId);
+            if (!services.ExpPerItem.TryGetValue(item.Id, out int perExp)) continue;
+            totalExp += perExp * item.Num;
+            int bagIdx = bagItems.FindIndex(i => i.TemplateId == item.Id);
             if (bagIdx >= 0)
             {
-                int newNum = bagItems[bagIdx].Num - num;
+                int newNum = bagItems[bagIdx].Num - item.Num;
                 if (newNum <= 0) bagItems.RemoveAt(bagIdx);
                 else bagItems[bagIdx] = bagItems[bagIdx] with { Num = newNum };
             }
@@ -116,7 +118,7 @@ internal sealed class HeroService(GameServices services)
         account = account with { Dock = dock with { Heroes = heroList }, Bag = bag with { Items = bagItems } };
         await services.SaveAccountAsync(account, ct);
 
-        return ProtocolEncoder.EncodeHeroAddExpRet(heroId, items);
+        return ProtocolEncoder.EncodeHeroAddExpRet(arg.HeroId, arg.Items);
     }
 
     internal async Task<byte[]> BuildGetHerosTacticAsync(string profileId, CancellationToken ct)
@@ -139,13 +141,13 @@ internal sealed class HeroService(GameServices services)
     internal async Task<byte[]> BuildLockHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
-        (uint heroId, bool isLock) = ProtocolDecoder.DecodeLockHeroArg(request.Args);
+        LockHeroArg arg = ProtocolDecoder.DecodeLockHeroArg(request.Args);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
-        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        int heroIdx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
         if (heroIdx < 0) return [];
-        heroList[heroIdx] = heroList[heroIdx] with { Lock = isLock };
+        heroList[heroIdx] = heroList[heroIdx] with { Lock = arg.Lock };
         account = account with { Dock = dock with { Heroes = heroList } };
         await services.SaveAccountAsync(account, ct);
         return [];
@@ -168,14 +170,14 @@ internal sealed class HeroService(GameServices services)
     internal async Task<byte[]> BuildChangeNameRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
-        (uint heroId, string name) = ProtocolDecoder.DecodeChangeHeroNameArg(request.Args);
-        if (heroId == 0 || string.IsNullOrEmpty(name)) return [];
+        ChangeHeroNameArg arg = ProtocolDecoder.DecodeChangeHeroNameArg(request.Args);
+        if (arg.HeroId == 0 || string.IsNullOrEmpty(arg.Name)) return [];
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
-        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        int heroIdx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
         if (heroIdx < 0) return [];
-        heroList[heroIdx] = heroList[heroIdx] with { Name = name };
+        heroList[heroIdx] = heroList[heroIdx] with { Name = arg.Name };
         account = account with { Dock = dock with { Heroes = heroList } };
         await services.SaveAccountAsync(account, ct);
         return [];
@@ -184,15 +186,15 @@ internal sealed class HeroService(GameServices services)
     internal async Task<byte[]> BuildAddAffectionRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
-        (uint heroId, _, int num) = ProtocolDecoder.DecodeHeroAddAffectionArg(request.Args);
-        if (heroId == 0 || num <= 0) return [];
+        HeroAddAffectionArg arg = ProtocolDecoder.DecodeHeroAddAffectionArg(request.Args);
+        if (arg.HeroId == 0 || arg.Num <= 0) return [];
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
-        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        int heroIdx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
         if (heroIdx < 0) return [];
         Hero hero = heroList[heroIdx];
-        heroList[heroIdx] = hero with { Affection = hero.Affection + num * 10000 };
+        heroList[heroIdx] = hero with { Affection = hero.Affection + arg.Num * 10000 };
         account = account with { Dock = dock with { Heroes = heroList } };
         await services.SaveAccountAsync(account, ct);
         return [];

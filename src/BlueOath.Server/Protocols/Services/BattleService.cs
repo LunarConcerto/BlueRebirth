@@ -18,18 +18,17 @@ internal sealed class BattleService(GameServices services)
         {
             PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
             byte[] args = request.Args ?? [];
-            (int copyId, List<int>? deployHeroIds, bool isRunningFight, int battleMode, int matchType) =
-                ProtocolDecoder.DecodeStartBaseArg(args);
+            StartBaseArg arg = ProtocolDecoder.DecodeStartBaseArg(args);
             services.FileLogger.LogInformation(
                 "copy.StartBase argsLen={Len} hex={Hex} copyId={CopyId} deployHeroIds={Deploy} isRunningFight={IsRunning}",
-                args.Length, Convert.ToHexString(args), copyId,
-                deployHeroIds is null ? "<null>" : string.Join(",", deployHeroIds), isRunningFight);
+                args.Length, Convert.ToHexString(args), arg.CopyId,
+                arg.DeployHeroIds is null ? "<null>" : string.Join(",", arg.DeployHeroIds), arg.IsRunningFight);
             List<Hero> heroList = account.Dock.Heroes.ToList();
             // 关卡出战舰队必须回环客户端请求里的 HeroList（剧情关限制），
             // 而不是从玩家编队猜。请求未带时回退到全部船。
-            services.CopyRandomFactors.TryGetValue(copyId, out List<RandomFactorEntry>? randomFactors);
-            return ProtocolEncoder.EncodeStartBaseRet(copyId, heroList, account.Character, deployHeroIds, isRunningFight,
-                battleMode, matchType, randomFactors);
+            services.CopyRandomFactors.TryGetValue(arg.CopyId, out List<RandomFactorEntry>? randomFactors);
+            return ProtocolEncoder.EncodeStartBaseRet(arg.CopyId, heroList, account.Character, arg.DeployHeroIds, arg.IsRunningFight,
+                arg.BattleMode, arg.MatchType, randomFactors);
         }
         catch (Exception ex)
         {
