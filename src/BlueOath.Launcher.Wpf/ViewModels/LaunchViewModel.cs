@@ -110,6 +110,14 @@ public class LaunchViewModel : ViewModelBase
         {
             _mainViewModel.NavigateTo(1);
         }
+        else if (_processManager.Stage == ProcessStage.Failed)
+        {
+            var error = _processManager.LastError;
+            if (!string.IsNullOrEmpty(error))
+            {
+                MessageBox.Show($"启动失败: {error}", "启动失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
 
         IsLaunching = false;
     }

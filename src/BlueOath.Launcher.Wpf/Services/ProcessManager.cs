@@ -88,6 +88,7 @@ public class ProcessManager
     private Process? _serverProcess;
     private Process? _proxyProcess;
     private int _gamePid;
+    private string _lastError = "";
 
     private readonly ObservableCollection<ProcessStateInfo> _processStates = new();
     private readonly ObservableCollection<LogEntry> _serverLogs = new();
@@ -116,6 +117,8 @@ public class ProcessManager
 
     public event EventHandler<ProcessStage>? StageChanged;
     public event EventHandler<LogEntry>? LogReceived;
+
+    public string LastError => _lastError;
 
     public bool IsRunning => _stage is ProcessStage.StartingServer or ProcessStage.StartingProxy
         or ProcessStage.InjectingGame or ProcessStage.Running;
@@ -155,6 +158,7 @@ public class ProcessManager
     public async Task LaunchAsync(LaunchConfig config, bool startServer)
     {
         if (IsRunning) return;
+        _lastError = "";
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
 
@@ -770,6 +774,7 @@ public class ProcessManager
 
     private void LogError(string message)
     {
+        _lastError = message;
         var entry = new LogEntry { Source = "system", Level = "error", Content = message };
         App.Current.Dispatcher.BeginInvoke(() => _systemLogs.Add(entry), System.Windows.Threading.DispatcherPriority.Background);
         LogReceived?.Invoke(this, entry);
