@@ -63,7 +63,7 @@ public class SettingsService
             DataRoot = Path.Combine(rootDir, "runtime", "jp"),
             BaselinePath = Path.Combine(rootDir, "baseline.json"),
             Region = "jp",
-            UpdateManifestUrl = string.Empty,
+            UpdateManifestUrl = "https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/tags/debug-latest",
             AutoUpdateEnabled = true,
             ServerPort = 0,
             GameLoginPort = 7201,

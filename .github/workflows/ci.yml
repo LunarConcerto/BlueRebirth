@@ -124,7 +124,7 @@ jobs:
         run: |
           $OutputDir = Join-Path $env:RUNNER_TEMP ("BlueOath-Debug-" + $env:GITHUB_RUN_NUMBER)
           New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- "--output=$OutputDir\BlueOath-Release" "--configuration=Debug"
+          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- "--output=$OutputDir\BlueOath-Release" "--configuration=Debug" "--update-manifest-url=https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/tags/debug-latest"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $bundleDir = Join-Path $OutputDir "BlueOath-Release"
           if (-not (Test-Path (Join-Path $bundleDir "launcher-settings.json"))) {
@@ -142,3 +142,21 @@ jobs:
           name: launcher-bundle-debug-${{ github.run_number }}
           path: ${{ runner.temp }}/BlueOath-Debug-${{ github.run_number }}/BlueOath-Release
           if-no-files-found: error
+
+      - name: Prepare Debug prerelease package
+        id: debug_release_meta
+        shell: pwsh
+        run: |
+          $bundleDir = Join-Path $env:RUNNER_TEMP "BlueOath-Debug-$env:GITHUB_RUN_NUMBER\BlueOath-Release"
+          $packagePath = Join-Path $env:RUNNER_TEMP "BlueOath-Debug-$env:GITHUB_RUN_NUMBER\BlueOath-Debug-$env:GITHUB_RUN_NUMBER.zip"
+          Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $packagePath -Force
+          "package_path=$packagePath" >> $env:GITHUB_OUTPUT
+
+      - name: Publish Debug GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: debug-latest
+          name: BlueOath Debug v1.0.${{ github.run_number }}
+          prerelease: true
+          make_latest: false
+          files: ${{ steps.debug_release_meta.outputs.package_path }}

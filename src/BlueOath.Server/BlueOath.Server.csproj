@@ -3,6 +3,7 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>BlueOath.Server</AssemblyName>
     <RootNamespace>BlueOath.Server</RootNamespace>
+    <LangVersion>preview</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>

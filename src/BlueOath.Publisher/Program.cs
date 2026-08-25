@@ -15,7 +15,7 @@ var configuration = configurationArgIndex >= 0
 var updateManifestArgIndex = Array.FindIndex(args, a => a.Equals("--update-manifest-url", StringComparison.OrdinalIgnoreCase) || a.StartsWith("--update-manifest-url=", StringComparison.OrdinalIgnoreCase));
 var updateManifestUrl = updateManifestArgIndex >= 0
     ? GetOptionValue(args, updateManifestArgIndex, "--update-manifest-url")
-    : string.Empty;
+    : "https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/tags/debug-latest";
 if (!string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase) &&
     !string.Equals(configuration, "Release", StringComparison.OrdinalIgnoreCase))
 {

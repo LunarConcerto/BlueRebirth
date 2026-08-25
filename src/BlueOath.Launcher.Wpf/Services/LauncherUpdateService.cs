@@ -140,9 +140,16 @@ internal sealed class LauncherUpdateService
                     }
                 }
 
+                var releaseVersion = tagName.GetString();
+                if (string.IsNullOrWhiteSpace(NormalizeVersion(releaseVersion)) &&
+                    root.TryGetProperty("name", out var releaseName))
+                {
+                    releaseVersion = releaseName.GetString();
+                }
+
                 return new LauncherUpdateManifest
                 {
-                    Version = tagName.GetString(),
+                    Version = releaseVersion,
                     PackageUrl = packageUrl,
                     ReleaseNotes = root.TryGetProperty("body", out var body) ? body.GetString() : null,
                     ExecutableName = "BlueOath.Launcher.Wpf.exe"

@@ -7,7 +7,7 @@
   "proxyScriptPath": "",
   "dataRoot": "",
   "baselinePath": "",
-  "updateManifestUrl": "",
+  "updateManifestUrl": "https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/tags/debug-latest",
   "autoUpdateEnabled": true,
   "region": "jp",
   "serverPort": 0,
