@@ -36,12 +36,17 @@
 ## 建议镜像策略（国内访问）
 
 1. 当前可直接使用 GitHub：
-   - `updateManifestUrl` 指向 GitHub Releases API：`https://api.github.com/repos/BlueRebirth/BlueRebirth/releases/latest`
-   - 启动器自动从最新 Release 的 ZIP asset 中读取 `browser_download_url`；
+   - `updateManifestUrl` 指向 GitHub Pages 的公开清单；
+   - CI 自动将清单和 ZIP 同步部署到 Pages，启动器无需 GitHub 登录即可下载；
 2. 如后续需要国内镜像站，仅需修改清单地址与下载地址即可，无需改代码；
 3. 建议统一通过同一个域名承载清单和安装包，减少域名切换维护成本。
 
 当前代码仅在客户端层读取 `updateManifestUrl`，该值在 `launcher-settings.json` 中显式配置后生效；清单内可灵活切换下载源。
+
+更新地址统一维护在项目根目录的 `launcher-update.json`，发布器根据 `Debug` 或 `Release` 配置选择对应地址并写入发行包。
+
+Debug CI 默认发布到 Gitee 镜像，清单地址为：
+`https://gitee.com/asa233/blue-rebirth/raw/master/launcher-update-debug.json`
 
 ## 兼容性与执行逻辑
 
