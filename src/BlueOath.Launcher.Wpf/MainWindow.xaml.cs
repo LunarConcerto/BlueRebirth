@@ -10,6 +10,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = $"BlueOath Rebirth 启动器 v{VersionInfo.Version}";
 
         var rootDir = FindRoot();
         var settingsService = new SettingsService();

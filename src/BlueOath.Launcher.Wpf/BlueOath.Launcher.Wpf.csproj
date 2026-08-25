@@ -12,4 +12,35 @@
     <Resource Include="Resources\app.ico" />
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
+<Target Name="GenerateVersion" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <VersionFile>$(MSBuildProjectDirectory)\version.txt</VersionFile>
+      <VersionOutput>$(MSBuildProjectDirectory)\VersionInfo.g.cs</VersionOutput>
+    </PropertyGroup>
+    <ReadLinesFromFile File="$(VersionFile)">
+      <Output TaskParameter="Lines" ItemName="VersionLines" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <VersionRaw>@(VersionLines)</VersionRaw>
+      <VersionMajor>$([System.String]::new('$(VersionRaw)').Split('.')[0])</VersionMajor>
+      <VersionMinor>$([System.String]::new('$(VersionRaw)').Split('.')[1])</VersionMinor>
+      <VersionBuild>$([System.String]::new('$(VersionRaw)').Split('.')[2])</VersionBuild>
+      <VersionBuildIncremented>$([MSBuild]::Add($(VersionBuild), 1))</VersionBuildIncremented>
+      <VersionString>$(VersionMajor).$(VersionMinor).$(VersionBuildIncremented)</VersionString>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(VersionFile)" Lines="$(VersionString)" Overwrite="true" />
+    <ItemGroup>
+      <VersionCodeLines Include="namespace BlueOath.Launcher.Wpf" />
+      <VersionCodeLines Include="{" />
+      <VersionCodeLines Include="    internal static class VersionInfo" />
+      <VersionCodeLines Include="    {" />
+      <VersionCodeLines Include="$([System.String]::Format('        public const string Version = &quot;{0}&quot;;', '$(VersionString)'))" />
+      <VersionCodeLines Include="    }" />
+      <VersionCodeLines Include="}" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(VersionOutput)" Lines="@(VersionCodeLines)" Overwrite="true" />
+    <ItemGroup>
+      <Compile Include="$(VersionOutput)" />
+    </ItemGroup>
+  </Target>
 </Project>

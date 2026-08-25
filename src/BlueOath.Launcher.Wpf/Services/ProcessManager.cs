@@ -156,22 +156,30 @@ public class ProcessManager
     {
         if (startServer)
         {
-            if (!File.Exists(_settings.ServerDllPath))
-                return $"服务器 DLL 未找到: {_settings.ServerDllPath}";
+            var serverDll = ResolvePath(_settings.ServerDllPath);
+            if (!File.Exists(serverDll))
+                return $"服务器 DLL 未找到: {serverDll}";
         }
-        if (!File.Exists(_settings.ProxyScriptPath))
-            return $"代理脚本未找到: {_settings.ProxyScriptPath}";
-        if (!File.Exists(_settings.InjectorPath))
-            return $"注入器未找到: {_settings.InjectorPath}";
-        if (!File.Exists(_settings.PayloadPath))
-            return $"Payload DLL 未找到: {_settings.PayloadPath}";
-        if (!File.Exists(_settings.BaselinePath))
-            return $"基线文件未找到: {_settings.BaselinePath}";
-        if (!Directory.Exists(_settings.DataRoot))
-            return $"数据目录未找到: {_settings.DataRoot}";
+        var proxyScript = ResolvePath(_settings.ProxyScriptPath);
+        if (!File.Exists(proxyScript))
+            return $"代理脚本未找到: {proxyScript}";
+        var injector = ResolvePath(_settings.InjectorPath);
+        if (!File.Exists(injector))
+            return $"注入器未找到: {injector}";
+        var payload = ResolvePath(_settings.PayloadPath);
+        if (!File.Exists(payload))
+            return $"Payload DLL 未找到: {payload}";
+        var baseline = ResolvePath(_settings.BaselinePath);
+        if (!File.Exists(baseline))
+            return $"基线文件未找到: {baseline}";
+
+        var dataRoot = ResolvePath(_settings.DataRoot);
+        if (!Directory.Exists(dataRoot))
+            Directory.CreateDirectory(dataRoot);
 
         string clientExe = config.Region == "cn" ? "clsy.exe" : "blueoath.exe";
-        string clientExePath = Path.Combine(_settings.GameClientPath, clientExe);
+        var clientDir = ResolvePath(_settings.GameClientPath);
+        string clientExePath = Path.Combine(clientDir, clientExe);
         if (!File.Exists(clientExePath))
             return $"游戏客户端未找到: {clientExePath}";
 
