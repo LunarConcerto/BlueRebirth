@@ -117,6 +117,12 @@ jobs:
           $baseUrl = "https://gitee.com/api/v5/repos/$ownerRepo"
           $tagName = '${{ steps.release_meta.outputs.tag_name }}'
           $packagePath = '${{ steps.release_meta.outputs.package_path }}'
+          $mirrorRoot = Join-Path $env:RUNNER_TEMP 'gitee-update-mirror-release'
+          git clone --branch master "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
+          Push-Location $mirrorRoot
+          git tag -f $tagName origin/master
+          git push origin "refs/tags/$tagName" --force
+          Pop-Location
           $release = $null
           try { $release = Invoke-RestMethod -Uri "$baseUrl/releases/tags/$tagName" -Headers $headers -Method Get } catch { }
           if ($release) {
@@ -128,8 +134,6 @@ jobs:
           }
           $upload = Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files" -Headers $headers -Method Post -Form @{ file = Get-Item -LiteralPath $packagePath }
           $manifest = [ordered]@{ version = $tagName; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
-          $mirrorRoot = Join-Path $env:RUNNER_TEMP 'gitee-update-mirror-release'
-          git clone --branch master "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
           Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-release.json') -Value $manifest -Encoding UTF8
           Push-Location $mirrorRoot
           git config user.name 'github-actions[bot]'
@@ -221,6 +225,12 @@ jobs:
           $baseUrl = "https://gitee.com/api/v5/repos/$ownerRepo"
           $tagName = 'debug-latest'
           $packagePath = '${{ steps.debug_release_meta.outputs.package_path }}'
+          $mirrorRoot = Join-Path $env:RUNNER_TEMP 'gitee-update-mirror-debug'
+          git clone --branch master "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
+          Push-Location $mirrorRoot
+          git tag -f $tagName origin/master
+          git push origin "refs/tags/$tagName" --force
+          Pop-Location
           $release = $null
           try { $release = Invoke-RestMethod -Uri "$baseUrl/releases/tags/$tagName" -Headers $headers -Method Get } catch { }
           if ($release) {
@@ -232,8 +242,6 @@ jobs:
           }
           $upload = Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files" -Headers $headers -Method Post -Form @{ file = Get-Item -LiteralPath $packagePath }
           $manifest = [ordered]@{ version = "v1.0.${{ github.run_number }}"; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
-          $mirrorRoot = Join-Path $env:RUNNER_TEMP 'gitee-update-mirror-debug'
-          git clone --branch master "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
           Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-debug.json') -Value $manifest -Encoding UTF8
           Push-Location $mirrorRoot
           git config user.name 'github-actions[bot]'
