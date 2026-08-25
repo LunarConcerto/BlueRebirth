@@ -14,16 +14,26 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
         switch (request.Method)
         {
             case "user.UserLogin":
-                // 应答前推送完整用户信息 + 引导数据，确保 LoginOk 事件触发前
-                // Data.userData 与 GUIDE_DONE_STAGES 已就绪。
+                // 应答前推送完整用户信息 + 引导数据 + 关卡数据，确保 LoginOk 事件触发前
+                // Data.userData / GUIDE_DONE_STAGES / copyData 已就绪，
+                // 避免 _RecordCanOpenModuleInfo 误判模块未开启导致 ModuleOpenPage 弹窗。
                 var loginAccount = await ctx.GetAccountAsync();
+                var now = (uint)ctx.Now;
                 result = new ModuleResult
                 {
                     Ret = TMessageCodec.EncodeRetUserLogin("ok", "", 0),
                     PrePushes =
                     [
-                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
-                        services.BuildGuideInfoPush((uint)ctx.Now, loginAccount),
+                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, now, ctx.Ct),
+                        services.BuildGuideInfoPush(now, loginAccount),
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "copy.GetCopy",
+                            Ret: ProtocolEncoder.EncodePlotCopyInfo(int.MaxValue, loginAccount.CopyProgress),
+                            Time: now)),
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "copy.GetCopy",
+                            Ret: ProtocolEncoder.EncodeSeaCopyInfo(loginAccount.SeaProgress),
+                            Time: now)),
                     ],
                 };
                 break;

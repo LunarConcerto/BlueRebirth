@@ -23,14 +23,15 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 break;
             case "hero.AddExp":
             case "hero.Marry":
-                var account = await ctx.GetAccountAsync();
-                var heroes = account.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+                var ret = request.Method == "hero.AddExp"
+                    ? await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct)
+                    : await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
+                var updatedAccount = await ctx.GetAccountAsync();
+                var updatedHeroes = updatedAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
                 result = new ModuleResult
                 {
-                    Ret = request.Method == "hero.AddExp"
-                        ? await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct)
-                        : await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct),
-                    PostPushes = BuildHeroBagPushes(account, heroes, (uint)ctx.Now),
+                    Ret = ret,
+                    PrePushes = BuildHeroBagPushes(updatedAccount, updatedHeroes, (uint)ctx.Now),
                 };
                 break;
             case "hero.LockHero":

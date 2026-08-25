@@ -133,10 +133,48 @@ var toolsDst = Path.Combine(outputDir, "tools");
 Directory.CreateDirectory(toolsDst);
 CopyIfExists(Path.Combine(root, "tools", "tls-loopback-proxy.py"), toolsDst);
 
+// Baseline
+CopyIfExists(Path.Combine(root, "baseline.json"), outputDir);
+
 Console.WriteLine("  Runtime files copied.");
 
-// Step 5: Generate launcher settings
-Console.WriteLine("[5/5] Generating launcher settings...");
+// Step 5: Bundle Python embeddable
+Console.WriteLine("[5/5] Bundling Python...");
+var pythonDir = Path.Combine(outputDir, "tools", "python");
+Directory.CreateDirectory(pythonDir);
+var pythonZip = Path.Combine(root, "tools", "python-3.12.8-embed-amd64.zip");
+var cacheDir = Path.Combine(root, "tools", ".cache");
+Directory.CreateDirectory(cacheDir);
+
+if (!File.Exists(pythonZip))
+{
+    Console.WriteLine("  Downloading Python 3.12.8 embeddable...");
+    var pythonUrl = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip";
+    using var client = new System.Net.Http.HttpClient();
+    var response = await client.GetAsync(pythonUrl);
+    response.EnsureSuccessStatusCode();
+    await using var stream = await response.Content.ReadAsStreamAsync();
+    await using var fs = File.Create(pythonZip);
+    await stream.CopyToAsync(fs);
+    Console.WriteLine("  Download complete.");
+}
+
+Console.WriteLine("  Extracting Python...");
+System.IO.Compression.ZipFile.ExtractToDirectory(pythonZip, pythonDir, true);
+
+// Enable site-packages for embeddable Python (uncomment "import site" in _pth file)
+var pthFile = Directory.GetFiles(pythonDir, "*._pth").FirstOrDefault();
+if (pthFile is not null)
+{
+    var content = File.ReadAllText(pthFile);
+    content = content.Replace("#import site", "import site");
+    File.WriteAllText(pthFile, content);
+}
+
+Console.WriteLine("  Python bundled.");
+
+// Step 6: Generate launcher settings
+Console.WriteLine("[6/6] Generating launcher settings...");
 
 // Move launcher exe to root and clean up
 var launcherDir = Path.Combine(outputDir, "launcher");
@@ -163,12 +201,12 @@ var settings = new
 {
     gameClientPath = "..\\..\\blueoath\\blueoath",
     serverDllPath = "server\\BlueOath.Server.dll",
-    pythonPath = "python",
+    pythonPath = "tools\\python\\python.exe",
     injectorPath = "native\\BlueOath.Injector.exe",
     payloadPath = "native\\BlueOath.Payload.dll",
     proxyScriptPath = "tools\\tls-loopback-proxy.py",
     dataRoot = "runtime\\jp",
-    baselinePath = "..\\..\\baseline.json",
+    baselinePath = "baseline.json",
     region = "jp",
     serverPort = 0,
     gameLoginPort = 7201,
