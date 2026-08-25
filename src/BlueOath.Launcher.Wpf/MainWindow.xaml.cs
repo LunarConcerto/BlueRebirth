@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Windows;
 using BlueOath.Launcher.Wpf.Services;

@@ -59,6 +59,8 @@ public class LaunchViewModel : ViewModelBase
     public ICommand LaunchCommand { get; }
     public ICommand DebugLaunchCommand { get; }
 
+    public string Version => VersionInfo.Version;
+
     public LaunchViewModel(ProcessManager processManager, MainViewModel mainViewModel, SettingsService settingsService)
     {
         _processManager = processManager;
