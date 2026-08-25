@@ -1,0 +1,7 @@
+{
+  "version": "0.0.0",
+  "packageUrl": "",
+  "releaseNotes": "请在发布流程中更新本文件的版本号与下载地址",
+  "confidenceHint": "发布新版本时建议在无游戏运行期间更新启动器",
+  "executableName": "BlueOath.Launcher.Wpf.exe"
+}

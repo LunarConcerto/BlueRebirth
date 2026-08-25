@@ -183,7 +183,77 @@ public class ProcessManager
         if (!File.Exists(clientExePath))
             return $"游戏客户端未找到: {clientExePath}";
 
+        var versionError = ValidateClientVersion(config.Region, clientExePath);
+        if (versionError is not null)
+            return versionError;
+
         return null;
+    }
+
+    private string? ValidateClientVersion(string region, string exePath)
+    {
+        if (!File.Exists(_settings.BaselinePath))
+            return $"基线文件未找到: {_settings.BaselinePath}";
+
+        string expectedVersion;
+        try
+        {
+            var json = File.ReadAllText(_settings.BaselinePath);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return $"基线文件格式不正确: {_settings.BaselinePath}";
+
+            var expected = doc.RootElement.EnumerateArray()
+                .FirstOrDefault(entry =>
+                    entry.TryGetProperty("region", out var regionElement) &&
+                    regionElement.GetString()?.Equals(region, StringComparison.OrdinalIgnoreCase) == true);
+            if (expected.ValueKind == JsonValueKind.Undefined)
+                return $"未在基线中找到 {region} 服的版本信息: {_settings.BaselinePath}";
+
+            if (!expected.TryGetProperty("version", out var versionElement))
+                return $"基线条目缺少 version 字段: {_settings.BaselinePath}";
+
+            expectedVersion = versionElement.GetString() ?? "";
+        }
+        catch (Exception ex)
+        {
+            return $"读取基线文件失败: {ex.Message}";
+        }
+
+        if (string.IsNullOrWhiteSpace(expectedVersion))
+            return $"基线中的 {region} 服版本为空: {_settings.BaselinePath}";
+
+        var fileVersionInfo = FileVersionInfo.GetVersionInfo(exePath);
+        var actualVersionRaw = string.IsNullOrWhiteSpace(fileVersionInfo.FileVersion)
+            ? fileVersionInfo.ProductVersion
+            : fileVersionInfo.FileVersion;
+        var actualVersion = NormalizeVersion(actualVersionRaw);
+        if (string.IsNullOrWhiteSpace(actualVersion))
+            return "未能读取客户端可识别的版本号，启动中止。";
+
+        if (!string.Equals(NormalizeVersion(actualVersion), NormalizeVersion(expectedVersion), StringComparison.Ordinal))
+            return $"客户端版本不匹配：当前 {actualVersion}，基线要求 {NormalizeVersion(expectedVersion)}（请确认使用 {region.ToUpperInvariant()} 服对应客户端）";
+
+        return null;
+    }
+
+    private static string NormalizeVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+            return string.Empty;
+
+        var match = System.Text.RegularExpressions.Regex.Match(version, @"\d+(?:\.\d+){0,3}");
+        if (!match.Success)
+            return version.Trim();
+
+        var parts = match.Value.Split('.');
+        var normalized = new List<string>(parts);
+        while (normalized.Count < 3)
+            normalized.Add("0");
+        if (normalized.Count > 3)
+            normalized = normalized.Take(3).ToList();
+
+        return string.Join(".", normalized);
     }
 
     public async Task LaunchAsync(LaunchConfig config, bool startServer)

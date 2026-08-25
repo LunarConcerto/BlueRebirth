@@ -1,0 +1,18 @@
+{
+  "gameClientPath": "",
+  "serverDllPath": "",
+  "pythonPath": "python",
+  "injectorPath": "",
+  "payloadPath": "",
+  "proxyScriptPath": "",
+  "dataRoot": "",
+  "baselinePath": "",
+  "updateManifestUrl": "",
+  "autoUpdateEnabled": true,
+  "region": "jp",
+  "serverPort": 0,
+  "gameLoginPort": 7201,
+  "gmPort": 9780,
+  "skipBuild": true,
+  "keepLog": false
+}

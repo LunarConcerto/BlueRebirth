@@ -63,6 +63,8 @@ public class SettingsService
             DataRoot = Path.Combine(rootDir, "runtime", "jp"),
             BaselinePath = Path.Combine(rootDir, "baseline.json"),
             Region = "jp",
+            UpdateManifestUrl = string.Empty,
+            AutoUpdateEnabled = true,
             ServerPort = 0,
             GameLoginPort = 7201,
             GmPort = 9780,

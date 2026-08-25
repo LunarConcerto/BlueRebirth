@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using BlueOath.Launcher.Wpf.Services;
@@ -8,6 +9,8 @@ namespace BlueOath.Launcher.Wpf;
 
 public partial class MainWindow : Window
 {
+    private readonly MainViewModel _mainViewModel = new();
+
     public MainWindow()
     {
         InitializeComponent();
@@ -16,24 +19,35 @@ public partial class MainWindow : Window
         var rootDir = FindRoot();
         var settingsService = new SettingsService();
         var settings = settingsService.Load();
+        var localExecutable = Process.GetCurrentProcess().MainModule?.FileName ?? Path.Combine(rootDir, "BlueOath.Launcher.Wpf.exe");
+        var updateService = new LauncherUpdateService(rootDir, settings.UpdateManifestUrl, settings.AutoUpdateEnabled);
+
+        Loaded += async (_, _) =>
+        {
+            var shouldExitForUpdate = await updateService.TrySelfUpdateAsync(this, localExecutable);
+            if (shouldExitForUpdate) return;
+            InitializeViews(rootDir, settingsService, settings);
+        };
+    }
+
+    private void InitializeViews(string rootDir, SettingsService settingsService, BlueOath.Launcher.Wpf.Models.SettingsConfig settings)
+    {
         var processManager = new ProcessManager(rootDir, settings);
 
-        var mainViewModel = new MainViewModel();
-
-        var launchViewModel = new LaunchViewModel(processManager, mainViewModel, settingsService);
-        mainViewModel.RegisterLaunchViewModel(launchViewModel);
+        var launchViewModel = new LaunchViewModel(processManager, _mainViewModel, settingsService);
+        _mainViewModel.RegisterLaunchViewModel(launchViewModel);
         var announcementService = new AnnouncementService();
         launchViewModel.LoadAnnouncements(announcementService.LoadAnnouncements());
 
-        var guardianViewModel = new GuardianViewModel(processManager, mainViewModel);
-        var settingsViewModel = new SettingsViewModel(settingsService, mainViewModel);
+        var guardianViewModel = new GuardianViewModel(processManager, _mainViewModel);
+        var settingsViewModel = new SettingsViewModel(settingsService, _mainViewModel);
 
-        mainViewModel.AddPage(launchViewModel);
-        mainViewModel.AddPage(guardianViewModel);
-        mainViewModel.AddPage(settingsViewModel);
-        mainViewModel.SelectedPageIndex = 0;
+        _mainViewModel.AddPage(launchViewModel);
+        _mainViewModel.AddPage(guardianViewModel);
+        _mainViewModel.AddPage(settingsViewModel);
+        _mainViewModel.SelectedPageIndex = 0;
 
-        DataContext = mainViewModel;
+        DataContext = _mainViewModel;
     }
 
     private static string FindRoot()

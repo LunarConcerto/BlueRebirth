@@ -207,6 +207,8 @@ var settings = new
     proxyScriptPath = "tools\\tls-loopback-proxy.py",
     dataRoot = "runtime\\jp",
     baselinePath = "baseline.json",
+    updateManifestUrl = "",
+    autoUpdateEnabled = true,
     region = "jp",
     serverPort = 0,
     gameLoginPort = 7201,
@@ -219,6 +221,14 @@ var settingsPath = Path.Combine(outputDir, "launcher-settings.json");
 var jsonOptions = new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings, jsonOptions));
 Console.WriteLine($"  Settings written to {settingsPath}");
+
+if (!File.Exists(settingsPath))
+{
+    Console.Error.WriteLine("  ERROR: launcher-settings.json was not created.");
+    return 1;
+}
+
+Console.WriteLine("  Verified: launcher-settings.json exists.");
 
 // Create start batch
 var batchPath = Path.Combine(outputDir, "启动游戏.bat");
