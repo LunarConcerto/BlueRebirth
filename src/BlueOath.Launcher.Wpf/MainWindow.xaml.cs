@@ -43,6 +43,6 @@ public partial class MainWindow : Window
                 return current.FullName;
             current = current.Parent;
         }
-        return Environment.CurrentDirectory;
+        return AppContext.BaseDirectory;
     }
 }
