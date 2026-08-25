@@ -136,7 +136,7 @@ internal sealed class GmCommandHandler
         var account = await _handler.GetOrCreateAccountAsync(profileId, ct);
         var heroId = _handler.NextHeroId();
         var now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-        account = GameServices.AddShip(account, heroId, templateId, now);
+        account = _handler.AddShip(account, heroId, templateId, now);
         // 如果指定了等级，单独设置
         if (level > 1)
         {

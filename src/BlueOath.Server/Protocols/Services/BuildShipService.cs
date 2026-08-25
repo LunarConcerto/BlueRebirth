@@ -42,7 +42,7 @@ internal sealed class BuildShipService(GameServices services)
             if (entry.GoodsType == GameServices.GoodsTypeShip)
             {
                 uint heroId = services.NextHeroId();
-                account = GameServices.AddShip(account, heroId, entry.ConfigId, now);
+                account = services.AddShip(account, heroId, entry.ConfigId, now);
                 services.LastBuildHeroIds.Add(heroId);
                 rewards.Add(new CommonReward(GameServices.GoodsTypeShip, entry.ConfigId, entry.MinNum, (int)heroId));
             }
@@ -77,7 +77,7 @@ internal sealed class BuildShipService(GameServices services)
                             account = GameServices.RemoveHero(account, oldHeroId);
                             services.LastBuildHeroIds.Remove(oldHeroId);
                             uint newHeroId = services.NextHeroId();
-                            account = GameServices.AddShip(account, newHeroId, newEntry.ConfigId, now);
+                            account = services.AddShip(account, newHeroId, newEntry.ConfigId, now);
                             services.LastBuildHeroIds.Add(newHeroId);
                             rewards[i] = new CommonReward(GameServices.GoodsTypeShip, newEntry.ConfigId, newEntry.MinNum, (int)newHeroId);
                             break;

@@ -41,6 +41,9 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                                     .ToList(),
                                 IllustrateEquipList: [new IllustrateEquipInfo()])),
                             Time: now)));
+                        // 新舰娘自带默认装备（config_ship_info.equip1..equip6），推送完整装备仓库
+                        // 让客户端 equipdata 拿到新增的 EquipItem（EquipId/TemplateId/HeroId）。
+                        pre.Add(services.BuildEquipPush(account, now));
                     }
                 }
                 result = new ModuleResult { Ret = ret, PrePushes = pre };

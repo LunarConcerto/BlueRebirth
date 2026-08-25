@@ -375,27 +375,51 @@ internal sealed class GameServices
     // HeroRarityType 常量
     internal const int RaritySR = 3;
 
-    /// <summary>从船坞移除指定舰娘。</summary>
+    /// <summary>从船坞移除指定舰娘，并同时回收其已装备的装备实例（HeroId == heroId 的 EquipItem）。</summary>
     internal static PlayerAccount RemoveHero(PlayerAccount account, uint heroId)
     {
         HeroDock dock = account.Dock;
         List<Hero> heroes = dock.Heroes.ToList();
         heroes.RemoveAll(h => h.HeroId == heroId);
-        return account with { Dock = dock with { Heroes = heroes } };
+        PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
+        List<EquipItem> items = equip.Items.ToList();
+        items.RemoveAll(e => e.HeroId == heroId);
+        return account with { Dock = dock with { Heroes = heroes }, Equip = equip with { Items = items } };
     }
 
     private List<uint> _lastBuildHeroIds = [];
 
-    /// <summary>舰娘加入船坞：创建 Hero 实例。Affection=1000 避免 GetLoveInfo 返回 nil。</summary>
-    internal static PlayerAccount AddShip(PlayerAccount account, uint heroId, int templateId, int now)
+    /// <summary>舰娘加入船坞：创建 Hero 实例，并按 config_ship_info（键 = ship_info_id = (templateId-1)/10）
+    /// 的 equip1..equip6 发放默认装备（分配实例 ID 入装备仓库 + 填入 EquipSlots）。
+    /// Affection 高值避免 GetLoveInfo 返回 nil。</summary>
+    internal PlayerAccount AddShip(PlayerAccount account, uint heroId, int templateId, int now)
     {
         HeroDock dock = account.Dock;
         List<Hero> heroes = dock.Heroes.ToList();
         int fashioning = (templateId - 1) / 10;
+
+        // 默认装备：config_ship_info.equip1..equip6。每个有效槽位分配一个装备实例，
+        // EquipItem 存入装备仓库（HeroId 标记已装备），EquipSlots 记录槽位引用。
+        List<uint> slots = [0, 0, 0, 0, 0, 0];
+        PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
+        List<EquipItem> equipItems = equip.Items.ToList();
+        if (_shipInfos.TryGetValue((templateId - 1) / 10, out ConfigShipInfo? info))
+        {
+            long[] defaultEquips = [info.Equip1, info.Equip2, info.Equip3, info.Equip4, info.Equip5, info.Equip6];
+            for (int i = 0; i < defaultEquips.Length; i++)
+            {
+                int equipTemplate = checked((int)defaultEquips[i]);
+                if (equipTemplate <= 0 || EquipLoader.Get(equipTemplate) is null) continue;
+                uint equipId = NextEquipId();
+                equipItems.Add(new EquipItem(equipId, equipTemplate, HeroId: heroId));
+                slots[i] = equipId;
+            }
+        }
+
         heroes.Add(new Hero(heroId, templateId, 1,
             fashioning, CreateTime: now, UpdateTime: now, Affection: 10000, CurHp: PlayerAccountFactory.HpCoefficient,
-            Mood: 100, MarryType: 0));
-        return account with { Dock = dock with { Heroes = heroes } };
+            Mood: 10000, MarryType: 0, EquipSlots: slots));
+        return account with { Dock = dock with { Heroes = heroes }, Equip = equip with { Items = equipItems } };
     }
 
     internal static PlayerAccount SetAffection(PlayerAccount account, uint heroId, int amount)
