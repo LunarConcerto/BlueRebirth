@@ -39,7 +39,8 @@ if (!skipNative)
     }
     var psi = new ProcessStartInfo("powershell")
     {
-        Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{buildNativePs1}\"",
+        Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{buildNativePs1}\" -Configuration {configuration} " +
+                    (string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase) ? "-DebugHooks" : ""),
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,

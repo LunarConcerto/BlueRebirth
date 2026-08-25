@@ -1,16 +1,37 @@
 param(
-  [switch]$DebugHooks
+  [switch]$DebugHooks,
+  [ValidateSet('Debug', 'Release')]
+  [string]$Configuration = 'Release'
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'
-if (-not (Test-Path -LiteralPath $vcvars)) { throw 'Visual Studio 2019 Build Tools not found' }
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$vcvars = $null
+
+if (Test-Path -LiteralPath $vswhere) {
+  $vsInstall = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1).Trim()
+  if ($vsInstall) {
+    $candidate = Join-Path $vsInstall 'VC\Auxiliary\Build\vcvarsall.bat'
+    if (Test-Path -LiteralPath $candidate) { $vcvars = $candidate }
+  }
+}
+
+# Keep compatibility with older self-hosted machines that only have VS2019.
+if (-not $vcvars) {
+  $legacy = 'C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'
+  if (Test-Path -LiteralPath $legacy) { $vcvars = $legacy }
+}
+
+if (-not $vcvars) {
+  throw 'Visual Studio C++ Build Tools not found. Install the VC.Tools.x86.x64 workload.'
+}
+
 $build = Join-Path $env:TEMP 'blueoath-native-x86-nmake'
 $output = Join-Path $root 'native\bin-x86'
 New-Item -ItemType Directory -Force -Path $build | Out-Null
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 $hooksFlag = if ($DebugHooks) { '-DBLUEOATH_HOOKS_DEBUG=ON' } else { '-DBLUEOATH_HOOKS_DEBUG=OFF' }
-$command = 'call "' + $vcvars + '" x86 && cmake -S "' + (Join-Path $root 'native') + '" -B "' + $build + '" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ' + $hooksFlag + ' && cmake --build "' + $build + '"'
+$command = 'call "' + $vcvars + '" x86 && cmake -S "' + (Join-Path $root 'native') + '" -B "' + $build + '" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=' + $Configuration + ' ' + $hooksFlag + ' && cmake --build "' + $build + '"'
 cmd.exe /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw "Native build failed: $LASTEXITCODE" }
 Copy-Item -LiteralPath (Join-Path $build 'BlueOath.Injector.exe') -Destination $output -Force
