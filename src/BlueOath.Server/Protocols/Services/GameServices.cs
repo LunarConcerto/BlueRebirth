@@ -178,6 +178,13 @@ internal sealed class GameServices
                 Ret: TMessageCodec.EncodeRetGetSvrTime(checked((int)now), checked((int)now)),
                 Time: now)),
 
+            // 用户信息推送：在 LoginOk 之前设置 Level，使 _RecordCanOpenModuleInfo
+            // 能正确判断模块打开条件，避免 tabNoOpenModule 收集全部模块后弹出 ModuleOpenPage。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "user.GetUserInfo",
+                Ret: EncodeGetUserInfo(account),
+                Time: now)),
+
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "build.BuildsInfo",
                 Ret: PlayerDataCodec.Encode(new BuildsInfoRet(
