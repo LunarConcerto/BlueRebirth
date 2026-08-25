@@ -351,7 +351,7 @@ internal static class CopyBattleLoader{
     public static List<int> GetMissionIdList(int copyId)
         => _copyMissions.TryGetValue(copyId, out var list) && list.Count > 0
             ? list
-            : MissionChainLoader.DefaultChain();
+            : [];
 
     private static void LoadCopyMissions(string configDir)
     {
