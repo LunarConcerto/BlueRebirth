@@ -64,9 +64,21 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     PrePushes = BuildHeroBagPushes(advAccount, advHeroes, (uint)ctx.Now),
                 };
                 break;
+            case "hero.StudySkill":
+                result = new ModuleResult
+                {
+                    Ret = await hero.BuildStudySkillRetAsync(request, ctx.ProfileId, ctx.Ct),
+                };
+                var skillAccount = await ctx.GetAccountAsync();
+                var skillHeroes = skillAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+                result = new ModuleResult
+                {
+                    Ret = result.Ret,
+                    PrePushes = BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
+                };
+                break;
             case "hero.HeroIntensify":
             case "hero.HeroAdvanceMUB":
-            case "hero.StudySkill":
             case "hero.AutoEquip":
             case "hero.AutoUnEquip":
             case "hero.HeroAdvMaxLv":

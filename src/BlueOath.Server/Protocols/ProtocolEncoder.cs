@@ -220,12 +220,27 @@ internal static class ProtocolEncoder
             ship.Write(0x30, PlayerAccountFactory.HpCoefficient); // CurHp(6)
             ship.Write(0x58, 3UL); // EquipGridNum(11)
             ship.Write(0x60, unchecked((ulong)h.Fashioning)); // Fashioning(12)
-            // PSkill (8) — TFiledPSkillLv[], 每艘船给一个最小技能(PSkillId=1,PSkillLv=1)
-            ProtocolPackage pskill = new();
-            pskill.Write(0x08, 1UL); // PSkillId=1
-            pskill.Write(0x10, 1UL); // PSkillLv=1
-            byte[] pskillBytes = pskill.ToArray();
-            ship.Write(0x42, pskillBytes);
+            // PSkill (8) — TFiledPSkillLv[]，编码实际技能数据。
+            if (h.PSkills is { Count: > 0 })
+            {
+                foreach (PSkillEntry sk in h.PSkills)
+                {
+                    ProtocolPackage pskill = new();
+                    pskill.Write(0x08, (ulong)sk.PSkillId);
+                    pskill.Write(0x10, unchecked((ulong)sk.Level));
+                    byte[] pskillBytes = pskill.ToArray();
+                    ship.Write(0x42, pskillBytes);
+                }
+            }
+            else
+            {
+                // 无技能数据时编码一个 dummy PSkill，PSkillId=41210 是有效 config ID
+                ProtocolPackage pskill = new();
+                pskill.Write(0x08, 41210UL);
+                pskill.Write(0x10, 1UL);
+                byte[] pskillBytes = pskill.ToArray();
+                ship.Write(0x42, pskillBytes);
+            }
             // Equips (7) — TBattleEquip[]。临时/支援舰船用 config_assist_ship_info.equip。
             // 航母的空袭依赖飞机装备（PlaneNum），否则空袭技能不出现。
             // 玩家自有舰船从 EquipSlots → EquipItem.TemplateId → ConfigEquip 读取装备。

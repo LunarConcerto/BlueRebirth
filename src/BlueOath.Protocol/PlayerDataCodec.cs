@@ -2,6 +2,13 @@ using System.Text;
 
 namespace BlueOath.Protocol;
 
+/// <summary>单个技能记录（PSkillId → Level/Exp）。</summary>
+public sealed record PSkillEntry(
+    uint PSkillId,
+    uint PSkillExp = 0,
+    int Level = 0,
+    int Replace = 0);
+
 /// <summary>
 /// Resources consumed by a single build formula. Currently empty; extend with the
 /// TBuildProject fields (Items/Gold) when real build data is needed.
@@ -30,7 +37,8 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
     int Exp = 0, int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
     long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "",
-    bool Lock = false, int Advance = 0, int AdvLv = 0);
+    bool Lock = false, int Advance = 0, int AdvLv = 0,
+    IReadOnlyList<PSkillEntry>? PSkills = null);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -322,10 +330,25 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         WriteVarintField(output, 5, unchecked((ulong)value.Exp));
         if (value.CreateTime != 0) WriteVarintField(output, 8, unchecked((ulong)value.CreateTime));
         if (value.CurHp != 0) WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
-        // PSkill (field 13, repeated): 1 dummy with PSkillId=41210(valid config),
-        // PSkillExp=0, Level=0, Replace=0. Replace 必须编码为 0，否则 nil ~= 0 为真，
-        // GetReplaceSkillId 会 return nil，导致 GetPSkillName 里 config 查询为 nil 崩溃。
-        output.Write(new byte[] { 0x6A, 0x0A, 0x08, 0xFA, 0xC1, 0x02, 0x10, 0x00, 0x18, 0x00, 0x20, 0x00 });
+        // PSkill (field 13, repeated TMapFiledPSkillExp)：编码实际技能数据。
+        if (value.PSkills is { Count: > 0 })
+        {
+            foreach (PSkillEntry sk in value.PSkills)
+            {
+                using MemoryStream ps = new();
+                WriteVarintField(ps, 1, sk.PSkillId != 0 ? sk.PSkillId : 41210);
+                WriteVarintField(ps, 2, sk.PSkillExp);
+                WriteVarintField(ps, 3, unchecked((ulong)(sk.Level != 0 ? sk.Level : 1)));
+                WriteVarintField(ps, 4, unchecked((ulong)sk.Replace));
+                byte[] psb = ps.ToArray();
+                WriteMessage(output, 13, psb);
+            }
+        }
+        else
+        {
+            // 无技能数据时编码一个 dummy PSkill，避免 nil 导致崩溃
+            output.Write(new byte[] { 0x6A, 0x0A, 0x08, 0xFA, 0xC1, 0x02, 0x10, 0x00, 0x18, 0x00, 0x20, 0x00 });
+        }
         if (value.Affection != 0) WriteVarintField(output, 17, unchecked((ulong)value.Affection));
         // Mood/MarryTime/MarryType 必须无条件编码：值为 0 时客户端读到 nil，
         // GetMoodNum/GetLoveInfo 里的算术/比较会崩溃。

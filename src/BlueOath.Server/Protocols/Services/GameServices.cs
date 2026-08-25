@@ -291,12 +291,14 @@ internal sealed class GameServices
         if (account is not null)
         {
             EnsureEquipIdFromAccount(account);
+            account = EnsureHeroPSkills(account);
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
             return account;
         }
         var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        created = EnsureHeroPSkills(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -310,7 +312,8 @@ internal sealed class GameServices
 
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is null)
-            return PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            return EnsureHeroPSkills(PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
+        account = EnsureHeroPSkills(account);
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
@@ -354,7 +357,7 @@ internal sealed class GameServices
     internal static HeroGrid ToHeroGrid(Hero hero) =>
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
             hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType,
-            hero.EquipSlots, hero.Name, hero.Lock, hero.Advance, hero.AdvLv);
+            hero.EquipSlots, hero.Name, hero.Lock, hero.Advance, hero.AdvLv, hero.PSkills);
 
     /// <summary>
     /// 由舰娘 TemplateId（config_ship_main 的 key）推导图鉴 IllustrateId
@@ -458,10 +461,41 @@ internal sealed class GameServices
             }
         }
 
+        // 默认技能：从 config_ship_main.pskill_show_id 读取，每个技能初始 Level=1。
+        List<PSkillEntry> pskills = CreateDefaultPSkills(templateId);
+
         heroes.Add(new Hero(heroId, templateId, 1,
             fashioning, CreateTime: now, UpdateTime: now, Affection: 10000, CurHp: PlayerAccountFactory.HpCoefficient,
-            Mood: 10000, MarryType: 0, EquipSlots: slots));
+            Mood: 10000, MarryType: 0, EquipSlots: slots, PSkills: pskills));
         return account with { Dock = dock with { Heroes = heroes }, Equip = equip with { Items = equipItems } };
+    }
+
+    /// <summary>从 config_ship_main.pskill_show_id 创建默认技能列表（Level=1）。</summary>
+    internal static List<PSkillEntry> CreateDefaultPSkills(int templateId)
+    {
+        var skills = new List<PSkillEntry>();
+        if (ShipMainLoader.Get(templateId) is { PskillShowId: { Count: > 0 } psIds })
+            foreach (long psId in psIds)
+                if (psId > 0)
+                    skills.Add(new PSkillEntry((uint)psId, Level: 1));
+        return skills;
+    }
+
+    /// <summary>确保所有英雄都有默认 PSkills（兼容旧存档）。</summary>
+    private static PlayerAccount EnsureHeroPSkills(PlayerAccount account)
+    {
+        HeroDock dock = account.Dock;
+        List<Hero> heroes = dock.Heroes.ToList();
+        bool changed = false;
+        for (int i = 0; i < heroes.Count; i++)
+        {
+            if (heroes[i].PSkills is not { Count: > 0 })
+            {
+                heroes[i] = heroes[i] with { PSkills = CreateDefaultPSkills(heroes[i].TemplateId) };
+                changed = true;
+            }
+        }
+        return changed ? account with { Dock = dock with { Heroes = heroes } } : account;
     }
 
     internal static PlayerAccount SetAffection(PlayerAccount account, uint heroId, int amount)
