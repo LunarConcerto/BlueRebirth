@@ -25,14 +25,14 @@ internal sealed class BootstrapHttpSession(BootstrapHttpResponder responder, ILo
         while (payload.Length < 64 * 1024 && !ct.IsCancellationRequested)
         {
             // 若已按 Content-Length 收满整个 HTTP 请求，则停止读取。
-            if (TryGetCompleteHttpLength(payload.GetBuffer().AsSpan(0, (int)payload.Length), out var completeLength) &&
+            if (TryGetCompleteHttpLength(payload.ToArray(), out var completeLength) &&
                 payload.Length >= completeLength)
                 break;
 
             // 对带 Expect: 100-continue 的请求先回 100 Continue。
-            var headerSpan = payload.GetBuffer().AsSpan(0, (int)payload.Length);
-            if (!sentContinue && headerSpan.IndexOf("\r\n\r\n"u8) >= 0 &&
-                headerSpan.IndexOf("Expect: 100-continue"u8) >= 0)
+            byte[] headerBytes = payload.ToArray();
+            if (!sentContinue && headerBytes.AsSpan().IndexOf("\r\n\r\n"u8) >= 0 &&
+                headerBytes.AsSpan().IndexOf("Expect: 100-continue"u8) >= 0)
             {
                 sentContinue = true;
                 await stream.WriteAsync("HTTP/1.1 100 Continue\r\n\r\n"u8.ToArray(), ct);
