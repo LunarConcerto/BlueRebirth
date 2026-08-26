@@ -150,123 +150,23 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add launcher-update-release.json
           git commit -m "chore: update release manifest" 2>$null
-          if ($LASTEXITCODE -eq 0) { git push origin "HEAD:$mirrorBranch" }
-          Pop-Location
-
-  publish_debug:
-    name: Publish Launcher Bundle (Debug)
-    runs-on: windows-latest
-    needs: build
-    permissions:
-      contents: write
-    if: github.event_name == 'push' && github.ref == 'refs/heads/WakabaMutsumi'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Build & publish debug bundle
-        shell: pwsh
-        run: |
-          $OutputDir = Join-Path $env:RUNNER_TEMP ("BlueOath-Debug-" + $env:GITHUB_RUN_NUMBER)
-          New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-          dotnet run --project "$PWD\src\BlueOath.Publisher\BlueOath.Publisher.csproj" -- "--output=$OutputDir\BlueOath-Release" "--configuration=Debug"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $bundleDir = Join-Path $OutputDir "BlueOath-Release"
-          if (-not (Test-Path (Join-Path $bundleDir "launcher-settings.json"))) {
-            Write-Error "ERROR: launcher-settings.json is missing."
-            exit 1
-          }
-          if (-not (Test-Path (Join-Path $bundleDir "BlueOath.Launcher.Wpf.exe"))) {
-            Write-Error "ERROR: BlueOath.Launcher.Wpf.exe is missing."
-            exit 1
-          }
-
-      - name: Upload debug artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: launcher-bundle-debug-${{ github.run_number }}
-          path: ${{ runner.temp }}/BlueOath-Debug-${{ github.run_number }}/BlueOath-Release
-          if-no-files-found: error
-
-      - name: Prepare Debug prerelease package
-        id: debug_release_meta
-        shell: pwsh
-        run: |
-          $bundleDir = Join-Path $env:RUNNER_TEMP "BlueOath-Debug-$env:GITHUB_RUN_NUMBER\BlueOath-Release"
-          $packagePath = Join-Path $env:RUNNER_TEMP "BlueOath-Debug-$env:GITHUB_RUN_NUMBER\BlueOath-Debug-latest.zip"
-          Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $packagePath -Force
-          "package_path=$packagePath" >> $env:GITHUB_OUTPUT
-
-      - name: Remove old Debug prerelease packages
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $releaseJson = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/debug-latest" 2>$null
-          if ($LASTEXITCODE -eq 0 -and $releaseJson) {
-            $release = $releaseJson | ConvertFrom-Json
-            foreach ($asset in $release.assets | Where-Object { $_.name -like 'BlueOath-Debug-*.zip' }) {
-              gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)"
+          if ($LASTEXITCODE -eq 0) {
+            $pushed = $false
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              git pull --rebase origin $mirrorBranch
+              if ($LASTEXITCODE -ne 0) {
+                git rebase --abort 2>$null
+                Start-Sleep -Seconds 3
+                continue
+              }
+              git push origin "HEAD:$mirrorBranch"
+              if ($LASTEXITCODE -eq 0) {
+                $pushed = $true
+                break
+              }
+              Start-Sleep -Seconds 3
             }
+            if (-not $pushed) { throw "Failed to push release manifest after retries." }
           }
-
-      - name: Publish Debug GitHub prerelease
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: debug-latest
-          name: BlueOath Debug v1.0.${{ github.run_number }}
-          prerelease: true
-          make_latest: false
-          overwrite_files: true
-          files: ${{ steps.debug_release_meta.outputs.package_path }}
-
-      - name: Sync Debug package to Gitee
-        shell: pwsh
-        env:
-          GITEE_API: ${{ secrets.GITEE_API }}
-        run: |
-          $ownerRepo = 'asa233/blue-rebirth'
-          $headers = @{ Authorization = "Bearer $env:GITEE_API"; Accept = 'application/json' }
-          $baseUrl = "https://gitee.com/api/v5/repos/$ownerRepo"
-          $tagName = 'debug-latest'
-          $packagePath = '${{ steps.debug_release_meta.outputs.package_path }}'
-          $mirrorRoot = Join-Path $env:RUNNER_TEMP 'gitee-update-mirror-debug'
-          $mirrorBranch = 'master'
-          git clone --branch $mirrorBranch "https://oauth2:$env:GITEE_API@gitee.com/$ownerRepo.git" $mirrorRoot
-          Push-Location $mirrorRoot
-          git tag -f $tagName origin/HEAD
-          git push origin "refs/tags/$tagName" --force
           Pop-Location
-          $release = $null
-          try { $release = Invoke-RestMethod -Uri "$baseUrl/releases/tags/$tagName" -Headers $headers -Method Get } catch { }
-          if ($release) {
-            Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)" -Headers $headers -Method Delete | Out-Null
-            $release = $null
-          }
-          $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath Debug v1.0.${{ github.run_number }}"; body = 'Automated Debug mirror'; target_commitish = 'master'; prerelease = 'true' }
-          Write-Host "Uploading Debug package to Gitee..."
-          $uploadJson = & curl.exe --fail-with-body --show-error --progress-bar `
-            --connect-timeout 30 `
-            --max-time 900 `
-            -X POST `
-            -H "Authorization: Bearer $env:GITEE_API" `
-            -H "Accept: application/json" `
-            -F "file=@$packagePath" `
-            "$baseUrl/releases/$($release.id)/attach_files"
-          if ($LASTEXITCODE -ne 0) { throw "Gitee release attachment upload failed." }
-          $upload = $uploadJson | ConvertFrom-Json
-          Write-Host "Gitee Debug package upload completed."
-          $manifest = [ordered]@{ version = "v1.0.${{ github.run_number }}"; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
-          Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-debug.json') -Value $manifest -Encoding UTF8
-          Push-Location $mirrorRoot
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add launcher-update-debug.json
-          git commit -m "chore: update debug manifest" 2>$null
-          if ($LASTEXITCODE -eq 0) { git push origin "HEAD:$mirrorBranch" }
-          Pop-Location
+
