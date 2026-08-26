@@ -247,13 +247,18 @@ Console.WriteLine("  Verified: launcher-settings.json exists.");
 
 // Create start batch
 var batchPath = Path.Combine(outputDir, "启动游戏.bat");
-File.WriteAllText(batchPath, """@echo off
+var startBatch = """
+@echo off
 setlocal EnableExtensions
 set "ROOT=%~dp0"
 set "LOGDIR=%ROOT%logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
-if not exist "%LOGDIR%" set "LOGDIR=%TEMP%\BlueOath-Launcher"
-if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
+>"%LOGDIR%\.__blueoath_write_test" echo write-test 2>nul
+if errorlevel 1 (
+  set "LOGDIR=%TEMP%\BlueOath-Launcher"
+  if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
+)
+del /q "%LOGDIR%\.__blueoath_write_test" >nul 2>&1
 set "LOG=%LOGDIR%\启动游戏.log"
 
 call :log "============================================================"
@@ -294,7 +299,8 @@ exit /b 0
 :log
 echo [%date% %time%] %~1>>"%LOG%"
 exit /b 0
-""");
+""";
+File.WriteAllText(batchPath, startBatch);
 Console.WriteLine($"  Start script: {batchPath}");
 
 Console.WriteLine();

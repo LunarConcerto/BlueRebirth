@@ -83,10 +83,11 @@ internal sealed class EquipService(GameServices services)
         EquipItem current = equipItems[equipIndex];
         ConfigEquip? config = services.GetEquipConfig(current.TemplateId);
         if (config is null) return [];
-        List<EquipEnhanceItem> materials = arg.ItemArr
-            .GroupBy(i => i.TemplateId)
-            .Select(g => new EquipEnhanceItem(g.Key, checked((uint)g.Aggregate(0UL, (sum, i) => sum + i.ItemNum))))
-            .Select(g => new EquipEnhanceItem(g.Key, checked((uint)g.Aggregate(0UL, (sum, i) => sum + i.ItemNum))))
+        Dictionary<uint, ulong> materialTotals = new();
+        foreach (EquipEnhanceItem material in arg.ItemArr)
+            materialTotals[material.TemplateId] = checked(materialTotals.GetValueOrDefault(material.TemplateId) + material.ItemNum);
+        List<EquipEnhanceItem> materials = materialTotals
+            .Select(entry => new EquipEnhanceItem(entry.Key, checked((uint)entry.Value)))
             .ToList();
         PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
         List<BagItem> bagItems = bag.Items.ToList();

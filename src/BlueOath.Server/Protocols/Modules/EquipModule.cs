@@ -16,7 +16,7 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
                 var (ret, removedIds) = await equip.BuildDismantleRetAsync(request, ctx.ProfileId, ctx.Ct);
                 var account = await ctx.GetAccountAsync();
                 var now = (uint)ctx.Now;
-                result = new ModuleResult
+                return new ModuleResult
                 {
                     Ret = ret,
                     PrePushes = new[]
@@ -26,7 +26,6 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
                         services.BuildBagPush(account, now),
                     },
                 };
-                break;
             case "equip.Enhance":
                 return new ModuleResult
                 {
