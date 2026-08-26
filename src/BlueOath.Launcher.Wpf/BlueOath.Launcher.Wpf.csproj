@@ -10,6 +10,10 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources\announcements.json" />
     <Resource Include="Resources\app.ico" />
+    <None Include="launcher-settings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 <Target Name="GenerateVersion" BeforeTargets="BeforeBuild">

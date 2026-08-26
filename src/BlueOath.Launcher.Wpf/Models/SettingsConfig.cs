@@ -15,6 +15,8 @@ public class SettingsConfig : INotifyPropertyChanged
     private string _dataRoot = "";
     private string _baselinePath = "";
     private string _region = "jp";
+    private string _updateManifestUrl = "";
+    private bool _autoUpdateEnabled = true;
     private int _serverPort = 0;
     private int _gameLoginPort = 7201;
     private int _gmPort = 9780;
@@ -75,6 +77,20 @@ public class SettingsConfig : INotifyPropertyChanged
     {
         get => _baselinePath;
         set { _baselinePath = value; OnPropertyChanged(); }
+    }
+
+    [JsonPropertyName("updateManifestUrl")]
+    public string UpdateManifestUrl
+    {
+        get => _updateManifestUrl;
+        set { _updateManifestUrl = value; OnPropertyChanged(); }
+    }
+
+    [JsonPropertyName("autoUpdateEnabled")]
+    public bool AutoUpdateEnabled
+    {
+        get => _autoUpdateEnabled;
+        set { _autoUpdateEnabled = value; OnPropertyChanged(); }
     }
 
     [JsonPropertyName("region")]

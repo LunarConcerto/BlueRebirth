@@ -3,10 +3,24 @@ using System.Text.Json;
 
 var root = FindRoot();
 var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-var outputArg = args.FirstOrDefault(a => a.StartsWith("--output=", StringComparison.OrdinalIgnoreCase));
-var outputDir = outputArg is not null
-    ? outputArg[9..]
+var outputArgIndex = Array.FindIndex(args, a => a.Equals("--output", StringComparison.OrdinalIgnoreCase) || a.StartsWith("--output=", StringComparison.OrdinalIgnoreCase));
+var outputDir = outputArgIndex >= 0
+    ? GetOptionValue(args, outputArgIndex, "--output")
     : Path.Combine(root, "release", stamp);
+
+var configurationArgIndex = Array.FindIndex(args, a => a.Equals("--configuration", StringComparison.OrdinalIgnoreCase) || a.StartsWith("--configuration=", StringComparison.OrdinalIgnoreCase));
+var configuration = configurationArgIndex >= 0
+    ? GetOptionValue(args, configurationArgIndex, "--configuration")
+    : "Release";
+var updateManifestArgIndex = Array.FindIndex(args, a => a.Equals("--update-manifest-url", StringComparison.OrdinalIgnoreCase) || a.StartsWith("--update-manifest-url=", StringComparison.OrdinalIgnoreCase));
+var updateManifestUrl = updateManifestArgIndex >= 0
+    ? GetOptionValue(args, updateManifestArgIndex, "--update-manifest-url")
+    : LoadUpdateManifestUrl(root, configuration);
+if (!string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase) &&
+    !string.Equals(configuration, "Release", StringComparison.OrdinalIgnoreCase))
+{
+    configuration = "Release";
+}
 
 var skipBuild = args.Contains("--skip-build", StringComparer.OrdinalIgnoreCase);
 var skipNative = args.Contains("--skip-native", StringComparer.OrdinalIgnoreCase);
@@ -29,7 +43,8 @@ if (!skipNative)
     }
     var psi = new ProcessStartInfo("powershell")
     {
-        Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{buildNativePs1}\"",
+        Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{buildNativePs1}\" -Configuration {configuration} " +
+                    (string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase) ? "-DebugHooks" : ""),
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,
@@ -61,7 +76,7 @@ if (!skipBuild)
     var serverOutput = Path.Combine(outputDir, "server");
     var psi = new ProcessStartInfo("dotnet")
     {
-        Arguments = $"publish \"{serverProj}\" -c Release -o \"{serverOutput}\"",
+        Arguments = $"publish \"{serverProj}\" -c {configuration} -o \"{serverOutput}\"",
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,
@@ -93,7 +108,7 @@ if (!skipBuild)
     var launcherOutput = Path.Combine(outputDir, "launcher");
     var psi = new ProcessStartInfo("dotnet")
     {
-        Arguments = $"publish \"{launcherProj}\" -c Release -o \"{launcherOutput}\"",
+        Arguments = $"publish \"{launcherProj}\" -c {configuration} -o \"{launcherOutput}\"",
         UseShellExecute = false,
         CreateNoWindow = true,
         RedirectStandardOutput = true,
@@ -207,6 +222,8 @@ var settings = new
     proxyScriptPath = "tools\\tls-loopback-proxy.py",
     dataRoot = "runtime\\jp",
     baselinePath = "baseline.json",
+    updateManifestUrl,
+    autoUpdateEnabled = true,
     region = "jp",
     serverPort = 0,
     gameLoginPort = 7201,
@@ -219,6 +236,14 @@ var settingsPath = Path.Combine(outputDir, "launcher-settings.json");
 var jsonOptions = new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings, jsonOptions));
 Console.WriteLine($"  Settings written to {settingsPath}");
+
+if (!File.Exists(settingsPath))
+{
+    Console.Error.WriteLine("  ERROR: launcher-settings.json was not created.");
+    return 1;
+}
+
+Console.WriteLine("  Verified: launcher-settings.json exists.");
 
 // Create start batch
 var batchPath = Path.Combine(outputDir, "启动游戏.bat");
@@ -262,4 +287,39 @@ static void CopyDirectory(string src, string dst)
         File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
     foreach (var dir in Directory.GetDirectories(src))
         CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
+}
+
+static string LoadUpdateManifestUrl(string root, string configuration)
+{
+    var configPath = Path.Combine(root, "launcher-update.json");
+    if (!File.Exists(configPath))
+        return string.Empty;
+
+    try
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(configPath));
+        var propertyName = string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)
+            ? "debugManifestUrl"
+            : "releaseManifestUrl";
+        return document.RootElement.TryGetProperty(propertyName, out var value)
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+    }
+    catch
+    {
+        return string.Empty;
+    }
+}
+
+static string GetOptionValue(string[] options, int index, string optionName)
+{
+    var option = options[index];
+    var prefix = optionName + "=";
+    if (option.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        return option[prefix.Length..];
+
+    if (index + 1 < options.Length && !options[index + 1].StartsWith("--", StringComparison.Ordinal))
+        return options[index + 1];
+
+    return string.Empty;
 }
