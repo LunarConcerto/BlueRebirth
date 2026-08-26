@@ -127,12 +127,10 @@ jobs:
           $release = $null
           try { $release = Invoke-RestMethod -Uri "$baseUrl/releases/tags/$tagName" -Headers $headers -Method Get } catch { }
           if ($release) {
-            foreach ($asset in @($release.assets)) {
-              Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files/$($asset.id)" -Headers $headers -Method Delete | Out-Null
-            }
-          } else {
-            $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath $tagName"; body = 'Automated release mirror'; target_commitish = 'master' }
+            Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)" -Headers $headers -Method Delete | Out-Null
+            $release = $null
           }
+          $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath $tagName"; body = 'Automated release mirror'; target_commitish = 'master' }
           $uploadJson = & curl.exe --fail-with-body --silent --show-error `
             -X POST `
             -H "Authorization: Bearer $env:GITEE_API" `
@@ -241,12 +239,10 @@ jobs:
           $release = $null
           try { $release = Invoke-RestMethod -Uri "$baseUrl/releases/tags/$tagName" -Headers $headers -Method Get } catch { }
           if ($release) {
-            foreach ($asset in @($release.assets)) {
-              Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)/attach_files/$($asset.id)" -Headers $headers -Method Delete | Out-Null
-            }
-          } else {
-            $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath Debug v1.0.${{ github.run_number }}"; body = 'Automated Debug mirror'; target_commitish = 'master'; prerelease = 'true' }
+            Invoke-RestMethod -Uri "$baseUrl/releases/$($release.id)" -Headers $headers -Method Delete | Out-Null
+            $release = $null
           }
+          $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath Debug v1.0.${{ github.run_number }}"; body = 'Automated Debug mirror'; target_commitish = 'master'; prerelease = 'true' }
           $uploadJson = & curl.exe --fail-with-body --silent --show-error `
             -X POST `
             -H "Authorization: Bearer $env:GITEE_API" `
