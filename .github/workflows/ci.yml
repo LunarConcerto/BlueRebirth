@@ -88,10 +88,20 @@ jobs:
         id: release_meta
         shell: pwsh
         run: |
-          $tagName = if ($env:GITHUB_REF -like 'refs/tags/v*') {
-            $env:GITHUB_REF_NAME
+          $versionFile = Join-Path $PWD 'src\BlueOath.Launcher.Wpf\version.txt'
+          $softwareVersion = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+          if ($softwareVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Invalid software version in version.txt: $softwareVersion"
+          }
+
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $tagName = $env:GITHUB_REF_NAME
+            $tagVersion = $tagName.Substring(1)
+            if ($tagVersion -ne $softwareVersion) {
+              throw "Git tag version $tagVersion does not match software version $softwareVersion."
+            }
           } else {
-            "v1.0.$env:GITHUB_RUN_NUMBER"
+            $tagName = "v$softwareVersion"
           }
           $bundleDir = Join-Path $env:RUNNER_TEMP "BlueOath-Release-$env:GITHUB_RUN_NUMBER\BlueOath-Release"
           $packagePath = Join-Path $env:RUNNER_TEMP "BlueOath-Release-$env:GITHUB_RUN_NUMBER\BlueOath-Release-$tagName.zip"

@@ -16,7 +16,7 @@
     </None>
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
-<Target Name="GenerateVersion" BeforeTargets="BeforeBuild">
+<Target Name="GenerateVersion" BeforeTargets="GenerateAssemblyInfo;BeforeBuild">
     <PropertyGroup>
       <VersionFile>$(MSBuildProjectDirectory)\version.txt</VersionFile>
       <VersionOutput>$(MSBuildProjectDirectory)\VersionInfo.g.cs</VersionOutput>
@@ -31,6 +31,10 @@
       <VersionBuild>$([System.String]::new('$(VersionRaw)').Split('.')[2])</VersionBuild>
       <VersionBuildIncremented>$([MSBuild]::Add($(VersionBuild), 1))</VersionBuildIncremented>
       <VersionString>$(VersionMajor).$(VersionMinor).$(VersionBuildIncremented)</VersionString>
+      <Version>$(VersionString)</Version>
+      <AssemblyVersion>$(VersionString)</AssemblyVersion>
+      <FileVersion>$(VersionString)</FileVersion>
+      <InformationalVersion>$(VersionString)</InformationalVersion>
     </PropertyGroup>
     <WriteLinesToFile File="$(VersionFile)" Lines="$(VersionString)" Overwrite="true" />
     <ItemGroup>
@@ -43,8 +47,5 @@
       <VersionCodeLines Include="}" />
     </ItemGroup>
     <WriteLinesToFile File="$(VersionOutput)" Lines="@(VersionCodeLines)" Overwrite="true" />
-    <ItemGroup>
-      <Compile Include="$(VersionOutput)" />
-    </ItemGroup>
   </Target>
 </Project>

@@ -82,16 +82,18 @@ internal sealed class LauncherUpdateService
 
         if (!updateAccepted) return UpdateCheckResult.Cancelled;
 
+        var activeOwner = owner is { IsVisible: true } ? owner : null;
+
         if (string.IsNullOrWhiteSpace(manifest.PackageUrl))
         {
-            ShowMessage(owner, "更新清单中缺少下载地址。", "更新失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowMessage(activeOwner, "更新清单中缺少下载地址。", "更新失败", MessageBoxButton.OK, MessageBoxImage.Warning);
             return UpdateCheckResult.Unavailable;
         }
 
-        var packagePath = await DownloadPackageAsync(manifest.PackageUrl, owner, cancellationToken);
+        var packagePath = await DownloadPackageAsync(manifest.PackageUrl, activeOwner, cancellationToken);
         if (packagePath is null)
         {
-            ShowMessage(owner, "下载更新包失败。", "更新失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowMessage(activeOwner, "下载更新包失败。", "更新失败", MessageBoxButton.OK, MessageBoxImage.Warning);
             return UpdateCheckResult.Unavailable;
         }
 
@@ -105,7 +107,7 @@ internal sealed class LauncherUpdateService
         var scriptPath = CreateUpdateScript(packagePath, exeName, Environment.ProcessId);
         if (scriptPath is null)
         {
-            ShowMessage(owner, "生成更新脚本失败。", "更新失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowMessage(activeOwner, "生成更新脚本失败。", "更新失败", MessageBoxButton.OK, MessageBoxImage.Warning);
             return UpdateCheckResult.Unavailable;
         }
 
