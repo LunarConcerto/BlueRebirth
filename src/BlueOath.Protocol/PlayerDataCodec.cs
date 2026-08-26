@@ -596,7 +596,9 @@ var reader = new GameLoginCodec.ProtoReader(payload);
     {
         using var output = new MemoryStream();
         if (value.EquipId != 0) WriteVarintField(output, 1, value.EquipId);
-        if (value.TemplateId != 0) WriteVarintField(output, 2, unchecked((ulong)value.TemplateId));
+        // TemplateId 无条件编码（含值为 0 的"删除标记"）：equipdata.UpdateEquip 里
+        // `v.TemplateId ~= 0` 分支判断，TemplateId==0 的条目表示该装备已被移除。
+        WriteVarintField(output, 2, unchecked((ulong)value.TemplateId));
         // EnhanceLv/Star/HeroId/EnhanceExp 无条件编码：EquipBagOverlay 里
         // tabSortTool[Tid][Star][EnhanceLv] 索引 + `0 < HeroId` 比较 + EnhanceExp 算术，
         // nil 都会崩溃。

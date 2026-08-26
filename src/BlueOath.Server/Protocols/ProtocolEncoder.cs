@@ -64,6 +64,28 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 TEquipDismantleRet: ItemInfo(1, repeated TCommonReward)。</summary>
+    internal static byte[] EncodeEquipDismantleRet(IReadOnlyList<CommonReward> rewards)
+    {
+        ProtocolPackage output = new();
+        foreach (CommonReward r in rewards)
+        {
+            ProtocolPackage item = new();
+            if (r.Type != 0)
+                item.Write(0x08, unchecked((ulong)r.Type));
+            if (r.ConfigId != 0)
+                item.Write(0x10, unchecked((ulong)r.ConfigId));
+            if (r.Num != 0)
+                item.Write(0x18, unchecked((ulong)r.Num));
+            if (r.Id != 0)
+                item.Write(0x20, unchecked((ulong)r.Id));
+            byte[] body = item.ToArray();
+            output.Write(0x0A, body);
+        }
+
+        return output.ToArray();
+    }
+
     internal static byte[] EncodeHeroAddExpRet(uint heroId, List<ItemCount> items)
     {
         ProtocolPackage output = new();

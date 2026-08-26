@@ -690,12 +690,16 @@ internal sealed class GameServices
         return TMessageCodec.EncodeResponse(push);
     }
 
-    /// <summary>装备仓库推送（equip.UpdateEquipBagData）。</summary>
-    public byte[] BuildEquipPush(PlayerAccount account, uint now)
+    /// <summary>装备仓库推送（equip.UpdateEquipBagData）。<paramref name="removedEquipIds"/> 为本次
+    /// 移除的装备实例 ID，以 TemplateId=0 的删除标记追加，使客户端 equipdata.UpdateEquip 清除它们。</summary>
+    public byte[] BuildEquipPush(PlayerAccount account, uint now, IReadOnlyList<uint>? removedEquipIds = null)
     {
         var equip = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
         var info = equip.Items.Select(e => new EquipInfo(e.EquipId, e.TemplateId, e.EnhanceLv,
             e.Star, e.HeroId, e.EnhanceExp)).ToList();
+        if (removedEquipIds is { Count: > 0 })
+            foreach (uint id in removedEquipIds)
+                info.Add(new EquipInfo(EquipId: id, TemplateId: 0));
         var push = new TResponse(Method: "equip.UpdateEquipBagData",
             Ret: PlayerDataCodec.Encode(new EquipList(EquipBagSize: equip.EquipBagSize, EquipInfo: info)),
             Time: now);
