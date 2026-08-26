@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using BlueOath.Protocol;
 
 namespace BlueOath.Core;
 
@@ -68,7 +69,8 @@ public sealed record Hero(
     string Name = "",
     bool Lock = false,
     int Advance = 0,
-    int AdvLv = 0);
+    int AdvLv = 0,
+    IReadOnlyList<PSkillEntry>? PSkills = null);
 
 /// <summary>
 /// 船坞（玩家拥有的全部舰娘）。对应 <c>hero.UpdateHeroBagData</c> 的 HeroBag

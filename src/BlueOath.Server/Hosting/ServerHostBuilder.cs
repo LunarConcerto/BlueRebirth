@@ -63,6 +63,7 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<ShopService>();
         builder.Services.AddSingleton<BattleService>();
         builder.Services.AddSingleton<HeroService>();
+        builder.Services.AddSingleton<EquipService>();
 
         // 协议模块（每域一个类）+ 路由器。
         builder.Services.AddSingleton<IGameModule, PlayerModule>();
@@ -75,6 +76,7 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<IGameModule, UserModule>();
         builder.Services.AddSingleton<IGameModule, BuildShipModule>();
         builder.Services.AddSingleton<IGameModule, CopyModule>();
+        builder.Services.AddSingleton<IGameModule, EquipModule>();
         builder.Services.AddSingleton<MessageRouter>();
         builder.Services.AddSingleton<GameLoginSession>();
 

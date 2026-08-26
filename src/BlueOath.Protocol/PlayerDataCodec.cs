@@ -2,6 +2,29 @@ using System.Text;
 
 namespace BlueOath.Protocol;
 
+/// <summary>单个技能记录（PSkillId → Level/Exp）。</summary>
+public sealed class PSkillEntry
+{
+    public uint PSkillId { get; set; }
+    public uint PSkillExp { get; set; }
+    public int Level { get; set; }
+    public int Replace { get; set; }
+
+    public PSkillEntry() { }
+    public PSkillEntry(uint pSkillId, uint pSkillExp = 0, int level = 0, int replace = 0)
+    {
+        PSkillId = pSkillId;
+        PSkillExp = pSkillExp;
+        Level = level;
+        Replace = replace;
+    }
+
+    public override string ToString() {
+        return
+            $"{nameof(PSkillId)}: {PSkillId}, {nameof(PSkillExp)}: {PSkillExp}, {nameof(Level)}: {Level}, {nameof(Replace)}: {Replace}";
+    }
+}
+
 /// <summary>
 /// Resources consumed by a single build formula. Currently empty; extend with the
 /// TBuildProject fields (Items/Gold) when real build data is needed.
@@ -30,7 +53,8 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
     int Exp = 0, int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
     long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "",
-    bool Lock = false, int Advance = 0, int AdvLv = 0);
+    bool Lock = false, int Advance = 0, int AdvLv = 0,
+    IReadOnlyList<PSkillEntry>? PSkills = null);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -322,10 +346,22 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         WriteVarintField(output, 5, unchecked((ulong)value.Exp));
         if (value.CreateTime != 0) WriteVarintField(output, 8, unchecked((ulong)value.CreateTime));
         if (value.CurHp != 0) WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
-        // PSkill (field 13, repeated): 1 dummy with PSkillId=41210(valid config),
-        // PSkillExp=0, Level=0, Replace=0. Replace 必须编码为 0，否则 nil ~= 0 为真，
-        // GetReplaceSkillId 会 return nil，导致 GetPSkillName 里 config 查询为 nil 崩溃。
-        output.Write(new byte[] { 0x6A, 0x0A, 0x08, 0xFA, 0xC1, 0x02, 0x10, 0x00, 0x18, 0x00, 0x20, 0x00 });
+        // PSkill (field 13, repeated TMapFiledPSkillExp)：编码所有实际技能数据。
+        if (value.PSkills is { Count: > 0 } skills)
+        {
+            foreach (PSkillEntry sk in skills)
+            {
+                uint psId = sk.PSkillId != 0 ? sk.PSkillId : 41210;
+                byte[] psBody = BuildPSkillBytes(psId, sk.PSkillExp, sk.Level, sk.Replace);
+                WriteVarint(output, 0x6A);
+                WriteVarint(output, (ulong)psBody.Length);
+                output.Write(psBody);
+            }
+        }
+        else
+        {
+            output.Write(new byte[] { 0x6A, 0x0A, 0x08, 0xFA, 0xC1, 0x02, 0x10, 0x00, 0x18, 0x00, 0x20, 0x00 });
+        }
         if (value.Affection != 0) WriteVarintField(output, 17, unchecked((ulong)value.Affection));
         // Mood/MarryTime/MarryType 必须无条件编码：值为 0 时客户端读到 nil，
         // GetMoodNum/GetLoveInfo 里的算术/比较会崩溃。
@@ -560,7 +596,9 @@ var reader = new GameLoginCodec.ProtoReader(payload);
     {
         using var output = new MemoryStream();
         if (value.EquipId != 0) WriteVarintField(output, 1, value.EquipId);
-        if (value.TemplateId != 0) WriteVarintField(output, 2, unchecked((ulong)value.TemplateId));
+        // TemplateId 无条件编码（含值为 0 的"删除标记"）：equipdata.UpdateEquip 里
+        // `v.TemplateId ~= 0` 分支判断，TemplateId==0 的条目表示该装备已被移除。
+        WriteVarintField(output, 2, unchecked((ulong)value.TemplateId));
         // EnhanceLv/Star/HeroId/EnhanceExp 无条件编码：EquipBagOverlay 里
         // tabSortTool[Tid][Star][EnhanceLv] 索引 + `0 < HeroId` 比较 + EnhanceExp 算术，
         // nil 都会崩溃。
@@ -621,12 +659,26 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         output.WriteByte((byte)value);
     }
 
-    private static void WriteStringField(Stream output, int field, string value)
+private static void WriteStringField(Stream output, int field, string value)
     {
         var bytes = System.Text.Encoding.UTF8.GetBytes(value);
         WriteVarint(output, (ulong)((field << 3) | 2));
         WriteVarint(output, (ulong)bytes.Length);
         output.Write(bytes);
+    }
+
+private static byte[] BuildPSkillBytes(uint psId, uint exp, int level, int replace)
+    {
+        using var ms = new MemoryStream();
+        WriteVarint(ms, 0x08);
+        WriteVarint(ms, psId);
+        WriteVarint(ms, 0x10);
+        WriteVarint(ms, exp);
+        WriteVarint(ms, 0x18);
+        WriteVarint(ms, unchecked((ulong)(level > 0 ? level : 1)));
+        WriteVarint(ms, 0x20);
+        WriteVarint(ms, unchecked((ulong)replace));
+        return ms.ToArray();
     }
 
     /// <summary>Encode building.UpdateBuildingInfo push (TUserBuildingInfo).</summary>

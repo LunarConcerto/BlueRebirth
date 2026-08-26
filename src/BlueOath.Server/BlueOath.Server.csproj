@@ -1,9 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+	<ImplicitUsings>enable</ImplicitUsings>
     <OutputType>Exe</OutputType>
     <AssemblyName>BlueOath.Server</AssemblyName>
     <RootNamespace>BlueOath.Server</RootNamespace>
-    <LangVersion>preview</LangVersion>
+    <LangVersion>latestmajor</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>

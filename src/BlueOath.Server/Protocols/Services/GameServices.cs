@@ -67,12 +67,11 @@ internal sealed class GameServices
     /// <summary>时装 FashionTid → SfId 映射。</summary>
     internal IReadOnlyDictionary<int, int> FashionSfIdMap => _fashionSfIdMap;
 
-    /// <summary>持久化账号（供各模块修改后落盘）。同时更新内存缓存。DB 写入异步执行不阻塞响应。</summary>
-    internal Task SaveAccountAsync(PlayerAccount account, CancellationToken ct = default)
+    /// <summary>持久化账号（供各模块修改后落盘）。同时更新内存缓存。</summary>
+    internal async Task SaveAccountAsync(PlayerAccount account, CancellationToken ct = default)
     {
         _accountCache[account.ProfileId] = account;
-        _ = _repo.SaveAccountAsync(account, ct);
-        return Task.CompletedTask;
+        await _repo.SaveAccountAsync(account, ct);
     }
 
     /// <summary>抽卡模板配置（供 BuildShipService）。</summary>
@@ -291,12 +290,14 @@ internal sealed class GameServices
         if (account is not null)
         {
             EnsureEquipIdFromAccount(account);
+            account = EnsureHeroPSkills(account);
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
             return account;
         }
         var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        created = EnsureHeroPSkills(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -310,7 +311,8 @@ internal sealed class GameServices
 
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is null)
-            return PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            return EnsureHeroPSkills(PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
+        account = EnsureHeroPSkills(account);
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
@@ -354,7 +356,7 @@ internal sealed class GameServices
     internal static HeroGrid ToHeroGrid(Hero hero) =>
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
             hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType,
-            hero.EquipSlots, hero.Name, hero.Lock, hero.Advance, hero.AdvLv);
+            hero.EquipSlots, hero.Name, hero.Lock, hero.Advance, hero.AdvLv, hero.PSkills);
 
     /// <summary>
     /// 由舰娘 TemplateId（config_ship_main 的 key）推导图鉴 IllustrateId
@@ -458,10 +460,64 @@ internal sealed class GameServices
             }
         }
 
+        // 默认技能：从 config_ship_main.pskill_show_id 读取，每个技能初始 Level=1。
+        List<PSkillEntry> pskills = CreateDefaultPSkills(templateId);
+
         heroes.Add(new Hero(heroId, templateId, 1,
             fashioning, CreateTime: now, UpdateTime: now, Affection: 10000, CurHp: PlayerAccountFactory.HpCoefficient,
-            Mood: 10000, MarryType: 0, EquipSlots: slots));
+            Mood: 10000, MarryType: 0, EquipSlots: slots, PSkills: pskills));
         return account with { Dock = dock with { Heroes = heroes }, Equip = equip with { Items = equipItems } };
+    }
+
+    /// <summary>从 config_ship_main 读取默认技能列表（匹配客户端 GetAllPSkillArrbyShipMainId：pskill_show_id + direct_activate_talent_id + condition_activate_talent_id）。Level=1。</summary>
+    internal static List<PSkillEntry> CreateDefaultPSkills(int templateId)
+    {
+        var skills = new List<PSkillEntry>();
+        var cfg = ShipMainLoader.Get(templateId);
+        if (cfg is null) return skills;
+
+        var allIds = new List<long>();
+
+        // pskill_show_id
+        if (cfg.PskillShowId is { Count: > 0 } psIds)
+            allIds.AddRange(psIds);
+
+        // direct_activate_talent_id
+        if (cfg.DirectActivateTalentId is { Count: > 0 } daIds)
+            allIds.AddRange(daIds);
+
+        // condition_activate_talent_id
+        if (cfg.ConditionActivateTalentId is { Count: > 0 } caIds)
+            foreach (var obj in caIds)
+            {
+                if (obj is System.Text.Json.JsonElement je && je.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    allIds.Add(je.GetInt64());
+                else if (obj is long l)
+                    allIds.Add(l);
+            }
+
+        foreach (long psId in allIds)
+            if (psId > 0)
+                skills.Add(new PSkillEntry((uint)psId, level: 1));
+
+        return skills;
+    }
+
+    /// <summary>确保所有英雄都有默认 PSkills（兼容旧存档）。</summary>
+    private static PlayerAccount EnsureHeroPSkills(PlayerAccount account)
+    {
+        HeroDock dock = account.Dock;
+        List<Hero> heroes = dock.Heroes.ToList();
+        bool changed = false;
+        for (int i = 0; i < heroes.Count; i++)
+        {
+            if (heroes[i].PSkills is not { Count: > 0 })
+            {
+                heroes[i] = heroes[i] with { PSkills = CreateDefaultPSkills(heroes[i].TemplateId) };
+                changed = true;
+            }
+        }
+        return changed ? account with { Dock = dock with { Heroes = heroes } } : account;
     }
 
     internal static PlayerAccount SetAffection(PlayerAccount account, uint heroId, int amount)
@@ -634,12 +690,16 @@ internal sealed class GameServices
         return TMessageCodec.EncodeResponse(push);
     }
 
-    /// <summary>装备仓库推送（equip.UpdateEquipBagData）。</summary>
-    public byte[] BuildEquipPush(PlayerAccount account, uint now)
+    /// <summary>装备仓库推送（equip.UpdateEquipBagData）。<paramref name="removedEquipIds"/> 为本次
+    /// 移除的装备实例 ID，以 TemplateId=0 的删除标记追加，使客户端 equipdata.UpdateEquip 清除它们。</summary>
+    public byte[] BuildEquipPush(PlayerAccount account, uint now, IReadOnlyList<uint>? removedEquipIds = null)
     {
         var equip = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
         var info = equip.Items.Select(e => new EquipInfo(e.EquipId, e.TemplateId, e.EnhanceLv,
             e.Star, e.HeroId, e.EnhanceExp)).ToList();
+        if (removedEquipIds is { Count: > 0 })
+            foreach (uint id in removedEquipIds)
+                info.Add(new EquipInfo(EquipId: id, TemplateId: 0));
         var push = new TResponse(Method: "equip.UpdateEquipBagData",
             Ret: PlayerDataCodec.Encode(new EquipList(EquipBagSize: equip.EquipBagSize, EquipInfo: info)),
             Time: now);

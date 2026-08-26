@@ -126,6 +126,33 @@ internal static class ProtocolDecoder
         return (heroId, consumedHeros, consumeItems);
     }
 
+    /// <summary>解码 equip.Dismantle 参数：ConsumeIds(1, repeated uint32)。</summary>
+    internal static List<uint> DecodeEquipDismantle(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        List<uint> consumeIds = [];
+        while (reader.TryReadField(out int field, out int wire))
+            if (field == 1 && wire == 0) consumeIds.Add(checked((uint)reader.ReadVarint()));
+            else reader.Skip(wire);
+        return consumeIds;
+    }
+
+    /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>
+    internal static (uint HeroId, int SkillId) DecodeStudySkillArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        uint heroId = 0;
+        int skillId = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
+                case 2 when wire == 0: skillId = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        return (heroId, skillId);
+    }
+
     /// <summary>解码 copy.StartBase 请求的 CopyId（仅 field 2）。</summary>
     internal static int DecodeStartBaseCopyId(byte[] args)
     {

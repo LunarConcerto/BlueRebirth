@@ -16,7 +16,7 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
         {
             case "buildship.BuildShip":
                 var ret = await buildShip.BuildBuildShipRetAsync(request, ctx.ProfileId, ctx.Ct);
-                // 应答前推送新抽到的舰娘（船坞 + 图鉴），客户端据此刷新列表。
+                // 应答前推送抽卡结果：抽到舰娘推船坞/图鉴；无论如何都推装备仓库。
                 var pre = new List<byte[]>();
                 if (ret.Length != 0)
                 {
@@ -26,9 +26,9 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                         .Where(h => newIds.Contains(h.HeroId))
                         .Select(ToHeroGridWithName)
                         .ToList();
+                    var now = (uint)ctx.Now;
                     if (newHeroes.Count > 0)
                     {
-                        var now = (uint)ctx.Now;
                         pre.Add(TMessageCodec.EncodeResponse(new TResponse(
                             Method: "hero.UpdateHeroBagData",
                             Ret: PlayerDataCodec.Encode(new HeroBag(newHeroes, account.Dock.BagSize)),
@@ -41,10 +41,10 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                                     .ToList(),
                                 IllustrateEquipList: [new IllustrateEquipInfo()])),
                             Time: now)));
-                        // 新舰娘自带默认装备（config_ship_info.equip1..equip6），推送完整装备仓库
-                        // 让客户端 equipdata 拿到新增的 EquipItem（EquipId/TemplateId/HeroId）。
-                        pre.Add(services.BuildEquipPush(account, now));
                     }
+                    // 新舰娘自带默认装备（config_ship_info.equip1..equip6），纯装备抽卡也会新增
+                    // EquipItem，推送完整装备仓库让客户端 equipdata 拿到新增装备。
+                    pre.Add(services.BuildEquipPush(account, now));
                 }
                 result = new ModuleResult { Ret = ret, PrePushes = pre };
                 break;

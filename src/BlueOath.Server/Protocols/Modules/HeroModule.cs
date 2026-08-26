@@ -21,11 +21,12 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     PostPushes = await services.BuildPostEquipPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
                 };
                 break;
-            case "hero.AddExp":
-                result = await UpdateHero(ctx, await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct));
-                break;
             case "hero.Marry":
-                result = await UpdateHero(ctx, await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct));
+            case "hero.AddExp":
+                byte[] ret = request.Method == "hero.AddExp" ?
+                    await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct) :
+                    await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
+                result = await UpdateHero(ctx, ret);
                 break;
             case "hero.LockHero":
                 result = ModuleResult.Ok(await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
@@ -64,9 +65,21 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     PrePushes = BuildHeroBagPushes(advAccount, advHeroes, (uint)ctx.Now),
                 };
                 break;
+            case "hero.StudySkill":
+                result = new ModuleResult
+                {
+                    Ret = await hero.BuildStudySkillRetAsync(request, ctx.ProfileId, ctx.Ct),
+                };
+                var skillAccount = await ctx.GetAccountAsync();
+                var skillHeroes = skillAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+                result = new ModuleResult
+                {
+                    Ret = result.Ret,
+                    PrePushes = BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
+                };
+                break;
             case "hero.HeroIntensify":
             case "hero.HeroAdvanceMUB":
-            case "hero.StudySkill":
             case "hero.AutoEquip":
             case "hero.AutoUnEquip":
             case "hero.HeroAdvMaxLv":

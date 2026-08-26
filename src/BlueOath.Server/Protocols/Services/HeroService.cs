@@ -251,4 +251,46 @@ internal sealed class HeroService(GameServices services)
         await services.SaveAccountAsync(account, ct);
         return [];
     }
+
+    /// <summary>处理 hero.StudySkill：技能升级。SkillId 对应 PSkillId，Level 递增。</summary>
+    internal async Task<byte[]> BuildStudySkillRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        var (heroId, skillId) = ProtocolDecoder.DecodeStudySkillArg(request.Args);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+
+        HeroDock dock = account.Dock;
+        List<Hero> heroList = dock.Heroes.ToList();
+        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return [];
+
+        Hero hero = heroList[heroIdx];
+        List<PSkillEntry> skills = (hero.PSkills ?? []).ToList();
+        int skillIdx = skills.FindIndex(s => s.PSkillId == skillId);
+
+        Console.WriteLine(skillIdx);
+
+        if (skillIdx < 0)
+            skills.Add(new PSkillEntry((uint)skillId, level: 1));
+        else
+            skills[skillIdx].Level += 1;
+
+        heroList[heroIdx] = hero with { PSkills = skills };
+        account = account with { Dock = dock with { Heroes = heroList } };
+
+        await services.SaveAccountAsync(account, ct);
+        byte[] ret = EncodeStudySkillRet(heroId, skillId);
+        return ret;
+    }
+
+    /// <summary>编码 hero.StudySkill 响应 (THeroSkill): HeroId(1, uint32), SkillId(2, int32)。</summary>
+    private static byte[] EncodeStudySkillRet(uint heroId, int skillId)
+    {
+        using var ms = new System.IO.MemoryStream();
+        if (heroId != 0) { ms.WriteByte(0x08); ProtocolPackage.WriteVarint(ms, heroId); }
+        if (skillId != 0) { ms.WriteByte(0x10); ProtocolPackage.WriteVarint(ms, unchecked((ulong)skillId)); }
+        return ms.ToArray();
+    }
 }
