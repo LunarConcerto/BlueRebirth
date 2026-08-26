@@ -35,4 +35,13 @@ __pycache__/
 /native/bin-x86/
 /native/build-x86/
 /native/build-x86-nmake/
+/native/build/
+/native/build-msvc/
+/native/build-nmake-x86/
 /native/_backup/
+
+# ---- Local Codex / developer runtime state ----
+/.appdata/
+/.dotnet-home/
+/.nuget-packages/
+/.codex-nuget.config
