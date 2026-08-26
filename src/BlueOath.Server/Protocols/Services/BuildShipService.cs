@@ -49,7 +49,7 @@ internal sealed class BuildShipService(GameServices services)
             }
             else if (entry.GoodsType == GameServices.GoodsTypeEquip)
             {
-                uint equipId = AddEquip(account, entry.ConfigId, now);
+                (account, uint equipId) = AddEquip(account, entry.ConfigId, now);
                 rewards.Add(new CommonReward(GameServices.GoodsTypeEquip, entry.ConfigId, entry.MinNum, (int)equipId));
             }
             else
@@ -157,9 +157,14 @@ internal sealed class BuildShipService(GameServices services)
         return services.ShipInfos.TryGetValue(siId, out var info) ? (int)info.Quality : 0;
     }
 
-    /// <summary>装备加入仓库（简化实现：作为 CommonReward 返回，不实际加入装备仓库）。</summary>
-    internal uint AddEquip(PlayerAccount account, int templateId, int now)
+    /// <summary>装备加入仓库：创建装备实例（EquipId 自增）存入装备仓库，返回更新后的账号与 EquipId。</summary>
+    internal (PlayerAccount Account, uint EquipId) AddEquip(PlayerAccount account, int templateId, int now)
     {
-        return 0;
+        var equip = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
+        var items = equip.Items.ToList();
+        uint equipId = services.NextEquipId();
+        items.Add(new EquipItem(EquipId: equipId, TemplateId: templateId));
+        account = account with { Equip = equip with { Items = items } };
+        return (account, equipId);
     }
 }
