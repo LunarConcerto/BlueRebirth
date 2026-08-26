@@ -23,7 +23,8 @@ var tests = new (string Name, Func<Task> Run)[]
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
     ("protobuf login server creates a local profile", GameLoginIntegrationTest),
-    ("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
+    ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
+    ("all fashions unlocked on account creation", FashionUnlockIntegrationTest)];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -353,6 +354,83 @@ static async Task TacticIntegrationTest()
         byte[] marker = [0x10, 0x01, 0x18, 0x01]; // heroInfo=1 + modeId=1
         Assert(get.Ret is { Length: > 0 } && ContainsSequence(get.Ret, marker),
             "tactic.GetHerosTactic did not include saved hero info");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+static async Task FashionUnlockIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
+    // 数据目录必须位于项目根之下，ConfigDbLoader.FindConfigDir 向上最多 8 级才能命中
+    // blueoath/.../StreamingAssets/config（临时目录在系统盘，永远找不到）。
+    var data = Path.Combine(root, "test-fashion-tmp");
+    Directory.CreateDirectory(data);
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "fashion test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        var port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        var stream = client.GetStream();
+
+        async Task<TResponse> RoundTrip(string method, byte[]? args)
+        {
+            var request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                var response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1)
+                    return response;
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin("fashion-player", 1, "open", "hash")));
+        await RoundTrip("player.GetUserList", null);
+        await RoundTrip("player.CreateUser",
+            new byte[] { 0x0A, 0x04, (byte)'f', (byte)'a', (byte)'s', (byte)'h', 0x10, 0x01 });
+        await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
+        var userInfo = await RoundTrip("user.GetUserInfo", null);
+        Assert(userInfo.Method == "user.GetUserInfo", "get user info response method mismatch");
+
+        // user.GetUserInfo 应答后，服务器会通过 PostPushes 推送 fashion.updateData。
+        // 持续读帧直到捕获该推送；空无人时装列表 Ret 为空数组（0 字节），
+        // 而全量解锁时应包含 1000+ 条时装（编码远大于 100 字节）。
+        byte[]? fashionRet = null;
+        for (var attempts = 0; attempts < 20 && fashionRet is null; attempts++)
+        {
+            var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+            Assert(frame is not null, "missing expected fashion.updateData push");
+            var push = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+            if (push.Method == "fashion.updateData")
+                fashionRet = push.Ret;
+        }
+        Assert(fashionRet is { Length: > 100 },
+            $"fashion.updateData push did not contain unlocked fashions (ret length: {fashionRet?.Length ?? 0})");
     }
     finally
     {

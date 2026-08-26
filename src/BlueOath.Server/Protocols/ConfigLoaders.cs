@@ -628,6 +628,51 @@ internal static class ShipHandbookLoader
     }
 }
 
+/// <summary>
+/// 从游戏客户端 config_fashion.db 加载全部时装，按 <c>belong_to_ship</c>（即
+/// config_ship_info.sf_id）分组为 <see cref="FashionEntry"/>（SfId → FashionTid 列表）。
+/// 供「创建档案即全时装解锁」与 FashionTid → SfId 映射（替代 gm-goods.json 手写白名单）。
+/// </summary>
+internal static class FashionConfigLoader
+{
+    private static readonly List<FashionEntry> _allFashion = [];
+    private static readonly Dictionary<int, int> _fashionSfIdMap = new();
+    private static bool _loaded;
+
+    /// <summary>已按 SfId 分组的全部时装条目（登录/login-push 用）。</summary>
+    public static IReadOnlyList<FashionEntry> AllFashion => _allFashion;
+
+    /// <summary>FashionTid → SfId（belong_to_ship）全量映射。</summary>
+    public static IReadOnlyDictionary<int, int> FashionSfIdMap => _fashionSfIdMap;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            var entries = new Dictionary<int, List<int>>();
+            ConfigDbLoader.LoadAll<ConfigFashion>(configDir, "config_fashion.db",
+                (id, cfg) =>
+                {
+                    var sfId = checked((int)cfg.BelongToShip);
+                    if (!entries.TryGetValue(sfId, out var list))
+                        entries[sfId] = list = [];
+                    if (!list.Contains(id)) list.Add(id);
+                    _fashionSfIdMap[id] = sfId;
+                });
+            foreach (var (sfId, tids) in entries.OrderBy(kv => kv.Key))
+                _allFashion.Add(new FashionEntry(sfId, tids.OrderBy(x => x).ToList()));
+            Console.Error.WriteLine($"[fashion] loaded {_fashionSfIdMap.Count} fashions / {_allFashion.Count} ships");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[fashion] failed to load config_fashion.db: {ex.Message}");
+        }
+        _loaded = true;
+    }
+}
+
 internal static class PlotTriggerLoader
 {
     private static List<int> _allPlotIds = [];

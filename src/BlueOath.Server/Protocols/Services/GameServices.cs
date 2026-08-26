@@ -40,7 +40,8 @@ internal sealed class GameServices
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
         _gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
-        _fashionSfIdMap = _gmGoods.FashionSfId.ToDictionary(kv => kv.Key, kv => kv.Value);
+        FashionConfigLoader.Load(options.DataRoot);
+        _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(options.DataRoot);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
@@ -291,6 +292,7 @@ internal sealed class GameServices
         {
             EnsureEquipIdFromAccount(account);
             account = EnsureHeroPSkills(account);
+            account = EnsureAllFashion(account);
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
@@ -298,6 +300,7 @@ internal sealed class GameServices
         }
         var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         created = EnsureHeroPSkills(created);
+        created = EnsureAllFashion(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -313,6 +316,7 @@ internal sealed class GameServices
         if (account is null)
             return EnsureHeroPSkills(PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
         account = EnsureHeroPSkills(account);
+        account = EnsureAllFashion(account);
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
@@ -518,6 +522,46 @@ internal sealed class GameServices
             }
         }
         return changed ? account with { Dock = dock with { Heroes = heroes } } : account;
+    }
+
+    /// <summary>
+    /// 创建/加载档案时全量解锁全部时装（唯一解锁途径是商店，直接绕过）。
+    /// 时装按 config_fashion.belong_to_ship（= config_ship_info.sf_id）分组为
+    /// FashionEntry，供 fashion.updateData 推送。对已存在旧档同样生效。
+    /// </summary>
+    private static PlayerAccount EnsureAllFashion(PlayerAccount account)
+    {
+        var all = FashionConfigLoader.AllFashion;
+        if (all.Count == 0) return account;
+        var existing = new HashSet<(int, int)>();
+        foreach (var entry in account.Fashion?.Entries ?? [])
+            foreach (var tid in entry.FashionTids)
+                existing.Add((entry.SfId, tid));
+        var merged = all.Select(e =>
+        {
+            var tids = existing.Count > 0
+                ? e.FashionTids.Concat(
+                      account.Fashion?.Entries.SelectMany(x => x.FashionTids)
+                          .Where(tid => FashionConfigLoader.FashionSfIdMap.GetValueOrDefault(tid) == e.SfId)
+                          .Where(tid => !e.FashionTids.Contains(tid)) ?? [])
+                  : e.FashionTids;
+            return new FashionEntry(e.SfId, tids.Distinct().OrderBy(x => x).ToList());
+        }).ToList();
+        return account with { Fashion = new PlayerFashion(merged) };
+    }
+
+    /// <summary>
+    /// 构建 FashionTid → SfId 完整映射：优先 config_fashion.belong_to_ship（全量），
+    /// 再补 gm-goods.json 手写白名单中配置表缺失的项。
+    /// </summary>
+    private Dictionary<int, int> BuildFashionSfIdMap()
+    {
+        var map = new Dictionary<int, int>();
+        foreach (var kv in FashionConfigLoader.FashionSfIdMap)
+            map[kv.Key] = kv.Value;
+        foreach (var kv in _gmGoods.FashionSfId)
+            map.TryAdd(kv.Key, kv.Value);
+        return map;
     }
 
     internal static PlayerAccount SetAffection(PlayerAccount account, uint heroId, int amount)
