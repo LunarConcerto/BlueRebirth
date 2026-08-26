@@ -10,7 +10,6 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {
-        ModuleResult result;
         switch (request.Method)
         {
             case "equip.Dismantle":
@@ -28,10 +27,14 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
                     },
                 };
                 break;
+            case "equip.Enhance":
+                return new ModuleResult
+                {
+                    Ret = await equip.BuildEnhanceRetAsync(request, ctx.ProfileId, ctx.Ct),
+                    PostPushes = await services.BuildPostEnhancePushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
+                };
             default:
-                result = ModuleResult.Empty;
-                break;
+                return ModuleResult.Empty;
         }
-        return result;
     }
 }

@@ -86,6 +86,7 @@ internal sealed class EquipService(GameServices services)
         List<EquipEnhanceItem> materials = arg.ItemArr
             .GroupBy(i => i.TemplateId)
             .Select(g => new EquipEnhanceItem(g.Key, checked((uint)g.Aggregate(0UL, (sum, i) => sum + i.ItemNum))))
+            .Select(g => new EquipEnhanceItem(g.Key, checked((uint)g.Aggregate(0UL, (sum, i) => sum + i.ItemNum))))
             .ToList();
         PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
         List<BagItem> bagItems = bag.Items.ToList();
@@ -120,7 +121,6 @@ internal sealed class EquipService(GameServices services)
         await services.SaveAccountAsync(account, ct);
         return [];
     }
-
     private void ApplyReward(ref PlayerAccount account, int type, int configId, int num)
     {
         // CURRENCY→货币字段；ITEM / EQUIP_ENHANCE_ITEM→仓库。

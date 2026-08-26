@@ -98,6 +98,9 @@ internal sealed class GameServices
 
     /// <summary>升级所需经验表（供 HeroService）。</summary>
     internal IReadOnlyDictionary<int, int> ExpNeeded => _expNeeded;
+    internal ConfigEquipEnhanceItem? GetEquipEnhanceItem(int id) => EquipLoader.GetEnhanceItem(id);
+    internal ConfigEquipEnhanceLevel? GetEquipEnhanceLevel(int level) => EquipLoader.GetEnhanceLevel(level);
+    internal ConfigEquip? GetEquipConfig(int id) => EquipLoader.Get(id);
 
     /// <summary>
     /// 处理登录操作码：解码 <c>TArgLogin</c>，按 <c>Pid</c> 创建/加载本地档案，
@@ -776,5 +779,11 @@ internal sealed class GameServices
                 Time: now)),
             BuildEquipPush(account, now)
         ];
+    }
+
+    public async Task<IReadOnlyList<byte[]>> BuildPostEnhancePushesAsync(string profileId, uint now, CancellationToken ct)
+    {
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        return [BuildBagPush(account, now), BuildEquipPush(account, now)];
     }
 }
