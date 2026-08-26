@@ -131,7 +131,10 @@ jobs:
             $release = $null
           }
           $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath $tagName"; body = 'Automated release mirror'; target_commitish = 'master' }
-          $uploadJson = & curl.exe --fail-with-body --silent --show-error `
+          Write-Host "Uploading release package to Gitee..."
+          $uploadJson = & curl.exe --fail-with-body --show-error --progress-bar `
+            --connect-timeout 30 `
+            --max-time 900 `
             -X POST `
             -H "Authorization: Bearer $env:GITEE_API" `
             -H "Accept: application/json" `
@@ -139,13 +142,16 @@ jobs:
             "$baseUrl/releases/$($release.id)/attach_files"
           if ($LASTEXITCODE -ne 0) { throw "Gitee release attachment upload failed." }
           $upload = $uploadJson | ConvertFrom-Json
+          Write-Host "Gitee release package upload completed."
           $manifest = [ordered]@{ version = $tagName; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
           Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-release.json') -Value $manifest -Encoding UTF8
+          Push-Location $mirrorRoot
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add launcher-update-release.json
           git commit -m "chore: update release manifest" 2>$null
           if ($LASTEXITCODE -eq 0) { git push origin "HEAD:$mirrorBranch" }
+          Pop-Location
 
   publish_debug:
     name: Publish Launcher Bundle (Debug)
@@ -243,7 +249,10 @@ jobs:
             $release = $null
           }
           $release = Invoke-RestMethod -Uri "$baseUrl/releases" -Headers $headers -Method Post -Body @{ tag_name = $tagName; name = "BlueOath Debug v1.0.${{ github.run_number }}"; body = 'Automated Debug mirror'; target_commitish = 'master'; prerelease = 'true' }
-          $uploadJson = & curl.exe --fail-with-body --silent --show-error `
+          Write-Host "Uploading Debug package to Gitee..."
+          $uploadJson = & curl.exe --fail-with-body --show-error --progress-bar `
+            --connect-timeout 30 `
+            --max-time 900 `
             -X POST `
             -H "Authorization: Bearer $env:GITEE_API" `
             -H "Accept: application/json" `
@@ -251,10 +260,13 @@ jobs:
             "$baseUrl/releases/$($release.id)/attach_files"
           if ($LASTEXITCODE -ne 0) { throw "Gitee release attachment upload failed." }
           $upload = $uploadJson | ConvertFrom-Json
+          Write-Host "Gitee Debug package upload completed."
           $manifest = [ordered]@{ version = "v1.0.${{ github.run_number }}"; packageUrl = $upload.browser_download_url; executableName = 'BlueOath.Launcher.Wpf.exe' } | ConvertTo-Json
           Set-Content -LiteralPath (Join-Path $mirrorRoot 'launcher-update-debug.json') -Value $manifest -Encoding UTF8
+          Push-Location $mirrorRoot
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add launcher-update-debug.json
           git commit -m "chore: update debug manifest" 2>$null
           if ($LASTEXITCODE -eq 0) { git push origin "HEAD:$mirrorBranch" }
+          Pop-Location
