@@ -259,29 +259,29 @@ if errorlevel 1 (
   if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
 )
 del /q "%LOGDIR%\.__blueoath_write_test" >nul 2>&1
-set "LOG=%LOGDIR%\启动游戏.log"
+set "LOG=%LOGDIR%\launcher-startup.log"
 
 call :log "============================================================"
-call :log "启动游戏.bat started"
+call :log "launcher script started"
 call :log "ROOT=%ROOT%"
 call :log "USER=%USERNAME%"
 call :log "TEMP=%TEMP%"
 
 if not exist "%ROOT%BlueOath.Launcher.Wpf.exe" (
   call :log "ERROR: launcher executable not found"
-  echo [ERROR] 未找到 BlueOath.Launcher.Wpf.exe，详情：%LOG%
+  echo [ERROR] launcher executable not found. See: %LOG%
   exit /b 2
 )
 if not exist "%ROOT%launcher-settings.json" (
   call :log "ERROR: launcher-settings.json not found"
-  echo [ERROR] 未找到 launcher-settings.json，详情：%LOG%
+  echo [ERROR] launcher-settings.json not found. See: %LOG%
   exit /b 3
 )
 
 cd /d "%ROOT%"
 if errorlevel 1 (
   call :log "ERROR: cannot change working directory, errorlevel=%ERRORLEVEL%"
-  echo [ERROR] 无法切换到发布目录，可能是 C 盘权限问题。详情：%LOG%
+  echo [ERROR] cannot access package directory; possible permission issue. See: %LOG%
   exit /b 4
 )
 
@@ -289,11 +289,11 @@ call :log "Starting BlueOath.Launcher.Wpf.exe"
 start "BlueOath Launcher" "%ROOT%BlueOath.Launcher.Wpf.exe"
 if errorlevel 1 (
   call :log "ERROR: start command failed, errorlevel=%ERRORLEVEL%"
-  echo [ERROR] 启动器启动失败，可能是权限或运行库问题。详情：%LOG%
+  echo [ERROR] launcher start failed; possible permission or runtime issue. See: %LOG%
   exit /b 5
 )
 call :log "Launcher start command completed"
-echo 启动器已启动。异常日志：%LOG%
+echo Launcher started. Diagnostic log: %LOG%
 exit /b 0
 
 :log
