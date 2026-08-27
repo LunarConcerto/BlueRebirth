@@ -5,28 +5,24 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vcvars = $null
 
-if (Test-Path -LiteralPath $vswhere) {
-  $vsInstallRaw = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1
-  $vsInstall = if ($vsInstallRaw) { $vsInstallRaw.Trim() } else { $null }
-  if ($vsInstall) {
-    $candidate = Join-Path $vsInstall 'VC\Auxiliary\Build\vcvarsall.bat'
-    if (Test-Path -LiteralPath $candidate) { $vcvars = $candidate }
+# Prefer VS2019 Build Tools: its MSVC 14.29 STL ABI matches the game's bundled
+# MSVCP140.dll. VS2022 (14.4x) builds crash at startup in MSVCP140 and also tend
+# to fail cmake/NMake linking with 'Unknown system error -1' on this machine.
+$vs2019 = 'C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars32.bat'
+if (Test-Path -LiteralPath $vs2019) { $vcvars = $vs2019 }
+
+if (-not $vcvars) {
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+  if (Test-Path -LiteralPath $vswhere) {
+    $vsInstallRaw = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1
+    $vsInstall = if ($vsInstallRaw) { $vsInstallRaw.Trim() } else { $null }
+    if ($vsInstall) {
+      $candidate = Join-Path $vsInstall 'VC\Auxiliary\Build\vcvars32.bat'
+      if (Test-Path -LiteralPath $candidate) { $vcvars = $candidate }
+    }
   }
-}
-
-# VS18 Insiders may not be registered in the stable vswhere product list.
-if (-not $vcvars) {
-  $insidersVcvars = 'C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvarsall.bat'
-  if (Test-Path -LiteralPath $insidersVcvars) { $vcvars = $insidersVcvars }
-}
-
-# Keep compatibility with older self-hosted machines that only have VS2019.
-if (-not $vcvars) {
-  $legacy = 'C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'
-  if (Test-Path -LiteralPath $legacy) { $vcvars = $legacy }
 }
 
 if (-not $vcvars) {
@@ -49,10 +45,10 @@ Write-Host "Using MSVC toolset: $toolsetVersion"
 
 $cmake = (Get-Command cmake -ErrorAction SilentlyContinue).Source
 if (-not $cmake) {
-  $insidersCmake = 'C:\Program Files\Microsoft Visual Studio\18\Insiders\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
-  if (Test-Path -LiteralPath $insidersCmake) { $cmake = $insidersCmake }
+  $vsCmake = Join-Path (Split-Path (Split-Path $vcvars -Parent) -Parent) 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
+  if (Test-Path -LiteralPath $vsCmake) { $cmake = $vsCmake }
 }
-if (-not $cmake) { throw 'CMake not found. Install the CMake tools for Windows workload.' }
+if (-not $cmake) { throw 'CMake not found.' }
 
 # Keep NMake/link.exe away from the Chinese user TEMP path. This also makes
 # local builds reproducible and avoids LNK1201 caused by non-ASCII temp paths.
@@ -61,7 +57,9 @@ $output = Join-Path $root 'native\bin-x86'
 New-Item -ItemType Directory -Force -Path $build | Out-Null
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 $hooksFlag = if ($DebugHooks) { '-DBLUEOATH_HOOKS_DEBUG=ON' } else { '-DBLUEOATH_HOOKS_DEBUG=OFF' }
-$command = 'call "' + $vcvars + '" x86 && "' + $cmake + '" -S "' + (Join-Path $root 'native') + '" -B "' + $build + '" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=' + $Configuration + ' ' + $hooksFlag + ' && "' + $cmake + '" --build "' + $build + '"'
+
+# vcvars32.bat already configures an x86 environment; no 'x86' arg needed.
+$command = 'call "' + $vcvars + '" && "' + $cmake + '" -S "' + (Join-Path $root 'native') + '" -B "' + $build + '" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=' + $Configuration + ' ' + $hooksFlag + ' && "' + $cmake + '" --build "' + $build + '"'
 cmd.exe /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw "Native build failed: $LASTEXITCODE" }
 

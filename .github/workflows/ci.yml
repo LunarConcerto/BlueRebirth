@@ -78,7 +78,6 @@ jobs:
             Write-Error "ERROR: BlueOath.Launcher.Wpf.exe is missing."
             exit 1
           }
-
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:

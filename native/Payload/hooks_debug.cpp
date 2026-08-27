@@ -2107,6 +2107,269 @@ void TryApplyGetQucikConditionsHook() {
     InstallStrArgHook(0x33D8D0, &GetQucikConditionsTrampoline, &getQucikConditionsStolen, 11, "GetQucikConditions");
 }
 
+// ---------------------------------------------------------------------------
+// 自律/自动战斗验证探针（海域非1-A 决斗"无法操作"排查）：
+//   PlayerAutoSwitch(0x56ACE0) —— auto {fleetUID} {auto} 日志来源，确认实参
+//   PlayerAutoKit.Tick(0x62DB50) —— working(+0x24)!=0 才驱动 AI（移动/技能接管）
+//   PlayerAutoKit.Stop(0x62DB40) / Wort(0x1DA2B0) —— working 归零/置1
+// 验证点：进战斗后玩家舰队是否仍被 AI 驱动（working 残留 1）。
+// ---------------------------------------------------------------------------
+void* autoSwitchStolen = nullptr;
+bool autoSwitchHookApplied = false;
+void LogAutoSwitch(void* self, long fleetUID, int autoVal) {
+    Log("AutoSwitch this=0x" + std::to_string(reinterpret_cast<uintptr_t>(self)) +
+        " fleetUid=" + std::to_string(fleetUID) + " auto=" + std::to_string(autoVal));
+}
+__declspec(naked) void AutoSwitchTrampoline() {
+    __asm {
+        pushad
+        // pushad 后: [esp+0x24]=this, +0x28=Low(fleetUID), +0x2C=High(fleetUID), +0x30=auto
+        mov eax, dword ptr [esp + 0x30]   // auto (int)
+        push eax
+        mov eax, dword ptr [esp + 0x34]   // High(fleetUID)（+5 避开刚压的 4 字节）
+        push eax
+        mov eax, dword ptr [esp + 0x34]   // Low(fleetUID)
+        push eax
+        mov eax, dword ptr [esp + 0x34]   // this
+        push eax
+        call LogAutoSwitch
+        add esp, 16
+        popad
+        jmp dword ptr [autoSwitchStolen]
+    }
+}
+void TryApplyAutoSwitchHook() {
+    if (autoSwitchHookApplied) return;
+    autoSwitchHookApplied = true;
+    // prologue: 55 8B EC 83 EC 10 80 3D <disp32> 00 = 13 bytes
+    InstallStrArgHook(0x56ACE0, &AutoSwitchTrampoline, &autoSwitchStolen, 13, "PlayerAutoSwitch");
+}
+
+void* autoKitTickStolen = nullptr;
+bool autoKitTickHookApplied = false;
+void LogAutoKitTick(void* kit, int delta) {
+    const int working = *reinterpret_cast<unsigned char*>(reinterpret_cast<char*>(kit) + 0x24);
+    static unsigned int counter = 0;
+    // 降频：约每 2 秒打一次（若 working=1 则每 ~0.5 秒），观察 working 长期值
+    if (working == 0 && (counter++ % 120) != 0) return;
+    if (working != 0 && (counter++ % 30) != 0) return;
+    Log("AutoKitTick working=" + std::to_string(working) + " deltaMs=" + std::to_string(delta) +
+        " kit=0x" + std::to_string(reinterpret_cast<uintptr_t>(kit)));
+}
+__declspec(naked) void AutoKitTickTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 0x28]   // deltaMs
+        push eax
+        mov eax, dword ptr [esp + 0x28]   // this
+        push eax
+        call LogAutoKitTick
+        add esp, 8
+        popad
+        jmp dword ptr [autoKitTickStolen]
+    }
+}
+void TryApplyAutoKitTickHook() {
+    if (autoKitTickHookApplied) return;
+    autoKitTickHookApplied = true;
+    // prologue: 55 8B EC 8B 45 08 80 78 24 00 74 10 = 12 bytes
+    InstallStrArgHook(0x62DB50, &AutoKitTickTrampoline, &autoKitTickStolen, 12, "PlayerAutoKit.Tick");
+}
+
+void* autoKitStopStolen = nullptr;
+bool autoKitStopHookApplied = false;
+void LogAutoKitStop(void* kit) {
+    const int working = *reinterpret_cast<unsigned char*>(reinterpret_cast<char*>(kit) + 0x24);
+    Log("AutoKitStop working_before=" + std::to_string(working) +
+        " kit=0x" + std::to_string(reinterpret_cast<uintptr_t>(kit)));
+}
+__declspec(naked) void AutoKitStopTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 0x24]
+        push eax
+        call LogAutoKitStop
+        add esp, 4
+        popad
+        jmp dword ptr [autoKitStopStolen]
+    }
+}
+void TryApplyAutoKitStopHook() {
+    if (autoKitStopHookApplied) return;
+    autoKitStopHookApplied = true;
+    InstallStrArgHook(0x62DB40, &AutoKitStopTrampoline, &autoKitStopStolen, 6, "PlayerAutoKit.Stop");
+}
+
+void* autoKitWortStolen = nullptr;
+bool autoKitWortHookApplied = false;
+void LogAutoKitWort(void* kit) {
+    Log("AutoKitWort kit=0x" + std::to_string(reinterpret_cast<uintptr_t>(kit)));
+}
+__declspec(naked) void AutoKitWortTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 0x24]
+        push eax
+        call LogAutoKitWort
+        add esp, 4
+        popad
+        jmp dword ptr [autoKitWortStolen]
+    }
+}
+void TryApplyAutoKitWortHook() {
+    if (autoKitWortHookApplied) return;
+    autoKitWortHookApplied = true;
+    InstallStrArgHook(0x1DA2B0, &AutoKitWortTrampoline, &autoKitWortStolen, 6, "PlayerAutoKit.Wort");
+}
+
+// ---------------------------------------------------------------------------
+// SkipVcr 验证探针（安全：SkipData.Init 0x25D7C0 无 cctor guard）：
+// 跳过 VCR 数据从 BattleStartData.skipVcrs 转进 skipDatas 时逐条调用。
+// 打印每次转换的 shipinfoId(=si_id 匹配键) / skipEnterBattleAnim / skipDeadAnim，
+// 确认服务端下发的 SkipVcr 是否正确落到 skipDatas（特别是敌舰 9021011）。
+// ---------------------------------------------------------------------------
+void* skipDataInitStolen = nullptr;
+bool skipDataInitHookApplied = false;
+void LogSkipDataInit(void* skipData, void* item) {
+    const int siId = item ? *reinterpret_cast<int*>(reinterpret_cast<char*>(item) + 0x8) : -1;
+    const int se = item ? *reinterpret_cast<unsigned char*>(reinterpret_cast<char*>(item) + 0xC) : -1;
+    const int sd = item ? *reinterpret_cast<unsigned char*>(reinterpret_cast<char*>(item) + 0xD) : -1;
+    Log("SkipDataInit si_id=" + std::to_string(siId) + " skipEnter=" + std::to_string(se) +
+        " skipDead=" + std::to_string(sd));
+}
+__declspec(naked) void SkipDataInitTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 0x28]   // item (SkipVcr)
+        push eax
+        mov eax, dword ptr [esp + 0x28]   // this (SkipData)
+        push eax
+        call LogSkipDataInit
+        add esp, 8
+        popad
+        jmp dword ptr [skipDataInitStolen]
+    }
+}
+void TryApplySkipDataInitHook() {
+    if (skipDataInitHookApplied) return;
+    skipDataInitHookApplied = true;
+    // prologue: 55 8B EC 8B 55 0C 85 D2 74 19 = 10 bytes
+    InstallStrArgHook(0x25D7C0, &SkipDataInitTrampoline, &skipDataInitStolen, 10, "SkipData.Init");
+}
+
+// ---------------------------------------------------------------------------
+// BattleStartDataUtil.Init(0x180A70) 探针：读 BattleStartData.skipVcrs(+0x88) 长度。
+// 确认 SkipVcr 是否从 TStartBaseRet 真正填进 BattleStartData，以及显示侧是否走到
+// skipDatas 构建（0 次 SkipDataInit == 这里没跑到或 skipVcrs 空）。
+// ---------------------------------------------------------------------------
+void* bsdUtilInitStolen = nullptr;
+bool bsdUtilInitHookApplied = false;
+void LogBsdUtilInit(void* util, void* startData) {
+    const int skipLen = startData ? static_cast<int>(ReadPtrSafe(reinterpret_cast<uintptr_t>(startData) + 0x88))
+                                    ? static_cast<int>(ReadPtrSafe(ReadPtrSafe(reinterpret_cast<uintptr_t>(startData) + 0x88) + 0xC))
+                                    : 0
+                                  : -1;
+    Log("BsdUtilInit skipVcrs_len=" + std::to_string(skipLen) +
+        " util=0x" + std::to_string(reinterpret_cast<uintptr_t>(util)) +
+        " startData=0x" + std::to_string(reinterpret_cast<uintptr_t>(startData)));
+}
+__declspec(naked) void BsdUtilInitTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 0x28]   // startData (BattleStartData)
+        push eax
+        mov eax, dword ptr [esp + 0x28]   // this (BattleStartDataUtil)
+        push eax
+        call LogBsdUtilInit
+        add esp, 8
+        popad
+        jmp dword ptr [bsdUtilInitStolen]
+    }
+}
+void TryApplyBsdUtilInitHook() {
+    if (bsdUtilInitHookApplied) return;
+    bsdUtilInitHookApplied = true;
+    // prologue: 55 8B EC 83 EC 0C 80 3D <disp32> 00 75 15 = 15 bytes（覆盖第一个 cctor jne）
+    InstallStrArgHook(0x180A70, &BsdUtilInitTrampoline, &bsdUtilInitStolen, 15, "BattleStartDataUtil.Init");
+}
+
+// ---------------------------------------------------------------------------
+// PlayerAutoKit.ChangeState(0x62DB10) 探针（无 cctor guard，安全）：确认玩家舰队
+// PlayerAutoKit 的 FSM 是否从 Search(2) 切到 Battle(1)。海域"固定方向移动"推断是
+// PlayerAutoSearch 巡航残留 —— 若进战斗后无 ChangeState(Battle)，则 Search 态每帧
+// 重新注册 Autopilot order → 舰队直行 + 手动 op 被覆盖。
+// working(+0x24)=1 表示 kit 在驱动。
+// ---------------------------------------------------------------------------
+void* autoChangeStateStolen = nullptr;
+bool autoChangeStateHookApplied = false;
+void LogAutoChangeState(void* kit, int state) {
+    const int working = *reinterpret_cast<unsigned char*>(reinterpret_cast<char*>(kit) + 0x24);
+    Log("AutoKitChangeState state=" + std::to_string(state) +
+        " (1=Battle 2=Search) working=" + std::to_string(working) +
+        " kit=0x" + std::to_string(reinterpret_cast<uintptr_t>(kit)));
+}
+__declspec(naked) void AutoChangeStateTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 0x28]   // stateType
+        push eax
+        mov eax, dword ptr [esp + 0x28]   // this (PlayerAutoKit)
+        push eax
+        call LogAutoChangeState
+        add esp, 8
+        popad
+        jmp dword ptr [autoChangeStateStolen]
+    }
+}
+void TryApplyAutoChangeStateHook() {
+    if (autoChangeStateHookApplied) return;
+    autoChangeStateHookApplied = true;
+    // prologue: 55 8B EC 8B 45 08 = 6 bytes（无分支）
+    InstallStrArgHook(0x62DB10, &AutoChangeStateTrampoline, &autoChangeStateStolen, 6, "PlayerAutoKit.ChangeState");
+}
+
+// ---------------------------------------------------------------------------
+// GetSkipEnterBattleAnim(0x1806F0) 探针：记录敌舰绑定战斗时查询 skipDatas 的 DictShipInfo.si_id，
+// 确认是否命中 skipDatas 里的 9021011。命中返回 skipDatas[si_id].skipEnterBattleAnim。
+// this=BattleStartDataUtil(+0x30 skipDatas), shipInfo=DictShipInfo(+0x8 si_id)。
+// ---------------------------------------------------------------------------
+void* getSkipEnterStolen = nullptr;
+bool getSkipEnterHookApplied = false;
+void LogGetSkipEnter(void* util, void* shipInfo) {
+    const int siId = shipInfo ? *reinterpret_cast<int*>(reinterpret_cast<char*>(shipInfo) + 0x8) : -1;
+    Log("GetSkipEnter si_id=" + std::to_string(siId) +
+        " ship=0x" + std::to_string(reinterpret_cast<uintptr_t>(shipInfo)));
+}
+__declspec(naked) void GetSkipEnterTrampoline() {
+    __asm {
+        pushad
+        mov eax, dword ptr [esp + 0x28]   // shipInfo
+        push eax
+        mov eax, dword ptr [esp + 0x28]   // util
+        push eax
+        call LogGetSkipEnter
+        add esp, 8
+        popad
+        jmp dword ptr [getSkipEnterStolen]
+    }
+}
+void TryApplyGetSkipEnterHook() {
+    if (getSkipEnterHookApplied) return;
+    getSkipEnterHookApplied = true;
+    // prologue: 55 8B EC 51 80 3D <disp32> 00 75 15 = 15 bytes（覆盖 cctor jne，同 0x180A70 方案）
+    InstallStrArgHook(0x1806F0, &GetSkipEnterTrampoline, &getSkipEnterStolen, 15, "GetSkipEnterBattleAnim");
+}
+
+void TryApplyAutoHooks() {
+    TryApplyAutoSwitchHook();
+    TryApplyAutoKitTickHook();
+    TryApplyAutoKitStopHook();
+    TryApplyAutoKitWortHook();
+    TryApplySkipDataInitHook();
+    TryApplyBsdUtilInitHook();
+    TryApplyAutoChangeStateHook();
+}
+
 // PVEStartData..ctor(TStartBaseRet ret) - RVA 0x58E780, prologue 24 bytes (SEH)
 void* pveStartDataCtorStolen = nullptr;
 bool pveStartDataCtorHookApplied = false;

@@ -105,9 +105,8 @@ internal static class BuildShipExtractLoader
         Dictionary<int, ConfigDropItem> DropItems,
         Dictionary<int, ConfigSpecialdraw> SpecialDraws,
         Dictionary<int, ConfigShipInfo> ShipInfos
-    ) Load(string dataRoot)
+    ) Load(string configDir)
     {
-        var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
         var extractShips = SafeLoad<ConfigExtractShip>(configDir, "config_extract_ship.db");
         var dropItems = SafeLoad<ConfigDropItem>(configDir, "config_drop_item.db");
         var specialDraws = SafeLoad<ConfigSpecialdraw>(configDir, "config_specialdraw.db");
@@ -180,9 +179,8 @@ internal static class ItemInfoLoader
 
 internal static class ShipLevelupLoader
 {
-    public static (Dictionary<int, int> ExpPerItem, Dictionary<int, int> ExpNeeded) Load(string dataRoot)
+    public static (Dictionary<int, int> ExpPerItem, Dictionary<int, int> ExpNeeded) Load(string configDir)
     {
-        var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
         var expPerItem = new Dictionary<int, int>();
         var expNeeded = new Dictionary<int, int>();
         LoadExpItems(configDir, expPerItem);
@@ -223,12 +221,11 @@ internal sealed record RandomFactorEntry(int SetId, int GroupId, IReadOnlyList<i
 
 internal static class RandomFactorLoader
 {
-    public static Dictionary<int, List<RandomFactorEntry>> Load(string dataRoot)
+    public static Dictionary<int, List<RandomFactorEntry>> Load(string configDir)
     {
         var result = new Dictionary<int, List<RandomFactorEntry>>();
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             var copyDisplay = new Dictionary<int, List<int>>();
             LoadTable(configDir, "config_copy_display.db", "random_factor_sets", copyDisplay);
             var factorSets = new Dictionary<int, List<int>>();
@@ -283,12 +280,11 @@ internal static class CopyBattleLoader{
     public sealed record EnemyStat(int Hp, int Attack, int Defense, int Level, int ShipInfoId,
         int Hit = 100, int Dodge = 0, int TorpedoAttack = 0, int TorpedoDefense = 0);
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             LoadCopyFleet(configDir);
             LoadFleetEnemies(configDir);
             LoadEnemyStats(configDir);
@@ -445,12 +441,11 @@ internal static class MissionChainLoader
         return _defaultChain;
     }
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             var next = new Dictionary<int, List<int>>();
             var hasIncoming = new HashSet<int>();
             ConfigDbLoader.LoadRows(configDir, "config_mission.db", (id, _, json) =>
@@ -499,12 +494,11 @@ internal static class ShipMainLoader
     private static readonly Dictionary<int, ConfigShipMain> _ships = new();
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             ConfigDbLoader.LoadAll<ConfigShipMain>(configDir, "config_ship_main.db",
                 (id, cfg) =>
                 {
@@ -529,12 +523,11 @@ internal static class AssistShipLoader
     private static readonly Dictionary<int, ConfigAssistShipInfo> _ships = new();
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             _ships.Clear();
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigAssistShipInfo>(configDir, "config_assist_ship_info.db"))
                 _ships[id] = cfg;
@@ -557,12 +550,11 @@ internal static class EquipLoader
     private static readonly Dictionary<int, ConfigEquipEnhanceRenovate> _renovateLevels = new();
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             _equips.Clear();
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquip>(configDir, "config_equip.db"))
                 _equips[id] = cfg;
@@ -600,12 +592,11 @@ internal static class AffectionItemLoader
     private static readonly Dictionary<int, ConfigAffectionItem> _items = new();
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             _items.Clear();
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigAffectionItem>(configDir, "config_affection_item.db"))
                 _items[id] = cfg;
@@ -671,12 +662,11 @@ internal static class ChapterCopyLoader
     private static int _seaFirstCopyId = 0;
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             ConfigDbLoader.LoadRows(configDir, "config_chapter.db", (id, _, json) =>
             {
                 using var doc = JsonDocument.Parse(json);
@@ -797,12 +787,11 @@ internal static class ShipHandbookLoader
     private static readonly Dictionary<int, ConfigShipHandbook> _handbooks = new();
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             _handbooks.Clear();
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigShipHandbook>(configDir, "config_ship_handbook.db"))
                 _handbooks[id] = cfg;
@@ -838,12 +827,11 @@ internal static class FashionConfigLoader
     /// <summary>FashionTid → SfId（belong_to_ship）全量映射。</summary>
     public static IReadOnlyDictionary<int, int> FashionSfIdMap => _fashionSfIdMap;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             var entries = new Dictionary<int, List<int>>();
             ConfigDbLoader.LoadAll<ConfigFashion>(configDir, "config_fashion.db",
                 (id, cfg) =>
@@ -871,12 +859,11 @@ internal static class PlotTriggerLoader
     private static List<int> _allPlotIds = [];
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             _allPlotIds.Clear();
             int count = 0;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigPlotEpisodeTrigger>(configDir, "config_plot_episode_trigger.db"))
