@@ -525,7 +525,12 @@ var reader = new GameLoginCodec.ProtoReader(payload);
     {
         using var output = new MemoryStream();
         if (value.TemplateId != 0) WriteVarintField(output, 1, unchecked((ulong)value.TemplateId));
-        if (value.Num != 0) WriteVarintField(output, 2, unchecked((ulong)value.Num));
+        // Num=0 is the client's deletion marker. The bundled Lua protobuf decoder omits
+        // absent scalar fields, so suppressing zero here produces `num=nil`; BagData then
+        // keeps a phantom item and pages such as MarryBookPage crash on math.tointeger(nil).
+        // Always writing field 2 also makes zero-count sentinels in older saves self-heal
+        // as soon as the inventory is synchronized.
+        WriteVarintField(output, 2, unchecked((ulong)value.Num));
         return output.ToArray();
     }
 

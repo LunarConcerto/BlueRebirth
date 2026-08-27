@@ -504,6 +504,7 @@ internal static class EquipLoader
     private static readonly Dictionary<int, ConfigEquip> _equips = new();
     private static readonly Dictionary<int, ConfigEquipEnhanceItem> _enhanceItems = new();
     private static readonly Dictionary<int, ConfigEquipEnhanceLevel> _enhanceLevels = new();
+    private static readonly Dictionary<int, ConfigEquipEnhanceLevelUr> _enhanceLevelsUr = new();
     private static readonly Dictionary<int, ConfigEquipEnhanceRenovate> _renovateLevels = new();
     private static bool _loaded;
 
@@ -520,6 +521,8 @@ internal static class EquipLoader
                 _enhanceItems[id] = cfg;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceLevel>(configDir, "config_equip_enhance_level.db"))
                 _enhanceLevels[id] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceLevelUr>(configDir, "config_equip_enhance_level_ur.db"))
+                _enhanceLevelsUr[checked((int)cfg.EnchanceLevel)] = cfg;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceRenovate>(configDir, "config_equip_enhance_renovate.db"))
                 _renovateLevels[id] = cfg;
         }
@@ -533,6 +536,8 @@ internal static class EquipLoader
         => _enhanceItems.TryGetValue(id, out var cfg) ? cfg : null;
     public static ConfigEquipEnhanceLevel? GetEnhanceLevel(int level)
         => _enhanceLevels.TryGetValue(level, out var cfg) ? cfg : null;
+    public static ConfigEquipEnhanceLevelUr? GetEnhanceLevelUr(int level)
+        => _enhanceLevelsUr.TryGetValue(level, out var cfg) ? cfg : null;
     public static ConfigEquipEnhanceRenovate? GetRenovateLevel(int level)
         => _renovateLevels.TryGetValue(level, out var cfg) ? cfg : null;
 }

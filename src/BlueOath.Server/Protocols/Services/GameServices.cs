@@ -104,6 +104,7 @@ internal sealed class GameServices
     internal IReadOnlyDictionary<int, int> ExpNeeded => _expNeeded;
     internal ConfigEquipEnhanceItem? GetEquipEnhanceItem(int id) => EquipLoader.GetEnhanceItem(id);
     internal ConfigEquipEnhanceLevel? GetEquipEnhanceLevel(int level) => EquipLoader.GetEnhanceLevel(level);
+    internal ConfigEquipEnhanceLevelUr? GetEquipEnhanceLevelUr(int level) => EquipLoader.GetEnhanceLevelUr(level);
     internal ConfigEquipEnhanceRenovate? GetEquipRenovateLevel(int level) => EquipLoader.GetRenovateLevel(level);
     internal ConfigEquip? GetEquipConfig(int id) => EquipLoader.Get(id);
     internal ConfigAffectionItem? GetAffectionItem(int id) => AffectionItemLoader.Get(id);

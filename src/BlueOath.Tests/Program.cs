@@ -16,6 +16,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("temporary game login frame round-trips", GameLoginFrameTest),
     ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
     ("equipment renovation request decodes consumed equipment ids", EquipRiseStarArgsCodecTest),
+    ("zero-count bag entries encode an explicit deletion marker", BagDeletionMarkerCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
@@ -99,6 +100,14 @@ static Task EquipRiseStarArgsCodecTest()
     var args = TMessageCodec.DecodeEquipRiseStarArgs(new byte[] { 0x08, 0x08, 0x10, 0x0E, 0x10, 0x0F });
     Assert(args.EquipId == 8 && args.ConsumeIds!.SequenceEqual(new uint[] { 14, 15 }),
         "equipment renovation request protobuf mismatch");
+    return Task.CompletedTask;
+}
+
+static Task BagDeletionMarkerCodecTest()
+{
+    var payload = PlayerDataCodec.Encode(new BagGridInfo(10180, 0));
+    Assert(payload.AsSpan().SequenceEqual(new byte[] { 0x08, 0xC4, 0x4F, 0x10, 0x00 }),
+        "zero-count bag entry omitted the explicit Num=0 deletion marker");
     return Task.CompletedTask;
 }
 
@@ -743,8 +752,12 @@ static async Task HeroMutationIntegrationTest()
         Assert(marryHeroPush.Ret is { Length: > 0 } &&
             !ContainsSequence(marryHeroPush.Ret, Encoding.UTF8.GetBytes("奥克兰")),
             "hero update incorrectly sent the Chinese handbook name as a custom nickname");
-        Assert(marryPushes.Any(p => p.Method == "bag.UpdateBagData") &&
-            marryPushes.Any(p => p.Method == "user.UpdateUserInfo"),
+        TResponse marryBagPush = marryPushes.FirstOrDefault(p => p.Method == "bag.UpdateBagData")
+            ?? throw new InvalidDataException("marriage did not refresh ring inventory");
+        Assert(marryBagPush.Ret is { Length: > 0 } &&
+            ContainsSequence(marryBagPush.Ret, new byte[] { 0x08, 0xC4, 0x4F, 0x10, 0x00 }),
+            "marriage did not send an explicit zero-count ring deletion marker");
+        Assert(marryPushes.Any(p => p.Method == "user.UpdateUserInfo"),
             "marriage did not refresh ring inventory and MarriedNum before its response");
         PlayerAccount married = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("marriage account disappeared");

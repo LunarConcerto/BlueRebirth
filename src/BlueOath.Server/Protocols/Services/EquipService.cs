@@ -74,8 +74,7 @@ internal sealed class EquipService(GameServices services)
     {
         if (request.Args is null) return ([], false, "missing enhancement arguments");
         EquipEnhanceArgs arg = TMessageCodec.DecodeEquipEnhanceArgs(request.Args);
-        if (arg.EquipId == 0 || arg.ItemArr is not { Count: > 0 })
-            return ([], false, "no enhancement material was selected");
+        if (arg.EquipId == 0) return ([], false, "no equipment was selected");
         using var _ = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
@@ -85,6 +84,17 @@ internal sealed class EquipService(GameServices services)
         EquipItem current = equipItems[equipIndex];
         ConfigEquip? config = services.GetEquipConfig(current.TemplateId);
         if (config is null) return ([], false, "equipment configuration was not found");
+
+        // UR equipment uses a per-level fixed cost table instead of the normal
+        // experience/material table. The client sends the selected material list,
+        // but the authoritative cost is always the next UR level configuration.
+        if (config.Quality == 5)
+            return await BuildUrEnhanceRetAsync(request, account, equip, equipItems, equipIndex, current, config,
+                profileId, ct);
+
+        if (arg.ItemArr is not { Count: > 0 })
+            return ([], false, "no enhancement material was selected");
+
         Dictionary<uint, ulong> materialTotals = new();
         foreach (EquipEnhanceItem material in arg.ItemArr)
             materialTotals[material.TemplateId] = checked(materialTotals.GetValueOrDefault(material.TemplateId) + material.ItemNum);
@@ -109,11 +119,18 @@ internal sealed class EquipService(GameServices services)
         int level = current.EnhanceLv;
         long exp = current.EnhanceExp + addedExp;
         int maxLevel = checked((int)config.EnhanceLevelMax);
-        while (level < maxLevel && services.GetEquipEnhanceLevel(level + 1) is { } next && exp >= next.Exp)
+        while (level < maxLevel)
         {
+            ConfigEquipEnhanceLevel? next = services.GetEquipEnhanceLevel(level + 1);
+            if (next is null)
+                return ([], false, "equipment enhancement configuration was not found");
+            if (exp < next.Exp)
+                break;
             exp -= next.Exp;
             level++;
         }
+        if (level == current.EnhanceLv)
+            return ([], false, "enhancement materials are insufficient for the next level");
         foreach (EquipEnhanceItem material in materials)
         {
             int index = bagItems.FindIndex(i => i.TemplateId == checked((int)material.TemplateId));
@@ -126,6 +143,101 @@ internal sealed class EquipService(GameServices services)
         await services.SaveAccountAsync(account, ct);
         return (TMessageCodec.EncodeEquipEnhanceRet(arg.EquipId, level, checked((int)exp)), true, "");
     }
+
+    private async Task<(byte[] Ret, bool Changed, string Error)> BuildUrEnhanceRetAsync(
+        TRequest request, PlayerAccount account, PlayerEquip equip, List<EquipItem> equipItems,
+        int equipIndex, EquipItem current, ConfigEquip config, string profileId, CancellationToken ct)
+    {
+        EquipEnhanceArgs arg = TMessageCodec.DecodeEquipEnhanceArgs(request.Args!);
+        int nextLevel = checked(current.EnhanceLv + 1);
+        if (nextLevel > config.EnhanceLevelMax)
+            return ([], false, "equipment has reached the maximum enhancement level");
+        ConfigEquipEnhanceLevelUr? next = services.GetEquipEnhanceLevelUr(nextLevel);
+        if (next?.ItemCost is not { Count: > 0 } costs)
+            return ([], false, "UR enhancement configuration was not found");
+
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> bagItems = bag.Items.ToList();
+        Dictionary<(int Type, int Id), int> required = new();
+        Dictionary<int, ulong> selected = new();
+        foreach (EquipEnhanceItem material in arg.ItemArr ?? [])
+            selected[checked((int)material.TemplateId)] = checked(
+                selected.GetValueOrDefault(checked((int)material.TemplateId)) + material.ItemNum);
+        foreach (List<long> cost in costs)
+        {
+            if (cost.Count < 3) return ([], false, "invalid UR enhancement cost");
+            int type = checked((int)cost[0]);
+            int id = checked((int)cost[1]);
+            int count = checked((int)cost[2]);
+            if (count <= 0 || (type != GameServices.GoodsTypeCurrency && type != 1 && type != 6))
+                return ([], false, "invalid UR enhancement cost");
+            required[(type, id)] = checked(required.GetValueOrDefault((type, id)) + count);
+            if (type != GameServices.GoodsTypeCurrency && selected.GetValueOrDefault(id) < (ulong)count)
+                return ([], false, "selected UR enhancement materials are insufficient");
+        }
+
+        foreach (var ((type, id), count) in required)
+        {
+            if (type == GameServices.GoodsTypeCurrency)
+            {
+                if (GetCurrencyAmount(account.Character, id) < count)
+                    return ([], false, "UR enhancement materials are insufficient");
+            }
+            else
+            {
+                int bagIndex = bagItems.FindIndex(i => i.TemplateId == id);
+                if (bagIndex < 0 || bagItems[bagIndex].Num < count)
+                    return ([], false, "UR enhancement materials are insufficient");
+            }
+        }
+
+        foreach (var ((type, id), count) in required)
+        {
+            if (type == GameServices.GoodsTypeCurrency)
+                account = GameServices.AddCurrency(account, id, -count);
+            else
+            {
+                int bagIndex = bagItems.FindIndex(i => i.TemplateId == id);
+                int remaining = bagItems[bagIndex].Num - count;
+                if (remaining == 0) bagItems.RemoveAt(bagIndex);
+                else bagItems[bagIndex] = bagItems[bagIndex] with { Num = remaining };
+            }
+        }
+
+        equipItems[equipIndex] = current with { EnhanceLv = nextLevel, EnhanceExp = 0 };
+        account = account with { Equip = equip with { Items = equipItems }, Bag = bag with { Items = bagItems } };
+        await services.SaveAccountAsync(account, ct);
+        return (TMessageCodec.EncodeEquipEnhanceRet(arg.EquipId, nextLevel, 0), true, "");
+    }
+
+    private static int GetCurrencyAmount(PlayerCharacter character, int currencyType) => currencyType switch
+    {
+        1 => character.Gold,
+        2 => character.Diamond,
+        5 => character.Supply,
+        8 => character.MainGun,
+        9 => character.Torpedo,
+        10 => character.Plane,
+        11 => character.Other,
+        12 => character.Retire,
+        13 => character.Bath,
+        14 => character.Strategy,
+        15 => character.Medal,
+        18 => character.Tower,
+        22 => character.CopyTrainPoint,
+        23 => character.FashionPoint,
+        24 => character.GuildContri,
+        25 => character.Lucky,
+        26 => character.TeacherMedal,
+        27 => character.TeacherPrestige,
+        28 => character.BattlePassExp,
+        29 => character.BattlePassGold,
+        30 => character.PvePt,
+        31 => character.GuildCoinII,
+        32 => character.UrEquipCoin,
+        33 => character.ActivityBattlePassExp,
+        _ => 0,
+    };
 
     internal async Task<(byte[] Ret, bool Changed)> BuildRiseStarRetAsync(
         TRequest request, string profileId, CancellationToken ct)
