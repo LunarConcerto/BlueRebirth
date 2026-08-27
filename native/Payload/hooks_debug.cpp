@@ -780,6 +780,7 @@ void DispatchLoginEvent() {
 bool closeWebViewRequested = false;
 ULONGLONG closeWebViewAt = 0;
 bool closeScheduledOnce = false;
+bool loginWebViewSuppressionEnabled = true;
 
 void HideCefWebView() {
     static ULONGLONG lastRun = 0;
@@ -952,7 +953,8 @@ void __stdcall HookSdkCallback(int eventId, const char* payload) {
     // announcement/supernotice WebView; dispatch a fabricated login result (event 2) then and
     // schedule a single close so the blank CEF window does not stay on top. The close is
     // scheduled only once to avoid the SDK re-opening the WebView in a loop.
-    if (eventId == 29 && payload && strstr(payload, "open") != nullptr) {
+    if (loginWebViewSuppressionEnabled && eventId == 29 && payload &&
+        strstr(payload, "open") != nullptr) {
         DispatchLoginEvent();
         if (!closeScheduledOnce) {
             closeScheduledOnce = true;
@@ -1344,21 +1346,268 @@ void LogLogException2(void* exception) {
 // widget LuaTable returned by GetComponentsNeed.
 typedef void* LuaStateRaw;
 typedef int(__cdecl* lua_rawgeti_t)(LuaStateRaw, int, long long);
+typedef int(__cdecl* lua_getglobal_t)(LuaStateRaw, const char*);
 typedef int(__cdecl* lua_getfield_t)(LuaStateRaw, int, const char*);
 typedef void(__cdecl* lua_setfield_t)(LuaStateRaw, int, const char*);
 typedef void(__cdecl* lua_settop_t)(LuaStateRaw, int);
 typedef int(__cdecl* lua_type_t)(LuaStateRaw, int);
 typedef int(__cdecl* lua_gettop_t)(LuaStateRaw);
+typedef void(__cdecl* lua_pushvalue_t)(LuaStateRaw, int);
 typedef int(__cdecl* lua_next_t)(LuaStateRaw, int);
 typedef void(__cdecl* lua_pushnil_t)(LuaStateRaw);
 typedef const char*(__cdecl* lua_tolstring_t)(LuaStateRaw, int, size_t*);
 typedef void(__cdecl* lua_createtable_t)(LuaStateRaw, int, int);
 typedef void(__cdecl* lua_pushcclosure_t)(LuaStateRaw, int(__cdecl*)(LuaStateRaw), int);
 typedef void(__cdecl* lua_pushinteger_t)(LuaStateRaw, long long);
+typedef void(__cdecl* lua_pushboolean_t)(LuaStateRaw, int);
+typedef int(__cdecl* lua_toboolean_t)(LuaStateRaw, int);
+typedef int(__cdecl* lua_pcallk_t)(LuaStateRaw, int, int, int, intptr_t, void*);
 
 lua_pushinteger_t g_pushInteger = nullptr;
 lua_createtable_t g_createTable = nullptr;
 lua_setfield_t g_setField = nullptr;
+bool showGirlLockPatchApplied = false;
+bool showGirlNewStatePatchApplied = false;
+bool buildShipNewStatePatchApplied = false;
+bool pendingBuildShipNewValid = false;
+bool pendingBuildShipIsNew = false;
+lua_getglobal_t showGirlGetGlobal = nullptr;
+lua_getfield_t showGirlGetField = nullptr;
+lua_setfield_t showGirlSetField = nullptr;
+lua_settop_t showGirlSetTop = nullptr;
+lua_type_t showGirlType = nullptr;
+lua_gettop_t showGirlGetTop = nullptr;
+lua_pushvalue_t showGirlPushValue = nullptr;
+lua_pushcclosure_t showGirlPushCClosure = nullptr;
+lua_pushboolean_t showGirlPushBoolean = nullptr;
+lua_toboolean_t showGirlToBoolean = nullptr;
+lua_pcallk_t showGirlOriginalPcallK = nullptr;
+
+constexpr int LuaTypeNil = 0;
+constexpr int LuaTypeTable = 5;
+constexpr int LuaTypeFunction = 6;
+constexpr int LuaFirstUpvalueIndex = -1001001;
+
+static int ShowGirlOnClickBackPatched(LuaStateRaw L) {
+    if (!L || !showGirlGetField || !showGirlSetTop || !showGirlType ||
+        !showGirlGetTop || !showGirlPushValue || !showGirlToBoolean ||
+        !showGirlOriginalPcallK) {
+        return 0;
+    }
+    const int argumentCount = showGirlGetTop(L);
+    if (argumentCount < 1) return 0;
+
+    showGirlGetField(L, 1, "heroId");
+    const bool hasHero = showGirlType(L, -1) != LuaTypeNil;
+    showGirlSetTop(L, argumentCount);
+    showGirlGetField(L, 1, "bNew");
+    const bool isNew = showGirlToBoolean(L, -1) != 0;
+    showGirlSetTop(L, argumentCount);
+
+    if (hasHero && !isNew) {
+        showGirlGetField(L, 1, "_ClickClose");
+        if (showGirlType(L, -1) == LuaTypeFunction) {
+            showGirlPushValue(L, 1);
+            const int status = showGirlOriginalPcallK(L, 1, 0, 0, 0, nullptr);
+            if (status != 0) {
+                Log("ShowGirlPage _ClickClose failed status=" + std::to_string(status));
+                showGirlSetTop(L, argumentCount);
+            }
+            return 0;
+        }
+        showGirlSetTop(L, argumentCount);
+    }
+
+    showGirlPushValue(L, LuaFirstUpvalueIndex);
+    for (int i = 1; i <= argumentCount; ++i) showGirlPushValue(L, i);
+    const int status = showGirlOriginalPcallK(L, argumentCount, 0, 0, 0, nullptr);
+    if (status != 0) {
+        Log("ShowGirlPage original OnClickBack failed status=" + std::to_string(status));
+        showGirlSetTop(L, argumentCount);
+    }
+    return 0;
+}
+
+static int BuildShipCheckShowMeetPatched(LuaStateRaw L) {
+    if (!L || !showGirlGetTop || !showGirlPushValue || !showGirlToBoolean ||
+        !showGirlSetTop || !showGirlOriginalPcallK) {
+        return 0;
+    }
+    const int argumentCount = showGirlGetTop(L);
+    showGirlPushValue(L, LuaFirstUpvalueIndex);
+    for (int i = 1; i <= argumentCount; ++i) showGirlPushValue(L, i);
+    const int status = showGirlOriginalPcallK(L, argumentCount, -1, 0, 0, nullptr);
+    if (status != 0) {
+        Log("BuildShipLogic CheckShowMeet failed status=" + std::to_string(status));
+        showGirlSetTop(L, argumentCount);
+        return 0;
+    }
+    const int resultCount = showGirlGetTop(L) - argumentCount;
+    if (resultCount > 0) {
+        pendingBuildShipIsNew = showGirlToBoolean(L, argumentCount + 1) != 0;
+        pendingBuildShipNewValid = true;
+    }
+    return resultCount;
+}
+
+static int ShowGirlUpdatePagePatched(LuaStateRaw L) {
+    if (!L || !showGirlGetField || !showGirlSetField || !showGirlSetTop ||
+        !showGirlType || !showGirlGetTop || !showGirlPushValue ||
+        !showGirlPushBoolean || !showGirlOriginalPcallK) {
+        return 0;
+    }
+    const int argumentCount = showGirlGetTop(L);
+    if (argumentCount < 1) return 0;
+
+    bool isBuildResultPage = false;
+    showGirlGetField(L, 1, "param");
+    if (showGirlType(L, -1) == LuaTypeTable) {
+        const int paramIndex = showGirlGetTop(L);
+        showGirlGetField(L, paramIndex, "buildNum");
+        const bool hasBuildNum = showGirlType(L, -1) != LuaTypeNil;
+        showGirlSetTop(L, paramIndex);
+        showGirlGetField(L, paramIndex, "getWay");
+        const bool hasGetWay = showGirlType(L, -1) != LuaTypeNil;
+        isBuildResultPage = hasBuildNum && !hasGetWay;
+    }
+    showGirlSetTop(L, argumentCount);
+
+    const bool useBuildNewState = pendingBuildShipNewValid && isBuildResultPage;
+    const bool isNew = pendingBuildShipIsNew;
+    if (useBuildNewState) pendingBuildShipNewValid = false;
+    showGirlPushBoolean(L, useBuildNewState ? 1 : 0);
+    showGirlSetField(L, 1, "__blueOathBuildNewValid");
+    if (useBuildNewState) {
+        showGirlPushBoolean(L, isNew ? 1 : 0);
+        showGirlSetField(L, 1, "__blueOathBuildIsNew");
+    }
+
+    showGirlPushValue(L, LuaFirstUpvalueIndex);
+    for (int i = 1; i <= argumentCount; ++i) showGirlPushValue(L, i);
+    const int status = showGirlOriginalPcallK(L, argumentCount, -1, 0, 0, nullptr);
+    if (status != 0) {
+        Log("ShowGirlPage _UpdatePage failed status=" + std::to_string(status));
+        showGirlSetTop(L, argumentCount);
+        return 0;
+    }
+    const int resultCount = showGirlGetTop(L) - argumentCount;
+    if (useBuildNewState) {
+        showGirlPushBoolean(L, isNew ? 1 : 0);
+        showGirlSetField(L, 1, "bNew");
+    }
+    return resultCount;
+}
+
+static int ShowGirlSetGirlImagePatched(LuaStateRaw L) {
+    if (!L || !showGirlGetField || !showGirlSetField || !showGirlSetTop ||
+        !showGirlGetTop || !showGirlPushValue || !showGirlPushBoolean ||
+        !showGirlToBoolean || !showGirlOriginalPcallK) {
+        return 0;
+    }
+    const int argumentCount = showGirlGetTop(L);
+    if (argumentCount < 1) return 0;
+    showGirlGetField(L, 1, "__blueOathBuildNewValid");
+    const bool useBuildNewState = showGirlToBoolean(L, -1) != 0;
+    showGirlSetTop(L, argumentCount);
+    if (useBuildNewState) {
+        showGirlGetField(L, 1, "__blueOathBuildIsNew");
+        const bool isNew = showGirlToBoolean(L, -1) != 0;
+        showGirlSetTop(L, argumentCount);
+        showGirlPushBoolean(L, isNew ? 1 : 0);
+        showGirlSetField(L, 1, "bNew");
+    }
+    showGirlPushValue(L, LuaFirstUpvalueIndex);
+    for (int i = 1; i <= argumentCount; ++i) showGirlPushValue(L, i);
+    const int status = showGirlOriginalPcallK(L, argumentCount, -1, 0, 0, nullptr);
+    if (status != 0) {
+        Log("ShowGirlPage _SetGirlImage failed status=" + std::to_string(status));
+        showGirlSetTop(L, argumentCount);
+        return 0;
+    }
+    return showGirlGetTop(L) - argumentCount;
+}
+
+void TryPatchShowGirlLockPrompt(LuaStateRaw L) {
+    if (!L || (showGirlLockPatchApplied && showGirlNewStatePatchApplied &&
+        buildShipNewStatePatchApplied)) return;
+    const auto xlua = GetModuleHandleW(L"xlua.dll");
+    if (!xlua) return;
+    const auto resolve = [&](const char* name) {
+        return reinterpret_cast<void*>(GetProcAddress(xlua, name));
+    };
+    showGirlGetGlobal = reinterpret_cast<lua_getglobal_t>(resolve("lua_getglobal"));
+    showGirlGetField = reinterpret_cast<lua_getfield_t>(resolve("lua_getfield"));
+    showGirlSetField = reinterpret_cast<lua_setfield_t>(resolve("lua_setfield"));
+    showGirlSetTop = reinterpret_cast<lua_settop_t>(resolve("lua_settop"));
+    showGirlType = reinterpret_cast<lua_type_t>(resolve("lua_type"));
+    showGirlGetTop = reinterpret_cast<lua_gettop_t>(resolve("lua_gettop"));
+    showGirlPushValue = reinterpret_cast<lua_pushvalue_t>(resolve("lua_pushvalue"));
+    showGirlPushCClosure = reinterpret_cast<lua_pushcclosure_t>(resolve("lua_pushcclosure"));
+    showGirlPushBoolean = reinterpret_cast<lua_pushboolean_t>(resolve("lua_pushboolean"));
+    showGirlToBoolean = reinterpret_cast<lua_toboolean_t>(resolve("lua_toboolean"));
+    showGirlOriginalPcallK = reinterpret_cast<lua_pcallk_t>(luaPcallKStolen);
+    if (!showGirlGetGlobal || !showGirlGetField || !showGirlSetField || !showGirlSetTop ||
+        !showGirlType || !showGirlGetTop || !showGirlPushValue || !showGirlPushCClosure ||
+        !showGirlPushBoolean || !showGirlToBoolean || !showGirlOriginalPcallK) {
+        return;
+    }
+
+    const int top = showGirlGetTop(L);
+    if (!buildShipNewStatePatchApplied) {
+        showGirlGetGlobal(L, "Logic");
+        if (showGirlType(L, -1) == LuaTypeTable) {
+            showGirlGetField(L, -1, "buildShipLogic");
+            if (showGirlType(L, -1) != LuaTypeNil) {
+                showGirlGetField(L, -1, "CheckShowMeet");
+                if (showGirlType(L, -1) == LuaTypeFunction) {
+                    showGirlPushCClosure(L, &BuildShipCheckShowMeetPatched, 1);
+                    showGirlSetField(L, -2, "CheckShowMeet");
+                    buildShipNewStatePatchApplied = true;
+                    Log("BuildShipLogic New-state forwarding patch applied");
+                }
+            }
+        }
+        showGirlSetTop(L, top);
+    }
+
+    if (!showGirlLockPatchApplied || !showGirlNewStatePatchApplied) {
+        showGirlGetGlobal(L, "ShowGirlPage");
+        if (showGirlType(L, -1) != LuaTypeTable) {
+            showGirlSetTop(L, top);
+            return;
+        }
+        if (!showGirlLockPatchApplied) {
+            showGirlGetField(L, -1, "OnClickBack");
+            if (showGirlType(L, -1) == LuaTypeFunction) {
+                showGirlPushCClosure(L, &ShowGirlOnClickBackPatched, 1);
+                showGirlSetField(L, -2, "OnClickBack");
+                showGirlLockPatchApplied = true;
+                Log("ShowGirlPage lock prompt patch applied (New ships only)");
+            } else {
+                showGirlSetTop(L, showGirlGetTop(L) - 1);
+            }
+        }
+        if (!showGirlNewStatePatchApplied) {
+            showGirlGetField(L, -1, "_UpdatePage");
+            if (showGirlType(L, -1) == LuaTypeFunction) {
+                showGirlPushCClosure(L, &ShowGirlUpdatePagePatched, 1);
+                showGirlSetField(L, -2, "_UpdatePage");
+                showGirlGetField(L, -1, "_SetGirlImage");
+                if (showGirlType(L, -1) == LuaTypeFunction) {
+                    showGirlPushCClosure(L, &ShowGirlSetGirlImagePatched, 1);
+                    showGirlSetField(L, -2, "_SetGirlImage");
+                    showGirlNewStatePatchApplied = true;
+                    Log("ShowGirlPage duplicate-New patch applied");
+                } else {
+                    showGirlSetTop(L, showGirlGetTop(L) - 1);
+                }
+            } else {
+                showGirlSetTop(L, showGirlGetTop(L) - 1);
+            }
+        }
+        showGirlSetTop(L, top);
+    }
+}
 
 void LogLuaPcallError(void* L, int status) {
     if (status == 0) return;
@@ -2699,11 +2948,16 @@ __declspec(naked) void LuaPcallKTrampoline() {
         add esp, 24
         mov dword ptr [luaPcallKResult], eax
         test eax, eax
-        je no_err
+        je patch_show_girl
         push eax
         push dword ptr [luaPcallKLState]
         call LogLuaPcallError
         add esp, 8
+        jmp no_err
+    patch_show_girl:
+        push dword ptr [luaPcallKLState]
+        call TryPatchShowGirlLockPrompt
+        add esp, 4
     no_err:
         popad
         mov eax, dword ptr [luaPcallKResult]
@@ -7070,11 +7324,16 @@ void InitializeHooks(HMODULE module) {
         TryApplyLoginMethodHook();
         TrySetSimulationMode();
         TrySetReview();
+        const bool gameNetworkConnected = IsGameNetworkConnected();
+        if (loginWebViewSuppressionEnabled && gameNetworkConnected) {
+            loginWebViewSuppressionEnabled = false;
+            Log("login WebView suppression disabled after game connection");
+        }
         // Auto-login fallback: the normal trigger is SDK event 29 (announcement WebView
         // "open"), which does not always fire headlessly. If the game is still sitting at
         // the SDK login screen (network not connected) long after boot, repeatedly
         // dispatch the fabricated login result (event 2) until the game connects.
-        if (originalSdkCallback && !IsGameNetworkConnected() &&
+        if (originalSdkCallback && !gameNetworkConnected &&
             GetTickCount64() >= loginFallbackStart) {
             if (!loginFallbackStarted) {
                 loginFallbackStarted = true;
@@ -7086,7 +7345,7 @@ void InitializeHooks(HMODULE module) {
             closeWebViewRequested = false;
             CloseSdkWebView();
         }
-        HideCefWebView();
+        if (loginWebViewSuppressionEnabled) HideCefWebView();
         LogHotPatchState();
         LogNetLogicState();
         if (getUserExtraSeen && GetTickCount64() - getUserExtraSeenAt >= 2000) {

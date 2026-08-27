@@ -1,6 +1,7 @@
 using BlueOath.Core;
 using BlueOath.Mods;
 using BlueOath.Protocol;
+using BlueOath.Server.Protocols;
 using BlueOath.Storage;
 using System.Diagnostics;
 using System.Net;
@@ -18,6 +19,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("equipment renovation request decodes consumed equipment ids", EquipRiseStarArgsCodecTest),
     ("zero-count bag entries encode an explicit deletion marker", BagDeletionMarkerCodecTest),
     ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
+    ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
@@ -30,7 +32,10 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("protobuf login server creates a local profile", GameLoginIntegrationTest),
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
     ("all fashions unlocked on account creation", FashionUnlockIntegrationTest),
+    ("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest)];
 if (args.Contains("--retire-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--hero-integration", StringComparer.OrdinalIgnoreCase))
@@ -45,6 +50,8 @@ if (args.Contains("--shop-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase refreshes inventory before its response", HeroMutationIntegrationTest)];
 if (args.Contains("--treasure-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipment treasure consumes its box and persists a new equipment instance", TreasureIntegrationTest)];
+if (args.Contains("--buildship-codec", StringComparer.OrdinalIgnoreCase))
+    tests = [("build ship response omits empty special rewards", BuildShipRewardCodecTest)];
 if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
 var failed = 0;
@@ -125,6 +132,16 @@ static Task TreasureCodecTest()
         [new CommonReward(Type: 2, ConfigId: 30164, Num: 1, Id: 7)], TreasureId: 10300));
     Assert(payload.Length > 5 && payload[0] == 0x0A && payload[^3..].SequenceEqual(new byte[] { 0x10, 0xBC, 0x50 }),
         "normal treasure response protobuf mismatch");
+    return Task.CompletedTask;
+}
+
+static Task BuildShipRewardCodecTest()
+{
+    var payload = ProtocolEncoder.EncodeBuildShipRet(
+        [new CommonReward(Type: 1, ConfigId: 2, Num: 1, Id: 3)]);
+    Assert(payload.AsSpan().SequenceEqual(
+        new byte[] { 0x0A, 0x08, 0x08, 0x01, 0x10, 0x02, 0x18, 0x01, 0x20, 0x03, 0x1A, 0x00 }),
+        "build ship response must omit empty SpReward while retaining aligned TransReward");
     return Task.CompletedTask;
 }
 
@@ -609,6 +626,157 @@ static bool ContainsSequence(byte[] haystack, byte[] needle)
         if (match) return true;
     }
     return false;
+}
+
+static async Task EquipEnhanceIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
+    var data = Path.Combine(root, "test-equip-enhance-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "equip-enhance-player";
+    const uint normalEquipId = 77;
+    const uint heroPageEquipId = 78;
+    const uint boundEquipId = 79;
+    const int urEquipTemplateId = 100106;
+
+    var repo = new SqliteGameRepository(data);
+    await repo.CreateAsync(profileId, profileId);
+    PlayerAccount seeded = await repo.LoadAccountAsync(profileId)
+        ?? throw new InvalidDataException("failed to seed equipment enhancement account");
+    Hero hero = seeded.Dock.Heroes[0];
+    uint[] slots = [normalEquipId, heroPageEquipId, boundEquipId, 0, 0, 0];
+    seeded = seeded with
+    {
+        Character = seeded.Character with { Gold = 100_000, UrEquipCoin = 100 },
+        Dock = seeded.Dock with
+        {
+            Heroes = [hero with { EquipSlots = slots }],
+        },
+        Equip = new PlayerEquip(
+        [
+            new EquipItem(normalEquipId, urEquipTemplateId, EnhanceLv: 1, HeroId: hero.HeroId),
+            new EquipItem(heroPageEquipId, urEquipTemplateId, EnhanceLv: 1, HeroId: hero.HeroId),
+            new EquipItem(boundEquipId, urEquipTemplateId, EnhanceLv: 35, HeroId: hero.HeroId),
+        ], 2000),
+        Bag = new PlayerBag(
+        [
+            new BagItem(60000, 10),
+            new BagItem(10029, 200),
+            new BagItem(10030, 200),
+            new BagItem(60003, 15),
+            new BagItem(10000, 12),
+        ], 100),
+    };
+    await repo.SaveAccountAsync(seeded);
+
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "equipment enhancement test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        var port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        var stream = client.GetStream();
+
+        async Task<(TResponse Response, List<TResponse> Pushes)> RoundTrip(string method, byte[]? requestArgs)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, requestArgs, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            List<TResponse> pushes = [];
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return (response, pushes);
+                pushes.Add(response);
+            }
+        }
+
+        static byte[] EnhanceArgs(uint equipId, params (uint TemplateId, uint Num)[] items)
+        {
+            var args = new ProtocolPackage().Write(0x08, equipId);
+            foreach (var item in items)
+            {
+                var body = new ProtocolPackage()
+                    .Write(0x08, item.TemplateId)
+                    .Write(0x10, item.Num);
+                args.Write(0x12, body.ToArray());
+            }
+            return args.ToArray();
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("hero.GetHeroInfo", null); // drain login synchronization pushes
+
+        var (normalResponse, normalPushes) = await RoundTrip("equip.Enhance", EnhanceArgs(normalEquipId,
+            (60000, 5), (10029, 100), (10030, 100)));
+        Assert(normalResponse.Err == 0 && normalResponse.Ret is { Length: > 0 },
+            "equipped UR normal enhancement was rejected");
+        Assert(normalPushes.Any(p => p.Method == "bag.UpdateBagData") &&
+            normalPushes.Any(p => p.Method == "equip.UpdateEquipBagData"),
+            "equipped UR normal enhancement did not refresh bag and equipment data");
+        PlayerAccount normallyEnhanced = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("normal enhancement account disappeared");
+        Assert(normallyEnhanced.Equip!.Items.Single(e => e.EquipId == normalEquipId).EnhanceLv == 2,
+            "equipped UR normal enhancement did not persist level 2");
+        Assert(normallyEnhanced.Bag!.Items.Single(i => i.TemplateId == 60000).Num == 5 &&
+            normallyEnhanced.Bag.Items.Single(i => i.TemplateId == 10029).Num == 100 &&
+            normallyEnhanced.Bag.Items.Single(i => i.TemplateId == 10030).Num == 100,
+            "equipped UR normal enhancement consumed the wrong material amount");
+
+        var (heroPageResponse, heroPagePushes) =
+            await RoundTrip("equip.EnhanceBind", EnhanceArgs(heroPageEquipId));
+        Assert(heroPageResponse.Err == 0 && heroPageResponse.Ret is { Length: > 0 },
+            "hero-page UR enhancement without ItemArr was rejected");
+        Assert(heroPagePushes.Any(p => p.Method == "bag.UpdateBagData") &&
+            heroPagePushes.Any(p => p.Method == "equip.UpdateEquipBagData"),
+            "hero-page UR enhancement did not refresh bag and equipment data");
+        PlayerAccount heroPageEnhanced = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("hero-page enhancement account disappeared");
+        Assert(heroPageEnhanced.Equip!.Items.Single(e => e.EquipId == heroPageEquipId).EnhanceLv == 2,
+            "hero-page UR enhancement did not persist level 2");
+        Assert(!heroPageEnhanced.Bag!.Items.Any(i => i.TemplateId is 60000 or 10029 or 10030),
+            "hero-page UR enhancement did not consume its configured materials");
+
+        var (boundResponse, boundPushes) = await RoundTrip("equip.EnhanceBind", EnhanceArgs(boundEquipId));
+        Assert(boundResponse.Err == 0 && boundResponse.Ret is { Length: > 0 },
+            "equipped UR bound enhancement was rejected");
+        Assert(boundPushes.Any(p => p.Method == "user.UpdateUserInfo") &&
+            boundPushes.Any(p => p.Method == "bag.UpdateBagData") &&
+            boundPushes.Any(p => p.Method == "equip.UpdateEquipBagData"),
+            "bound enhancement did not refresh currency, bag, and equipment data");
+        PlayerAccount boundEnhanced = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("bound enhancement account disappeared");
+        Assert(boundEnhanced.Equip!.Items.Single(e => e.EquipId == boundEquipId).EnhanceLv == 36,
+            "equipped UR bound enhancement did not persist level 36");
+        Assert(boundEnhanced.Character.UrEquipCoin == 90 && boundEnhanced.Character.Gold == 65_000,
+            "equipped UR bound enhancement did not consume configured currencies");
+        Assert(!boundEnhanced.Bag!.Items.Any(i => i.TemplateId is 60003 or 10000),
+            "equipped UR bound enhancement did not consume configured bag materials");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
 }
 
 static async Task HeroMutationIntegrationTest()

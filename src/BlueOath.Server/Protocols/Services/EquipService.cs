@@ -239,6 +239,108 @@ internal sealed class EquipService(GameServices services)
         _ => 0,
     };
 
+    /// <summary>
+    /// 处理装备绑定后的突破强化。客户端在战姬装备页使用 equip.EnhanceBind，
+    /// 请求中只有 EquipId；每次按 config_equip_levelbreak_item 的固定费用提升一级。
+    /// </summary>
+    internal async Task<(byte[] Ret, bool Changed, string Error)> BuildEnhanceBindRetAsync(
+        TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return ([], false, "missing bound enhancement arguments");
+        EquipEnhanceArgs arg = TMessageCodec.DecodeEquipEnhanceArgs(request.Args);
+        if (arg.EquipId == 0) return ([], false, "no equipment was selected");
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+        PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
+        List<EquipItem> equipItems = equip.Items.ToList();
+        int equipIndex = equipItems.FindIndex(e => e.EquipId == arg.EquipId);
+        if (equipIndex < 0) return ([], false, "equipment was not found");
+
+        EquipItem current = equipItems[equipIndex];
+        if (current.HeroId == 0)
+            return ([], false, "bound equipment is not equipped by a hero");
+        ConfigEquip? config = services.GetEquipConfig(current.TemplateId);
+        if (config is null) return ([], false, "equipment configuration was not found");
+
+        int breakType = config.Quality == 5 ? 2 : 1;
+        ConfigEquipLevelbreakItem? levelbreak = services.GetEquipLevelbreakItem(breakType);
+        if (levelbreak?.LevelRank is not { Count: >= 2 } levelRank)
+            return ([], false, "bound enhancement configuration was not found");
+
+        int minLevel = checked((int)levelRank[0]);
+        int maxLevel = checked((int)levelRank[1]);
+        int nextLevel = checked(current.EnhanceLv + 1);
+        IReadOnlyList<List<long>> costs;
+        if (current.EnhanceLv < minLevel)
+        {
+            // Some hero-detail flows mark an equipped UR item as bound before it reaches the
+            // normal cap and consequently send EnhanceBind without ItemArr. Use the same
+            // authoritative next-level UR table shown by that dialog.
+            if (config.Quality != 5 || nextLevel > config.EnhanceLevelMax ||
+                services.GetEquipEnhanceLevelUr(nextLevel)?.ItemCost is not { Count: > 0 } urCosts)
+                return ([], false, "equipment must reach its normal maximum level before bound enhancement");
+            costs = urCosts;
+        }
+        else
+        {
+            if (current.EnhanceLv >= maxLevel)
+                return ([], false, "equipment has reached the maximum bound enhancement level");
+            if (levelbreak.ItemCost is not { Count: > 0 } bindCosts)
+                return ([], false, "bound enhancement configuration was not found");
+            costs = bindCosts;
+        }
+
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> bagItems = bag.Items.ToList();
+        Dictionary<(int Type, int Id), int> required = new();
+        foreach (List<long> cost in costs)
+        {
+            if (cost.Count < 3) return ([], false, "invalid bound enhancement cost");
+            int type = checked((int)cost[0]);
+            int id = checked((int)cost[1]);
+            int count = checked((int)cost[2]);
+            if (count <= 0 || (type != GameServices.GoodsTypeCurrency && type != 1 && type != 6))
+                return ([], false, "invalid bound enhancement cost");
+            required[(type, id)] = checked(required.GetValueOrDefault((type, id)) + count);
+        }
+
+        foreach (var ((type, id), count) in required)
+        {
+            if (type == GameServices.GoodsTypeCurrency)
+            {
+                if (GetCurrencyAmount(account.Character, id) < count)
+                    return ([], false, "bound enhancement materials are insufficient");
+            }
+            else
+            {
+                int bagIndex = bagItems.FindIndex(i => i.TemplateId == id);
+                if (bagIndex < 0 || bagItems[bagIndex].Num < count)
+                    return ([], false, "bound enhancement materials are insufficient");
+            }
+        }
+
+        foreach (var ((type, id), count) in required)
+        {
+            if (type == GameServices.GoodsTypeCurrency)
+            {
+                account = GameServices.AddCurrency(account, id, -count);
+            }
+            else
+            {
+                int bagIndex = bagItems.FindIndex(i => i.TemplateId == id);
+                int remaining = bagItems[bagIndex].Num - count;
+                if (remaining == 0) bagItems.RemoveAt(bagIndex);
+                else bagItems[bagIndex] = bagItems[bagIndex] with { Num = remaining };
+            }
+        }
+
+        equipItems[equipIndex] = current with { EnhanceLv = nextLevel, EnhanceExp = 0 };
+        account = account with { Equip = equip with { Items = equipItems }, Bag = bag with { Items = bagItems } };
+        await services.SaveAccountAsync(account, ct);
+        return (TMessageCodec.EncodeEquipEnhanceRet(arg.EquipId, nextLevel, 0), true, "");
+    }
+
     internal async Task<(byte[] Ret, bool Changed)> BuildRiseStarRetAsync(
         TRequest request, string profileId, CancellationToken ct)
     {

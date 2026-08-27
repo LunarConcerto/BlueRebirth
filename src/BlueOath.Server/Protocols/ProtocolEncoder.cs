@@ -29,12 +29,11 @@ internal static class ProtocolEncoder
             output.Write(0x0A, body);
         }
 
-        // SpReward(2) 和 TransReward(3) 各编码一个空元素，避免 _LoadTenCard 里
-        // self.transReward[nIndex].Reward 访问 nil 崩溃。
+        // TransReward(3) 需要与抽取结果按下标对齐，否则 _LoadTenCard 会访问 nil。
+        // SpReward(2) 不能填充空元素：客户端用 next(SpReward) 判断是否需要打开
+        // 额外奖励页，空壳会被误判为真实奖励并显示一个没有内容的报酬页面。
         for (int i = 0; i < rewards.Count; i++)
         {
-            output.WriteRaw(0x12); // SpReward
-            output.WriteRaw(0x00);
             output.WriteRaw(0x1A); // TransReward
             output.WriteRaw(0x00);
         }
