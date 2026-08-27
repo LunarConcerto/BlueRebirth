@@ -46,7 +46,9 @@ jobs:
 
   publish:
     name: Publish Launcher Bundle (Release)
-    runs-on: windows-latest
+    # Keep release-native binaries on the stable VS 2022/v143 baseline. The
+    # windows-latest label can migrate to newer Windows/Visual Studio images.
+    runs-on: windows-2022
     needs: build
     permissions:
       contents: write
