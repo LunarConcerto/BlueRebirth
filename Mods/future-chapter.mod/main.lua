@@ -1,6 +1,7 @@
 local CHAPTER_ID = 17
 local MAIN_PLOT_TYPE = 1
-local MAIN_PART = 1
+local FUTURE_PART = 3
+local FUTURE_PART_NAME = "未来編"
 local LAST_REAL_CHAPTER_ID = 13
 
 local config_patched = false
@@ -23,18 +24,6 @@ local function assign_with_previous(previous, target, key, value)
   else
     rawset(target, key, value)
   end
-end
-
-local function contains(list, value)
-  if type(list) ~= "table" then
-    return false
-  end
-  for index = 1, #list do
-    if list[index] == value then
-      return true
-    end
-  end
-  return false
 end
 
 local function ensure_placeholder(chapters)
@@ -74,14 +63,46 @@ local function ensure_placeholder(chapters)
   return chapters
 end
 
-local function ensure_main_part(plot_type)
-  if type(plot_type) ~= "table" or type(plot_type.chapter_list2) ~= "table" then
+local function ensure_future_part(plot_type)
+  if type(plot_type) ~= "table" or
+      type(plot_type.chapter_list2) ~= "table" or
+      type(plot_type.plot_enter_name) ~= "table" or
+      type(plot_type.image_bg) ~= "table" then
     return plot_type
   end
-  local first_part = plot_type.chapter_list2[MAIN_PART]
-  if type(first_part) == "table" and not contains(first_part, CHAPTER_ID) then
-    table.insert(first_part, CHAPTER_ID)
-    mod.info("appended empty chapter to main-story part " .. tostring(MAIN_PART))
+
+  local changed = false
+  for part_index, part in pairs(plot_type.chapter_list2) do
+    if part_index ~= FUTURE_PART and type(part) == "table" then
+      for chapter_index = #part, 1, -1 do
+        if tonumber(part[chapter_index]) == CHAPTER_ID then
+          table.remove(part, chapter_index)
+          changed = true
+        end
+      end
+    end
+  end
+
+  local future_chapters = plot_type.chapter_list2[FUTURE_PART]
+  if type(future_chapters) ~= "table" or
+      #future_chapters ~= 1 or
+      tonumber(future_chapters[1]) ~= CHAPTER_ID then
+    plot_type.chapter_list2[FUTURE_PART] = { CHAPTER_ID }
+    changed = true
+  end
+  if plot_type.plot_enter_name[FUTURE_PART] ~= FUTURE_PART_NAME then
+    plot_type.plot_enter_name[FUTURE_PART] = FUTURE_PART_NAME
+    changed = true
+  end
+
+  local future_background = plot_type.image_bg[2] or plot_type.image_bg[1]
+  if future_background ~= nil and plot_type.image_bg[FUTURE_PART] ~= future_background then
+    plot_type.image_bg[FUTURE_PART] = future_background
+    changed = true
+  end
+
+  if changed then
+    mod.info("added main-story part " .. tostring(FUTURE_PART) .. ": " .. FUTURE_PART_NAME)
   end
   return plot_type
 end
@@ -101,7 +122,7 @@ local function patch_config_manager(manager)
     if name == "config_chapter" then
       ensure_placeholder(data)
     elseif name == "config_chapter_plot_type" and type(data) == "table" then
-      ensure_main_part(data[MAIN_PLOT_TYPE])
+      ensure_future_part(data[MAIN_PLOT_TYPE])
     end
     return data
   end
@@ -114,7 +135,7 @@ local function patch_config_manager(manager)
     end
     local data = original_get_data_by_id(name, id, ...)
     if name == "config_chapter_plot_type" and numeric_id == MAIN_PLOT_TYPE then
-      ensure_main_part(data)
+      ensure_future_part(data)
     end
     return data
   end
