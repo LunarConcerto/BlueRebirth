@@ -22,7 +22,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
     ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
     ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
-    ("building snapshot and assignment requests match the client", BuildingCodecTest),
+    ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
     ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
     ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
     ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
@@ -40,7 +40,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("all fashions unlocked on account creation", FashionUnlockIntegrationTest),
     ("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest),
     ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest),
-    ("building hero assignment persists and refreshes the client", BuildingAssignmentIntegrationTest),
+    ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest),
     ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
@@ -80,8 +80,8 @@ if (args.Contains("--construction-integration", StringComparer.OrdinalIgnoreCase
     ];
 if (args.Contains("--building-integration", StringComparer.OrdinalIgnoreCase))
     tests = [
-        ("building snapshot and assignment requests match the client", BuildingCodecTest),
-        ("building hero assignment persists and refreshes the client", BuildingAssignmentIntegrationTest)
+        ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
+        ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest)
     ];
 var failed = 0;
 foreach (var (name, run) in tests)
@@ -213,6 +213,18 @@ static Task ConstructionConfigAndCodecTest()
 
 static Task BuildingCodecTest()
 {
+    BuildingConfigLoader.Load(FindRepositoryRoot());
+    Assert(BuildingConfigLoader.Infos.Count == 35 && BuildingConfigLoader.Lands.Count == 10,
+        "building or land configs were not loaded");
+    Assert(BuildingConfigLoader.GetInfo(11) is { Type: 2, Level: 1 } &&
+        BuildingConfigLoader.GetLand(2)?.BuildinggroupId?.Contains(2) == true,
+        "electric building/land config mismatch");
+    Assert(BuildingConfigLoader.GetLevelUp(11)?.Leveluptime == 0,
+        "JP level-1 building should complete immediately");
+    Assert(BuildingConfigLoader.MaterialTemplateIds.SequenceEqual(
+            new[] { 14001, 14002, 14003, 14004, 14011 }),
+        "building material ids were not collected from level-up configs");
+
     PlayerBuilding state = PlayerAccountFactory.DefaultBuilding(1234);
     Assert(state.Buildings.Count == 2 && state.Buildings.Any(x => x.Tid == 2) &&
         state.Buildings.Any(x => x.Tid == 41), "default office/dormitory state mismatch");
@@ -240,6 +252,15 @@ static Task BuildingCodecTest()
     Assert(listDecoded.BuildingIds.SequenceEqual(new[] { 1, 2 }) &&
         listDecoded.HeroIds.SequenceEqual(new[] { -1, 1, -1 }),
         "building.SetBuildingListHero request did not preserve -1 separators");
+
+    var add = new ProtocolPackage().Write(0x08, 11UL).Write(0x10, 2UL);
+    AddBuildingArg addDecoded = PlayerDataCodec.DecodeAddBuildingArg(add.ToArray());
+    Assert(addDecoded == new AddBuildingArg(11, 2), "building.AddBuilding request did not decode");
+    var buildingId = new ProtocolPackage().Write(0x08, 3UL);
+    Assert(PlayerDataCodec.DecodeBuildingIdArg(buildingId.ToArray()) == 3,
+        "building lifecycle building id did not decode");
+    Assert(PlayerDataCodec.EncodeAddBuildingRet(3).SequenceEqual(new byte[] { 0x08, 0x03 }),
+        "building.AddBuilding response did not contain the new building id");
     return Task.CompletedTask;
 }
 
@@ -737,7 +758,9 @@ static async Task BuildingAssignmentIntegrationTest()
     var root = FindRepositoryRoot();
     var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
-    var data = Path.Combine(Path.GetTempPath(), "blueoath-building-" + Guid.NewGuid().ToString("N"));
+    // 配置加载器从数据目录向上定位客户端配置，因此集成数据放在仓库根目录内。
+    var data = Path.Combine(root, "test-building-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
     const string profileId = "building-player";
     var startInfo = new ProcessStartInfo("dotnet")
     {
@@ -763,7 +786,10 @@ static async Task BuildingAssignmentIntegrationTest()
         await client.ConnectAsync("127.0.0.1", port, timeout.Token);
         NetworkStream stream = client.GetStream();
 
-        async Task<TResponse> RoundTrip(string method, byte[]? args)
+        async Task<TResponse> RoundTrip(
+            string method,
+            byte[]? args,
+            ICollection<TResponse>? prePushes = null)
         {
             byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
             await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
@@ -773,6 +799,7 @@ static async Task BuildingAssignmentIntegrationTest()
                 Assert(frame is not null, $"empty response for {method}");
                 TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
                 if (response.IsResponse == 1) return response;
+                prePushes?.Add(response);
             }
         }
 
@@ -781,24 +808,77 @@ static async Task BuildingAssignmentIntegrationTest()
         await RoundTrip("player.CreateUser",
             new byte[] { 0x0A, 0x04, (byte)'b', (byte)'a', (byte)'s', (byte)'e', 0x10, 0x01 });
 
+        var assignedPushes = new List<TResponse>();
         var setHero = new ProtocolPackage().Write(0x08, 2UL).Write(0x10, 1UL);
-        TResponse assigned = await RoundTrip("building.SetHero", setHero.ToArray());
+        TResponse assigned = await RoundTrip("building.SetHero", setHero.ToArray(), assignedPushes);
         Assert(assigned.Err == 0, "building.SetHero returned an error");
-
-        var pushFrame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
-        Assert(pushFrame is not null, "building.SetHero did not send a refresh push");
-        TResponse push = TMessageCodec.DecodeResponse(pushFrame!.Value.Payload);
-        Assert(push.IsResponse == 0 && push.Method == "building.UpdateBuildingInfo",
+        TResponse? push = assignedPushes.LastOrDefault(item => item.Method == "building.UpdateBuildingInfo");
+        Assert(push is not null, "building.SetHero did not send a refresh push before its response");
+        Assert(push!.IsResponse == 0 && push.Method == "building.UpdateBuildingInfo",
             "building.SetHero sent the wrong refresh push");
         Assert(push.Ret is { Length: > 0 } &&
             ContainsSequence(push.Ret, new byte[] { 0x08, 0x02, 0x10, 0x29, 0x18, 0x01, 0x20, 0x01 }),
             "dormitory refresh did not include the assigned hero");
+
+        var initialRepo = new SqliteGameRepository(data);
+        PlayerAccount beforeConstruction = await initialRepo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("building profile was not persisted before construction");
+        int initialGold = beforeConstruction.Character.Gold;
+        string initialBag = JsonSerializer.Serialize(beforeConstruction.Bag);
+        Assert(BuildingConfigLoader.MaterialTemplateIds.All(templateId =>
+                beforeConstruction.Bag?.Items.SingleOrDefault(item => item.TemplateId == templateId)?.Num >= 99_999),
+            "new profile did not receive the building materials required by the client");
+
+        var addPushes = new List<TResponse>();
+        var add = new ProtocolPackage().Write(0x08, 11UL).Write(0x10, 2UL);
+        TResponse added = await RoundTrip("building.AddBuilding", add.ToArray(), addPushes);
+        Assert(added.Err == 0 && added.Ret?.SequenceEqual(new byte[] { 0x08, 0x03 }) == true,
+            "building.AddBuilding did not return building id 3");
+        TResponse? addPush = addPushes.LastOrDefault(item => item.Method == "building.UpdateBuildingInfo");
+        Assert(addPush?.Ret is { Length: > 0 } &&
+            ContainsSequence(addPush.Ret, new byte[] { 0x08, 0x03, 0x10, 0x0B, 0x18, 0x01 }),
+            "building.AddBuilding did not pre-push the new electric building");
+
+        var occupied = new ProtocolPackage().Write(0x08, 11UL).Write(0x10, 2UL);
+        TResponse duplicate = await RoundTrip("building.AddBuilding", occupied.ToArray());
+        Assert(duplicate.Err != 0, "building.AddBuilding accepted an occupied land");
+
+        static byte[] BuildingId(int id) => new ProtocolPackage().Write(0x08, unchecked((ulong)id)).ToArray();
+
+        var officeUpgradePushes = new List<TResponse>();
+        TResponse officeUpgraded = await RoundTrip(
+            "building.UpgradeBuilding", BuildingId(1), officeUpgradePushes);
+        Assert(officeUpgraded.Err == 0 && officeUpgradePushes.Any(item =>
+                item.Method == "building.UpdateBuildingInfo" && item.Ret is { Length: > 0 } &&
+                ContainsSequence(item.Ret, new byte[] { 0x08, 0x01, 0x10, 0x03, 0x18, 0x03 })),
+            "office upgrade to level 3 was not synchronized before the response");
+
+        TResponse electricUpgraded = await RoundTrip("building.UpgradeBuilding", BuildingId(3));
+        Assert(electricUpgraded.Err == 0, "electric building upgrade failed");
+        TResponse electricDegraded = await RoundTrip("building.DegradeBuilding", BuildingId(3));
+        Assert(electricDegraded.Err == 0, "electric building degradation failed");
+
+        TResponse officeDegraded = await RoundTrip("building.DegradeBuilding", BuildingId(1));
+        Assert(officeDegraded.Err == 0, "office degradation from level 3 to level 2 failed");
+        TResponse invalidOfficeDegrade = await RoundTrip("building.DegradeBuilding", BuildingId(1));
+        Assert(invalidOfficeDegrade.Err == 3409,
+            "office degradation ignored an occupied land's office-level requirement");
+
+        TResponse finished = await RoundTrip("building.FinishBuilding", BuildingId(3));
+        Assert(finished.Err == 0, "building.FinishBuilding was not idempotent for an instant build");
 
         var repo = new SqliteGameRepository(data);
         PlayerAccount persisted = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("building profile was not persisted");
         Assert(persisted.Building?.Buildings.Single(x => x.Id == 2).HeroIds.SequenceEqual(new uint[] { 1 }) == true,
             "building assignment was not written to the profile database");
+        Assert(persisted.Building?.Buildings.Single(x => x.Id == 1) is { Tid: 2, Level: 2 } &&
+            persisted.Building.Buildings.Single(x => x.Id == 3) is { Tid: 11, Level: 1 } &&
+            persisted.Building.Lands.Any(x => x.Index == 2 && x.BuildingId == 3),
+            "building lifecycle result was not written to the profile database");
+        Assert(persisted.Character.Gold == initialGold &&
+            JsonSerializer.Serialize(persisted.Bag) == initialBag,
+            "base construction unexpectedly consumed gold or items");
     }
     finally
     {

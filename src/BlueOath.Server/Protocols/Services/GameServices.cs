@@ -21,6 +21,7 @@ internal sealed class GameServices
     private const int OathShopCurrencyId = 17553;
     private const int DefaultOathShopCurrencyCount = 99_999_999;
     private const int DefaultConstructionItemCount = 99_999;
+    private const int DefaultBuildingMaterialCount = 99_999;
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
@@ -50,6 +51,7 @@ internal sealed class GameServices
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(options.DataRoot);
         ConstructionConfigLoader.Load(options.DataRoot);
+        BuildingConfigLoader.Load(options.DataRoot);
         _itemInfos = ItemInfoLoader.Load(options.DataRoot);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
         _copyRandomFactors = RandomFactorLoader.Load(options.DataRoot);
@@ -341,10 +343,13 @@ internal sealed class GameServices
             PlayerAccount buildingReady = EnsureBuilding(account);
             bool buildingMigrated = !ReferenceEquals(buildingReady, account);
             account = buildingReady;
+            PlayerAccount buildingMaterialsReady = EnsureBuildingMaterials(account);
+            bool buildingMaterialsMigrated = !ReferenceEquals(buildingMaterialsReady, account);
+            account = buildingMaterialsReady;
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
-            if (affectionMigrated || constructionMigrated || buildingMigrated)
+            if (affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
@@ -355,6 +360,7 @@ internal sealed class GameServices
         created = EnsureAffectionGifts(created);
         created = EnsureOathShopCurrency(created);
         created = EnsureConstructionItems(created);
+        created = EnsureBuildingMaterials(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -375,7 +381,8 @@ internal sealed class GameServices
             account = NormalizeAffection(account);
             account = EnsureAffectionGifts(account);
             account = EnsureOathShopCurrency(account);
-            return EnsureConstructionItems(account);
+            account = EnsureConstructionItems(account);
+            return EnsureBuildingMaterials(account);
         }
         account = EnsureHeroPSkills(account);
         account = EnsureAllFashion(account);
@@ -388,10 +395,13 @@ internal sealed class GameServices
         PlayerAccount buildingReady = EnsureBuilding(account);
         bool buildingMigrated = !ReferenceEquals(buildingReady, account);
         account = buildingReady;
+        PlayerAccount buildingMaterialsReady = EnsureBuildingMaterials(account);
+        bool buildingMaterialsMigrated = !ReferenceEquals(buildingMaterialsReady, account);
+        account = buildingMaterialsReady;
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
-        if (affectionMigrated || buildingMigrated)
+        if (affectionMigrated || buildingMigrated || buildingMaterialsMigrated)
             await _repo.SaveAccountAsync(account, ct);
         return account;
     }
@@ -883,6 +893,29 @@ internal sealed class GameServices
         if (account.Building is not null) return account;
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         return account with { Building = PlayerAccountFactory.DefaultBuilding(now) };
+    }
+
+    /// <summary>
+    /// 客户端会在发送基地新建/升级请求前检查配置中的建材库存。本地基地不消耗物资，
+    /// 因此为新旧档案直接补足全部建材，避免客户端在请求到达服务端之前将操作拦截。
+    /// </summary>
+    private static PlayerAccount EnsureBuildingMaterials(PlayerAccount account)
+    {
+        if (BuildingConfigLoader.MaterialTemplateIds.Count == 0) return account;
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> items = bag.Items.ToList();
+        bool changed = false;
+        foreach (int templateId in BuildingConfigLoader.MaterialTemplateIds)
+        {
+            int index = items.FindIndex(item => item.TemplateId == templateId);
+            if (index >= 0 && items[index].Num >= DefaultBuildingMaterialCount) continue;
+            if (index >= 0)
+                items[index] = items[index] with { Num = DefaultBuildingMaterialCount };
+            else
+                items.Add(new BagItem(templateId, DefaultBuildingMaterialCount));
+            changed = true;
+        }
+        return changed ? account with { Bag = bag with { Items = items } } : account;
     }
 
     internal static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)

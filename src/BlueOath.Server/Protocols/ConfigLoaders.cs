@@ -895,3 +895,95 @@ internal static class PlotTriggerLoader
 
     public static IReadOnlyList<int> AllPlotIds => _allPlotIds;
 }
+
+/// <summary>基地建造所需的建筑、地块、等级与工人体力配置。</summary>
+internal static class BuildingConfigLoader
+{
+    private static Dictionary<int, ConfigBuildinginfo> _infos = [];
+    private static Dictionary<int, ConfigBuilding> _lands = [];
+    private static Dictionary<int, ConfigBuildinglevelup> _levelUps = [];
+    private static ConfigWorker? _worker;
+    private static bool _loaded;
+
+    internal static IReadOnlyDictionary<int, ConfigBuildinginfo> Infos => _infos;
+    internal static IReadOnlyDictionary<int, ConfigBuilding> Lands => _lands;
+    internal static IReadOnlyList<int> MaterialTemplateIds { get; private set; } = [];
+
+    internal static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _infos = ConfigDbLoader.LoadAll<ConfigBuildinginfo>(configDir, "config_buildinginfo.db");
+            _lands = ConfigDbLoader.LoadAll<ConfigBuilding>(configDir, "config_building.db");
+            _levelUps = ConfigDbLoader.LoadAll<ConfigBuildinglevelup>(configDir, "config_buildinglevelup.db");
+            MaterialTemplateIds = _levelUps.Values
+                .SelectMany(GetMaterialTemplateIds)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+            _worker = ConfigDbLoader.LoadAll<ConfigWorker>(configDir, "config_worker.db")
+                .Values.FirstOrDefault();
+            Console.Error.WriteLine(
+                $"[Building] loaded {_infos.Count} buildings / {_lands.Count} lands / " +
+                $"{_levelUps.Count} levels / {MaterialTemplateIds.Count} materials");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Building] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    internal static ConfigBuildinginfo? GetInfo(int tid) =>
+        _infos.TryGetValue(tid, out ConfigBuildinginfo? value) ? value : null;
+
+    internal static ConfigBuilding? GetLand(int index) =>
+        _lands.TryGetValue(index, out ConfigBuilding? value) ? value : null;
+
+    internal static ConfigBuildinglevelup? GetLevelUp(int tid) =>
+        _levelUps.TryGetValue(tid, out ConfigBuildinglevelup? value) ? value : null;
+
+    internal static ConfigBuildinginfo? GetInfo(int type, int level) =>
+        _infos.Values.FirstOrDefault(info => info.Type == type && info.Level == level);
+
+    internal static int GetMaxWorkerStrength(int officeLevel)
+    {
+        if (_worker is null) return 100;
+        long max = _worker.Workerhpmax;
+        IReadOnlyList<long> levels = _worker.Workerhplevelup ?? [];
+        for (int i = 0; i < Math.Min(officeLevel, levels.Count); i++) max += levels[i];
+        return checked((int)max);
+    }
+
+    private static IEnumerable<int> GetMaterialTemplateIds(ConfigBuildinglevelup level)
+    {
+        int raw1 = GetItemTemplateId(level.Rawmaterial1);
+        int raw2 = GetItemTemplateId(level.Rawmaterial2);
+        int raw3 = GetItemTemplateId(level.Rawmaterial3);
+        if (raw1 > 0) yield return raw1;
+        if (raw2 > 0) yield return raw2;
+        if (raw3 > 0) yield return raw3;
+    }
+
+    // 建筑物资配置格式为 [资源类型, 模板 ID, 数量]，资源类型 1 表示仓库道具。
+    private static int GetItemTemplateId(IReadOnlyList<long>? material) =>
+        material is { Count: >= 3 } && material[0] == 1
+            ? checked((int)material[1])
+            : 0;
+
+    private static int GetItemTemplateId(IReadOnlyList<object>? material)
+    {
+        if (material is not { Count: >= 3 }) return 0;
+        static bool TryInt64(object value, out long result)
+        {
+            if (value is System.Text.Json.JsonElement json && json.TryGetInt64(out result)) return true;
+            return long.TryParse(Convert.ToString(value), out result);
+        }
+        return TryInt64(material[0], out long type) && type == 1 &&
+            TryInt64(material[1], out long templateId)
+                ? checked((int)templateId)
+                : 0;
+    }
+}

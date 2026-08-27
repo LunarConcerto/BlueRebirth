@@ -156,7 +156,8 @@ public sealed record PlayerBuildingEntry(
     int Level,
     IReadOnlyList<uint> HeroIds,
     int Status = 1,
-    long LastUpdateTime = 0);
+    long LastUpdateTime = 0,
+    long LastBuildUpdateTime = 0);
 
 /// <summary>基地地图上的地块与建筑实例映射。</summary>
 public sealed record PlayerBuildingLand(int Index, int BuildingId);
@@ -264,8 +265,10 @@ public static class PlayerAccountFactory
     public static PlayerBuilding DefaultBuilding(int nowSeconds) => new(
         Buildings:
         [
-            new PlayerBuildingEntry(Id: 1, Tid: 2, Level: 2, HeroIds: [], LastUpdateTime: nowSeconds),
-            new PlayerBuildingEntry(Id: 2, Tid: 41, Level: 1, HeroIds: [], LastUpdateTime: nowSeconds),
+            new PlayerBuildingEntry(Id: 1, Tid: 2, Level: 2, HeroIds: [],
+                LastUpdateTime: nowSeconds, LastBuildUpdateTime: nowSeconds),
+            new PlayerBuildingEntry(Id: 2, Tid: 41, Level: 1, HeroIds: [],
+                LastUpdateTime: nowSeconds, LastBuildUpdateTime: nowSeconds),
         ],
         Lands:
         [

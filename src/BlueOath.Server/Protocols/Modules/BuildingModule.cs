@@ -2,7 +2,7 @@ using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
-/// <summary>基地模块：办公室/宿舍派驻与持久化快照。</summary>
+/// <summary>基地模块：建筑生命周期、舰娘派驻与持久化快照。</summary>
 internal sealed class BuildingModule(BuildingService building) : IGameModule
 {
     public IReadOnlyList<string> Prefixes => ["building"];
@@ -11,6 +11,36 @@ internal sealed class BuildingModule(BuildingService building) : IGameModule
     {
         switch (request.Method)
         {
+            case "building.AddBuilding":
+            {
+                AddBuildingArg arg = PlayerDataCodec.DecodeAddBuildingArg(request.Args ?? []);
+                BuildingService.Mutation mutation = await building.AddBuildingAsync(
+                    ctx.ProfileId, arg, ctx.Now, ctx.Ct);
+                return ToResult(ctx, mutation, mutation.Success
+                    ? PlayerDataCodec.EncodeAddBuildingRet(mutation.BuildingId)
+                    : []);
+            }
+            case "building.UpgradeBuilding":
+            {
+                int buildingId = PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []);
+                BuildingService.Mutation mutation = await building.UpgradeBuildingAsync(
+                    ctx.ProfileId, buildingId, ctx.Now, ctx.Ct);
+                return ToResult(ctx, mutation);
+            }
+            case "building.FinishBuilding":
+            {
+                int buildingId = PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []);
+                BuildingService.Mutation mutation = await building.FinishBuildingAsync(
+                    ctx.ProfileId, buildingId, ctx.Now, ctx.Ct);
+                return ToResult(ctx, mutation);
+            }
+            case "building.DegradeBuilding":
+            {
+                int buildingId = PlayerDataCodec.DecodeBuildingIdArg(request.Args ?? []);
+                BuildingService.Mutation mutation = await building.DegradeBuildingAsync(
+                    ctx.ProfileId, buildingId, ctx.Now, ctx.Ct);
+                return ToResult(ctx, mutation);
+            }
             case "building.SetHero":
             {
                 SetBuildingHeroArg arg = PlayerDataCodec.DecodeSetBuildingHeroArg(request.Args ?? []);
@@ -32,11 +62,11 @@ internal sealed class BuildingModule(BuildingService building) : IGameModule
                 var account = await ctx.GetAccountAsync();
                 return new ModuleResult
                 {
-                    PostPushes = [BuildingService.BuildInfoPush(account.Building, (uint)ctx.Now)],
+                    PrePushes = [BuildingService.BuildInfoPush(account.Building, (uint)ctx.Now)],
                 };
             }
             default:
-                // Production, construction, upgrade and story operations intentionally remain inert.
+                // Production, resource collection and story operations intentionally remain inert.
                 return ModuleResult.Empty;
         }
     }
@@ -47,13 +77,23 @@ internal sealed class BuildingModule(BuildingService building) : IGameModule
     {
         BuildingService.Mutation mutation = await building.SetHeroesAsync(
             ctx.ProfileId, assignments, ctx.Now, ctx.Ct);
-        if (!mutation.Success)
-            return new ModuleResult { Err = mutation.Err, ErrMsg = mutation.ErrMsg };
-        return new ModuleResult
-        {
-            PostPushes = [BuildingService.BuildInfoPush(mutation.Account.Building, (uint)ctx.Now)],
-        };
+        return ToResult(ctx, mutation);
     }
+
+    private static ModuleResult ToResult(
+        GameContext ctx,
+        BuildingService.Mutation mutation,
+        byte[]? ret = null) =>
+        mutation.Success
+            ? new ModuleResult
+            {
+                Ret = ret ?? [],
+                // 客户端在应答回调中立即读取 buildingData，因此快照必须先于应答到达。
+                PrePushes = [BuildingService.BuildInfoPush(
+                    mutation.Account.Building,
+                    checked((uint)ctx.Now))],
+            }
+            : new ModuleResult { Err = mutation.Err, ErrMsg = mutation.ErrMsg };
 
     private static bool TrySplitAssignments(
         SetBuildingListHeroArg arg,

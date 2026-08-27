@@ -59,7 +59,8 @@ public sealed record BuildingInfo(
     int Level = 0,
     IReadOnlyList<uint>? HeroList = null,
     int Status = 1,
-    long LastUpdateTime = 0);
+    long LastUpdateTime = 0,
+    long LastBuildUpdateTime = 0);
 
 /// <summary>building.UpdateBuildingInfo 的完整基地快照（TUserBuildingInfo）。</summary>
 public sealed record UserBuildingInfo(
@@ -76,6 +77,9 @@ public sealed record SetBuildingHeroArg(int BuildingId, IReadOnlyList<uint> Hero
 
 /// <summary>building.SetBuildingListHero 请求（TSetBuildingListHeroArg）。HeroIds 以 -1 分隔每栋建筑。</summary>
 public sealed record SetBuildingListHeroArg(IReadOnlyList<int> BuildingIds, IReadOnlyList<int> HeroIds);
+
+/// <summary>building.AddBuilding 请求（TAddBuildingArg）。</summary>
+public sealed record AddBuildingArg(int Tid, int Index);
 
 /// <summary>One hero owned by the player (THeroGrid). Extend with Equips/PSkill/CurHp/etc. as needed.</summary>
 public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
@@ -310,7 +314,7 @@ public static class PlayerDataCodec
         WriteVarintField(output, 10, 0); // RecipeId
         WriteVarintField(output, 11, 0); // ItemCount
         WriteVarintField(output, 12, unchecked((ulong)value.LastUpdateTime));
-        WriteVarintField(output, 13, unchecked((ulong)value.LastUpdateTime));
+        WriteVarintField(output, 13, unchecked((ulong)value.LastBuildUpdateTime));
         WriteVarintField(output, 15, 0); // RecipeTime
         WriteVarintField(output, 16, 0); // FloatCount
         return output.ToArray();
@@ -377,6 +381,42 @@ public static class PlayerDataCodec
             }
         }
         return new SetBuildingListHeroArg(buildingIds, heroIds);
+    }
+
+    public static AddBuildingArg DecodeAddBuildingArg(ReadOnlySpan<byte> payload)
+    {
+        int tid = 0;
+        int index = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: tid = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: index = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return new AddBuildingArg(tid, index);
+    }
+
+    public static int DecodeBuildingIdArg(ReadOnlySpan<byte> payload)
+    {
+        int buildingId = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 0) buildingId = checked((int)reader.ReadVarint());
+            else reader.Skip(wire);
+        }
+        return buildingId;
+    }
+
+    public static byte[] EncodeAddBuildingRet(int buildingId)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)buildingId));
+        return output.ToArray();
     }
 
     private static void ReadPackedInt32(ReadOnlySpan<byte> payload, Action<int> add)
