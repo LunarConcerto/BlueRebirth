@@ -466,7 +466,7 @@ internal static class ProtocolEncoder
             if (shipInfoId <= 0 || !vcrSent.Add(shipInfoId)) return;
             ProtocolPackage sv = new();
             sv.Write(0x08, unchecked((ulong)shipInfoId)); // ShipInfoId(1)
-            if (isSeaCopy)
+            if (isSearch3d)
             {
                 sv.Write(0x10, 1UL); // StartVcr(2)=true（海域跳进场演出）
                 sv.Write(0x18, 1UL); // EndVcr(3)=true（海域跳沉没演出）

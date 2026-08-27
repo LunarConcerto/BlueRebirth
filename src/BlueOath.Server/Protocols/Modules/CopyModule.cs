@@ -16,6 +16,9 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
             case "copy.StartBase":
                 result = ModuleResult.Ok(await battle.BuildStartBaseRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
+            case "copy.GetRandomFactors":
+                result = ModuleResult.Ok(EncodeGetRandomFactors(request.Args ?? [], ctx.Services));
+                break;
             case "copy.AttackBase":
                 result = ModuleResult.Ok(ProtocolEncoder.BuildAttackBaseRet(request.Args));
                 break;
@@ -62,5 +65,33 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                 break;
         }
         return result;
+    }
+
+    /// <summary>响应 copy.GetRandomFactors（TGetRandomFactorRet）。海域详情页按
+    /// config_copy_display.random_factor_sets 请求随机因子；无响应会使 LevelDetailsPage
+    /// 的 _GetRandFactorCallback 不触发（拷贝逻辑 SetRandFactors 缺失）。</summary>
+    private static byte[] EncodeGetRandomFactors(byte[] args, GameServices services)
+    {
+        int copyId = 0;
+        var reader = new ProtocolDecoder.ProtoReader(args);
+        while (reader.TryReadField(out int field, out int wire))
+            if (field == 1 && wire == 0) copyId = checked((int)reader.ReadVarint()); // CopyId(1)
+            else reader.Skip(wire);
+        ProtocolPackage ms = new();
+        if (services.CopyRandomFactors.TryGetValue(copyId, out var entries))
+            foreach (var e in entries)
+            {
+                // TRandomFactor{ Factors(1) repeated int32, GroupId(2), SetId(3) }
+                ProtocolPackage tf = new();
+                foreach (int f in e.Factors)
+                    tf.Write(0x08, unchecked((ulong)f));
+                if (e.GroupId != 0)
+                    tf.Write(0x10, unchecked((ulong)e.GroupId));
+                if (e.SetId != 0)
+                    tf.Write(0x18, unchecked((ulong)e.SetId));
+                ms.Write(0x0A, tf.ToArray()); // TGetRandomFactorRet.Factors(1)
+            }
+        // LastRefreshTime(2)=0 / IsShowTips(3)=false 默认省略
+        return ms.ToArray();
     }
 }
