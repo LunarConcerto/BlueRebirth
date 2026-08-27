@@ -373,7 +373,7 @@ internal static class ProtocolEncoder
         // StartBase 后走错战斗初始化分支并永久停在加载页。
         int copyType = ChapterCopyLoader.GetCopyType(copyId);
         if (copyType == 0) copyType = 1;
-        bool isSeaCopy = copyType == 2;
+        bool isSearch3d = CopyBattleLoader.IsSearch3d(copyId);
         ms.Write(0x38, unchecked((ulong)copyType));
         // RandomFactors (12) — 海域索敌/侦察场景初始化依赖。按 copyId 查表：
         // config_copy_display.random_factor_sets → config_random_factor_set.factor_groups
@@ -414,8 +414,9 @@ internal static class ProtocolEncoder
             ms.Write(0xD0, unchecked((ulong)matchType));
         }
 
-        // 海域索敌：补齐未编码字段（IsFinal/AnimMode/WeatherGroupId），索敌核心初始化可能检查。
-        if (isSeaCopy)
+        // 索敌玩法：补齐未编码字段（IsFinal/AnimMode/WeatherGroupId），索敌核心初始化可能检查。
+        // 不能只判断 SeaCopy；MubarCopy(33) 中也有 search_3d=1 的关卡。
+        if (isSearch3d)
         {
             // IsFinal (19) = false
             ms.Write(0x98, 0UL);
@@ -428,10 +429,10 @@ internal static class ProtocolEncoder
 
         // Token (16) = ""
         ms.Write(0x82, "1111111111111111111111111111111111111");
-        // arrRes (4) — TCopyRes[]。海域索敌 InitResPoint 遍历 copyRess（=arrRes）用元素查
-        // battlefield_resource，海域 battlefield_resource[copyId] 缺失导致 GetDict null 卡死。
-        // 海域 arrRes 发空（copyRess 空 → InitResPoint 跳过资源点生成）。
-        if (!isSeaCopy)
+        // arrRes (4) — TCopyRes[]。search_3d 的 InitResPoint 遍历 copyRess（=arrRes）用元素查
+        // battlefield_resource；活动/海域关卡常无对应记录，GetDict null 会永久卡加载。
+        // 所有 search_3d 关卡均发空，让 InitResPoint 安全跳过资源点生成。
+        if (!isSearch3d)
         {
             ProtocolPackage cr = new();
             cr.Write(0x08, unchecked((ulong)copyId)); // id
@@ -457,14 +458,29 @@ internal static class ProtocolEncoder
             ms.Write(0x28, unchecked((ulong)fid));
         }
 
-        // SkipVcr (17) — TCopySkipVcr[]，补发使 ctor 的 skipVcrs(+0x88) 段有数据
+        // SkipVcr (17) — TCopySkipVcr[]。客户端按 config_ship_info.si_id 查找，
+        // 因而必须同时覆盖玩家与敌舰；search_3d 的过期活动演出可能无法完成，统一跳过。
+        HashSet<int> vcrSent = [];
+        void EmitVcr(int shipInfoId)
         {
+            if (shipInfoId <= 0 || !vcrSent.Add(shipInfoId)) return;
             ProtocolPackage sv = new();
-            sv.Write(0x08, 1021051UL); // ShipInfoId=1（玩家一号舰的 ship_info_id）
-            // StartVcr(2)=false, EndVcr(3)=false 默认不编码（bool 默认 false）
+            sv.Write(0x08, unchecked((ulong)shipInfoId));
+            if (isSearch3d)
+            {
+                sv.Write(0x10, 1UL); // StartVcr(2)=true
+                sv.Write(0x18, 1UL); // EndVcr(3)=true
+            }
             byte[] svb = sv.ToArray();
             ms.Write(0x8A, svb);
         }
+
+        foreach (Hero dh in deploy)
+            EmitVcr(checked((dh.TemplateId - 1) / 10));
+        foreach (int fid in fleetIdList)
+            foreach (int enemyId in CopyBattleLoader.GetEnemyIds(fid))
+                if (CopyBattleLoader.GetEnemyStat(enemyId) is { } est && est.ShipInfoId > 0)
+                    EmitVcr(est.ShipInfoId);
 
         // EnemyFleets (24) — TBattleEnemyFleet[]，客户端 ctor 与战斗帧都需要。
         // 每个敌舰队（fleet_id 数组元素）各发一条，含该舰队 config_fleet.copy_enemys 的敌舰属性。
@@ -512,7 +528,7 @@ internal static class ProtocolEncoder
         // PveCoreCreator._InitWithStartDataCore 用 ConfigDatas[52002(0xCB22)] 作为索敌限时（秒）
         // 覆盖 battlefieldTime：ConfigDatas[52002]=v → 索敌限时=v*1000 ms。之前发 (52002,1) 导致
         // 索敌限时 1 秒立即耗尽。删除 52002 → TryGetValue 失败回退 dictCopy.battle_time=180。
-        if (isSeaCopy)
+        if (isSearch3d)
             foreach ((int t, int v) in new[] { (50000, 1), (0, 1) })
             {
                 ProtocolPackage ce = new();

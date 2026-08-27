@@ -333,6 +333,7 @@ internal static class CopyBattleLoader{
     private static readonly Dictionary<int, bool> _fleetHasAttached = new();
     private static readonly Dictionary<int, EnemyStat> _enemyStats = new();
     private static readonly Dictionary<int, List<int>> _copyMissions = new();
+    private static readonly HashSet<int> _search3dCopies = [];
     private static bool _loaded;
 
     public sealed record EnemyStat(int Hp, int Attack, int Defense, int Level, int ShipInfoId,
@@ -347,6 +348,7 @@ internal static class CopyBattleLoader{
             LoadFleetEnemies(configDir);
             LoadEnemyStats(configDir);
             LoadCopyMissions(configDir);
+            LoadCopyDisplay(configDir);
         }
         catch { }
         _loaded = true;
@@ -473,6 +475,23 @@ internal static class CopyBattleLoader{
         }
         catch { }
     }
+
+    private static void LoadCopyDisplay(string configDir)
+    {
+        try
+        {
+            ConfigDbLoader.LoadRows(configDir, "config_copy_display.db", (id, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("search_3d", out var search3d) &&
+                    search3d.ValueKind == JsonValueKind.Number && search3d.GetInt32() == 1)
+                    _search3dCopies.Add(id);
+            });
+        }
+        catch { }
+    }
+
+    public static bool IsSearch3d(int copyId) => _search3dCopies.Contains(copyId);
 
     public static int GetFleetIdWithAttached(int copyId)
         => GetFleetId(copyId);

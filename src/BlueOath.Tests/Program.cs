@@ -2031,6 +2031,38 @@ static Task MubarBattleStartCodecTest()
         copyId, account.Dock.Heroes.ToList(), account.Character);
     Assert(ProtocolDecoder.DecodeVarintField(payload, 7) == 33,
         "copy.StartBase downgraded MubarCopy to PlotCopy");
+    Assert(CopyBattleLoader.IsSearch3d(copyId),
+        "Mubar activity copy was not classified as search_3d");
+
+    bool hasCopyResource = false;
+    bool hasConfigData = false;
+    bool skipsEnemyVcr = false;
+    ProtocolDecoder.ProtoReader reader = new(payload);
+    while (reader.TryReadField(out int field, out int wire))
+    {
+        if (field == 4) hasCopyResource = true;
+        if (field == 25) hasConfigData = true;
+        if (field == 17 && wire == 2)
+        {
+            ProtocolDecoder.ProtoReader skip = new(reader.ReadBytes());
+            while (skip.TryReadField(out int skipField, out int skipWire))
+            {
+                if ((skipField == 2 || skipField == 3) && skipWire == 0)
+                {
+                    if (skip.ReadVarint() == 1)
+                        skipsEnemyVcr = true;
+                }
+                else
+                    skip.Skip(skipWire);
+            }
+            continue;
+        }
+        reader.Skip(wire);
+    }
+    Assert(!hasCopyResource,
+        "search_3d Mubar battle included arrRes and can stall on missing battlefield_resource");
+    Assert(hasConfigData, "search_3d Mubar battle omitted search initialization ConfigData");
+    Assert(skipsEnemyVcr, "search_3d Mubar battle did not skip blocking fleet VCR sequences");
     Assert(CopyBattleLoader.GetFleetIdList(copyId).Count > 0,
         "Mubar activity copy has no enemy fleet data");
     return Task.CompletedTask;
