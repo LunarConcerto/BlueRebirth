@@ -67,7 +67,8 @@ internal sealed class GameLoginSession(MessageRouter router, ILoggerFactory logg
 
                     // 每个请求都回一个 TResponse 信封（即使 Ret 为空），客户端按方法名接收。
                     var now = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-                    var response = new TResponse(Method: request.Method, Ret: result.Ret,
+                    var response = new TResponse(Err: result.Err, ErrMsg: result.ErrMsg,
+                        Method: request.Method, Ret: result.Ret,
                         CallbackHandler: request.CallbackHandler, Time: now,
                         Token: request.Token, Seq: 0, IsResponse: 1);
                     var encoded = TMessageCodec.EncodeResponse(response);

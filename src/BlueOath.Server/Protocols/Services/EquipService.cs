@@ -69,20 +69,22 @@ internal sealed class EquipService(GameServices services)
         return (ProtocolEncoder.EncodeEquipDismantleRet(rewards), removedIds);
     }
 
-    internal async Task<byte[]> BuildEnhanceRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<(byte[] Ret, bool Changed, string Error)> BuildEnhanceRetAsync(
+        TRequest request, string profileId, CancellationToken ct)
     {
-        if (request.Args is null) return [];
+        if (request.Args is null) return ([], false, "missing enhancement arguments");
         EquipEnhanceArgs arg = TMessageCodec.DecodeEquipEnhanceArgs(request.Args);
-        if (arg.EquipId == 0 || arg.ItemArr is not { Count: > 0 }) return [];
+        if (arg.EquipId == 0 || arg.ItemArr is not { Count: > 0 })
+            return ([], false, "no enhancement material was selected");
         using var _ = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
         List<EquipItem> equipItems = equip.Items.ToList();
         int equipIndex = equipItems.FindIndex(e => e.EquipId == arg.EquipId);
-        if (equipIndex < 0) return [];
+        if (equipIndex < 0) return ([], false, "equipment was not found");
         EquipItem current = equipItems[equipIndex];
         ConfigEquip? config = services.GetEquipConfig(current.TemplateId);
-        if (config is null) return [];
+        if (config is null) return ([], false, "equipment configuration was not found");
         Dictionary<uint, ulong> materialTotals = new();
         foreach (EquipEnhanceItem material in arg.ItemArr)
             materialTotals[material.TemplateId] = checked(materialTotals.GetValueOrDefault(material.TemplateId) + material.ItemNum);
@@ -95,11 +97,13 @@ internal sealed class EquipService(GameServices services)
         foreach (EquipEnhanceItem material in materials)
         {
             if (material.ItemNum == 0 || services.GetEquipEnhanceItem(checked((int)material.TemplateId)) is not { } item)
-                return [];
+                return ([], false, "invalid enhancement material");
             int bagIndex = bagItems.FindIndex(i => i.TemplateId == checked((int)material.TemplateId));
-            if (bagIndex < 0 || bagItems[bagIndex].Num < material.ItemNum) return [];
+            if (bagIndex < 0 || bagItems[bagIndex].Num < material.ItemNum)
+                return ([], false, "enhancement materials are insufficient");
             if (item.EnhanceLevelLimit is { Count: >= 2 } limit &&
-                (current.EnhanceLv < limit[0] || current.EnhanceLv > limit[1])) return [];
+                (current.EnhanceLv < limit[0] || current.EnhanceLv > limit[1]))
+                return ([], false, "enhancement material cannot be used at this level");
             addedExp += item.Exp * material.ItemNum;
         }
         int level = current.EnhanceLv;
@@ -120,7 +124,7 @@ internal sealed class EquipService(GameServices services)
         equipItems[equipIndex] = current with { EnhanceLv = level, EnhanceExp = checked((int)exp) };
         account = account with { Equip = equip with { Items = equipItems }, Bag = bag with { Items = bagItems } };
         await services.SaveAccountAsync(account, ct);
-        return TMessageCodec.EncodeEquipEnhanceRet(arg.EquipId, level, checked((int)exp));
+        return (TMessageCodec.EncodeEquipEnhanceRet(arg.EquipId, level, checked((int)exp)), true, "");
     }
 
     internal async Task<(byte[] Ret, bool Changed)> BuildRiseStarRetAsync(

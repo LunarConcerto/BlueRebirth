@@ -27,9 +27,13 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
                     },
                 };
             case "equip.Enhance":
+                var (enhanceRet, enhanced, enhanceError) =
+                    await equip.BuildEnhanceRetAsync(request, ctx.ProfileId, ctx.Ct);
                 return new ModuleResult
                 {
-                    Ret = await equip.BuildEnhanceRetAsync(request, ctx.ProfileId, ctx.Ct),
+                    Ret = enhanceRet,
+                    Err = enhanced ? 0 : 1,
+                    ErrMsg = enhanceError,
                     // The client handles EquipIntenstitySuccess as soon as the response arrives
                     // and reads Data.equipData to render the new level. Refresh that cache first.
                     PrePushes = await services.BuildEnhancePushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
@@ -39,6 +43,8 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
                 return new ModuleResult
                 {
                     Ret = riseRet,
+                    Err = changed ? 0 : 1,
+                    ErrMsg = changed ? "" : "equipment renovation requirements are not met",
                     // RiseStarSuccess immediately reads currency, bag, and equip caches.
                     PrePushes = changed
                         ? await services.BuildRiseStarPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)
