@@ -85,6 +85,8 @@ if (args.Contains("--building-integration", StringComparer.OrdinalIgnoreCase))
         ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
         ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest)
     ];
+if (args.Contains("--login-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("protobuf login server creates a local profile", GameLoginIntegrationTest)];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -530,6 +532,9 @@ static async Task GameLoginIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
+    var clientPath = Environment.GetEnvironmentVariable("BLUEOATH_CLIENT_PATH")
+        ?? Path.Combine(root, "blueoath", "blueoath");
+    startInfo.ArgumentList.Add("--client-path=" + clientPath);
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -541,6 +546,7 @@ static async Task GameLoginIntegrationTest()
         using var client = new TcpClient();
         await client.ConnectAsync("127.0.0.1", port, timeout.Token);
         var stream = client.GetStream();
+        var observedPushes = new List<TResponse>();
 
         async Task<TResponse> RoundTrip(string method, byte[]? args)
         {
@@ -554,6 +560,7 @@ static async Task GameLoginIntegrationTest()
                 // 服务器可能在应答前主动推送（IsResponse == 0），跳过直到拿到真正响应。
                 if (response.IsResponse == 1)
                     return response;
+                observedPushes.Add(response);
             }
         }
 
@@ -572,6 +579,9 @@ static async Task GameLoginIntegrationTest()
         var userLogin = await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
         Assert(userLogin.Method == "user.UserLogin", "user login response method mismatch");
         Assert(TMessageCodec.DecodeRetUserLogin(userLogin.Ret!) == "ok", "user login response ret mismatch");
+        Assert(observedPushes.Any(p => p.Method == "copy.GetCopy" && p.Ret is { Length: > 20 } &&
+            p.Ret[^2] == 0x18 && p.Ret[^1] == 33),
+            "user login did not synchronize MubarCopy (CopyType=33), leaving アンブラ進軍 empty");
 
         var userInfo = await RoundTrip("user.GetUserInfo", null);
         Assert(userInfo.Method == "user.GetUserInfo", "get user info response method mismatch");

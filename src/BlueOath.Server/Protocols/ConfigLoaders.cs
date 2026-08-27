@@ -727,6 +727,7 @@ internal static class ChapterCopyLoader
     private static readonly Dictionary<int, int> _firstCopyMap = new();
     private static readonly List<ChapterMemory> _allChapterMemories = [];
     private static readonly Dictionary<int, List<int>> _seaChapterCopies = new();
+    private static readonly Dictionary<int, List<int>> _mubarChapterCopies = new();
     private static int _seaFirstChapterId = 0;
     private static readonly Dictionary<int, int> _copyTypeMap = new();
     private static int _seaFirstCopyId = 0;
@@ -774,6 +775,14 @@ internal static class ChapterCopyLoader
                         _seaFirstCopyId = copies[0];
                     }
                 }
+                else if (ct == 33)
+                {
+                    // アンブラ進軍（MubarCopy）。主页入口按活动周期直接开放，
+                    // 因此登录时也必须有对应的 copy.GetCopy 数据，否则页面会以
+                    // 空章节列表启动并在动画结束后访问 chapterInfo[1]。
+                    _mubarChapterCopies[id] = copies;
+                    foreach (var cid in copies) _copyTypeMap[cid] = 33;
+                }
             });
             _allChapterMemories.Sort(static (left, right) => left.ChapterId.CompareTo(right.ChapterId));
             Console.Error.WriteLine(
@@ -810,6 +819,20 @@ internal static class ChapterCopyLoader
     {
         var levels = GetSeaLevels();
         return levels.Count > 0 ? levels[^1] : _seaFirstCopyId;
+    }
+
+    public static List<int> GetMubarLevels()
+    {
+        var result = new List<int>();
+        foreach (var chapterId in _mubarChapterCopies.Keys.OrderBy(x => x))
+            result.AddRange(_mubarChapterCopies[chapterId]);
+        return result;
+    }
+
+    public static int GetMubarLastCopyId()
+    {
+        var levels = GetMubarLevels();
+        return levels.Count > 0 ? levels[^1] : 0;
     }
 
     public static int GetCopyType(int copyId)

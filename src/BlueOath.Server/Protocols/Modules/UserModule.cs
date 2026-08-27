@@ -34,6 +34,10 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                             Method: "copy.GetCopy",
                             Ret: ProtocolEncoder.EncodeSeaCopyInfo(loginAccount.SeaProgress),
                             Time: now)),
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "copy.GetCopy",
+                            Ret: ProtocolEncoder.EncodeMubarCopyInfo(),
+                            Time: now)),
                     ],
                 };
                 break;

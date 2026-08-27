@@ -286,6 +286,13 @@ internal sealed class GameServices
                 Ret: ProtocolEncoder.EncodeSeaCopyInfo(account.SeaProgress),
                 Time: now)),
 
+            // アンブラ進軍（MubarCopy, CopyType=33）。入口是客户端长期活动配置，
+            // 不依赖服务器活动列表；不推送会导致 MubarCopyPage 以空章节列表启动。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "copy.GetCopy",
+                Ret: ProtocolEncoder.EncodeMubarCopyInfo(),
+                Time: now)),
+
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目
             // （IllustrateId = config_ship_handbook 的 key = ship_info_id）；未列出的条目
             // 由 IllustrateData:UpdateHero 从 config_ship_handbook 生成 LOCK 状态。

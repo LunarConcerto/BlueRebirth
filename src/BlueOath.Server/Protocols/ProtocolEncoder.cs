@@ -743,6 +743,30 @@ internal static class ProtocolEncoder
         return ms.ToArray();
     }
 
+    /// <summary>编码アンブラ進軍海域（MubarCopy, CopyType=33）数据。
+    /// 该系统的主页入口由客户端长期周期配置直接开放；缺少这份同步时，
+    /// MubarCopyPage 会拿到空章节列表，既不显示节点，也无法正常完成页面初始化。</summary>
+    public static byte[] EncodeMubarCopyInfo()
+    {
+        List<int> levels = ChapterCopyLoader.GetMubarLevels();
+        ProtocolPackage ms = new();
+        foreach (int cid in levels)
+        {
+            ProtocolPackage baseInfo = new();
+            baseInfo.Write(0x08, unchecked((ulong)cid)); // BaseId(1)
+            baseInfo.Write(0x10, 0UL); // Rid(2)=0
+            baseInfo.Write(0x18, 7UL); // StarLevel(3)，与当前离线开放策略一致
+            baseInfo.Write(0x20, 0UL); // IsRunningFight(4)=0
+            baseInfo.Write(0x28, 0UL); // LBPoint(5)=0
+            baseInfo.Write(0x30, 1UL); // FirstPassTime(6)，开放全部章节
+            ms.Write(0x0A, baseInfo.ToArray());
+        }
+
+        ms.Write(0x10, unchecked((ulong)ChapterCopyLoader.GetMubarLastCopyId())); // MaxCopyId(2)
+        ms.Write(0x18, 33UL); // CopyType(3)=MubarCopy
+        return ms.ToArray();
+    }
+
     /// <summary>
     /// 回环 copy.AttackBase 请求（TAttackBaseArg: AttackType(1)/CopyId(2)/HeroIds(3)/EnemyId(4)）
     /// 并附带一个伤害值（字段5，按最大生命值比例的扣血，HpCoefficient 比例尺=1e10 下 10%=1e9）。
