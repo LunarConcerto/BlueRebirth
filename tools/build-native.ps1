@@ -36,6 +36,20 @@ if (-not $vcvars) {
   throw 'Visual Studio C++ Build Tools not found. Install the VC.Tools.x86.x64 workload.'
 }
 
+# A CMake cache stores the absolute path of cl.exe. Keep caches separated by
+# MSVC toolset so switching/updating Visual Studio cannot silently reuse a
+# compiler from a different installation.
+$vcRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $vcvars))
+$toolsetVersionFile = Join-Path $vcRoot 'Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
+$toolsetVersion = if (Test-Path -LiteralPath $toolsetVersionFile) {
+  (Get-Content -LiteralPath $toolsetVersionFile -Raw).Trim()
+} else {
+  'unknown'
+}
+$toolsetToken = $toolsetVersion -replace '[^0-9A-Za-z.-]', '_'
+Write-Host "Using MSVC environment: $vcvars"
+Write-Host "Using MSVC toolset: $toolsetVersion"
+
 $cmake = (Get-Command cmake -ErrorAction SilentlyContinue).Source
 if (-not $cmake) {
   $insidersCmake = 'C:\Program Files\Microsoft Visual Studio\18\Insiders\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
@@ -62,19 +76,51 @@ if ($root -match '[^\x00-\x7F]') {
   if (-not $mappedDrive) { throw 'No free drive letter is available for the native build.' }
 }
 
-$build = Join-Path $sourceRoot 'native\build-x86-nmake'
+$build = Join-Path $sourceRoot "native\build-nmake-x86-$toolsetToken"
 $output = Join-Path $root 'native\bin-x86'
 New-Item -ItemType Directory -Force -Path $build | Out-Null
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 $hooksFlag = if ($DebugHooks) { '-DBLUEOATH_HOOKS_DEBUG=ON' } else { '-DBLUEOATH_HOOKS_DEBUG=OFF' }
 $luaModsFlag = if ($DisableLuaMods) { '-DBLUEOATH_LUA_MODS=OFF' } else { '-DBLUEOATH_LUA_MODS=ON' }
+
+function Assert-SelfContainedMsvcBinary {
+  param([Parameter(Mandatory)][string]$BinaryPath)
+
+  # The game ships old MSVC DLLs beside its executable. Windows resolves those
+  # before the system copies, so any dynamic CRT import can make a CI-built
+  # payload crash in DllMain before it signals the injector's ready event.
+  $inspectCommand = 'call "' + $vcvars + '" x86 >nul && dumpbin /nologo /dependents "' + $BinaryPath + '"'
+  $dependencyOutput = @(& cmd.exe /d /s /c $inspectCommand 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to inspect native dependencies for $BinaryPath"
+  }
+
+  $dependencyText = $dependencyOutput -join [Environment]::NewLine
+  $forbiddenRuntime = '(?i)\b(?:(?:MSVCP|VCRUNTIME)[^\s]*|UCRTBASE|api-ms-win-crt-[^\s]*)\.dll\b'
+  if ($dependencyText -match $forbiddenRuntime) {
+    throw "Native binary imports a dynamic MSVC/UCRT runtime ($($Matches[0])): $BinaryPath"
+  }
+
+  $imports = @($dependencyOutput |
+    Where-Object { $_ -match '^\s+[A-Za-z0-9_.-]+\.dll\s*$' } |
+    ForEach-Object { $_.Trim() })
+  Write-Host "Verified static MSVC runtime: $(Split-Path -Leaf $BinaryPath) [$($imports -join ', ')]"
+}
+
 try {
   $command = 'call "' + $vcvars + '" x86 && "' + $cmake + '" -S "' + (Join-Path $sourceRoot 'native') + '" -B "' + $build + '" -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=' + $Configuration + ' ' + $hooksFlag + ' ' + $luaModsFlag + ' && "' + $cmake + '" --build "' + $build + '"'
   cmd.exe /d /s /c $command
   if ($LASTEXITCODE -ne 0) { throw "Native build failed: $LASTEXITCODE" }
-  Copy-Item -LiteralPath (Join-Path $build 'BlueOath.Injector.exe') -Destination $output -Force
-  Copy-Item -LiteralPath (Join-Path $build 'BlueOath.Payload.dll') -Destination $output -Force
-  Copy-Item -LiteralPath (Join-Path $build 'BlueOath.LuaLoaderProbe.dll') -Destination $output -Force
+
+  $injectorBinary = Join-Path $build 'BlueOath.Injector.exe'
+  $payloadBinary = Join-Path $build 'BlueOath.Payload.dll'
+  $probeBinary = Join-Path $build 'BlueOath.LuaLoaderProbe.dll'
+  Assert-SelfContainedMsvcBinary -BinaryPath $injectorBinary
+  Assert-SelfContainedMsvcBinary -BinaryPath $payloadBinary
+  Assert-SelfContainedMsvcBinary -BinaryPath $probeBinary
+  Copy-Item -LiteralPath $injectorBinary -Destination $output -Force
+  Copy-Item -LiteralPath $payloadBinary -Destination $output -Force
+  Copy-Item -LiteralPath $probeBinary -Destination $output -Force
 }
 finally {
   if ($mappedDrive) { & subst.exe $mappedDrive /d }

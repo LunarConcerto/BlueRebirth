@@ -60,6 +60,22 @@ internal static class ProtocolDecoder
         return new MarryArg(heroId, marryType);
     }
 
+    /// <summary>解码 hero.HeroRemould 参数：HeroId(1, uint32), EffectId(2, int32)。</summary>
+    internal static HeroRemouldArg DecodeHeroRemouldArg(ReadOnlySpan<byte> payload)
+    {
+        ProtoReader reader = new(payload);
+        uint heroId = 0;
+        int effectId = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
+                case 2 when wire == 0: effectId = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        return new HeroRemouldArg(heroId, effectId);
+    }
+
     /// <summary>解码 TBuildShipArg: Id(1, int32), Num(2, int32), CacheId(3, string)。</summary>
     internal static BuildShipArg DecodeBuildShipArg(ReadOnlySpan<byte> payload)
     {
@@ -76,6 +92,72 @@ internal static class ProtocolDecoder
             }
 
         return new BuildShipArg(id, num, cacheId);
+    }
+
+    /// <summary>解码 build.BuildingByFormula 的重复 TBuildProject。</summary>
+    internal static ConstructionProjectsArg DecodeConstructionProjectsArg(ReadOnlySpan<byte> payload)
+    {
+        List<ConstructionProjectArg> projects = [];
+        ProtoReader reader = new(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field != 1 || wire != 2)
+            {
+                reader.Skip(wire);
+                continue;
+            }
+
+            ProtoReader projectReader = new(reader.ReadBytes());
+            List<ConstructionItemArg> items = [];
+            int gold = 0;
+            while (projectReader.TryReadField(out int projectField, out int projectWire))
+            {
+                if (projectField == 1 && projectWire == 2)
+                {
+                    ProtoReader itemReader = new(projectReader.ReadBytes());
+                    int resId = 0, count = 0;
+                    while (itemReader.TryReadField(out int itemField, out int itemWire))
+                        if (itemField == 1 && itemWire == 0)
+                            resId = checked((int)itemReader.ReadVarint());
+                        else if (itemField == 2 && itemWire == 0)
+                            count = checked((int)itemReader.ReadVarint());
+                        else
+                            itemReader.Skip(itemWire);
+                    items.Add(new ConstructionItemArg(resId, count));
+                }
+                else if (projectField == 2 && projectWire == 0)
+                {
+                    gold = checked((int)projectReader.ReadVarint());
+                }
+                else
+                {
+                    projectReader.Skip(projectWire);
+                }
+            }
+            projects.Add(new ConstructionProjectArg(items, gold));
+        }
+        return new ConstructionProjectsArg(projects);
+    }
+
+    /// <summary>解码 build.BuildReceive / BuildQuicklyFinish 的 1-based 重复索引。</summary>
+    internal static ConstructionIndexArg DecodeConstructionIndexArg(ReadOnlySpan<byte> payload)
+    {
+        List<int> indexes = [];
+        ProtoReader reader = new(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 0)
+                indexes.Add(checked((int)reader.ReadVarint()));
+            else if (field == 1 && wire == 2)
+            {
+                ProtoReader packed = new(reader.ReadBytes());
+                while (packed.HasRemaining)
+                    indexes.Add(checked((int)packed.ReadVarint()));
+            }
+            else
+                reader.Skip(wire);
+        }
+        return new ConstructionIndexArg(indexes);
     }
 
     /// <summary>解码 hero.AddExp 参数：HeroId(1, uint32), Items(2, repeated {ItemId(2), Num(3)})。</summary>

@@ -620,6 +620,7 @@ function BuildShipPage:_DisplayShip()
       girlId = shipInfo.si_id,
       HeroId = heroId,
       buildNum = self.buildNum,
+      bNew = isNew,
       spReward = spReward,
       transReward = transReward
     })

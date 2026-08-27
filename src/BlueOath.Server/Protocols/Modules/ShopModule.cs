@@ -39,6 +39,23 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
             case "bag.GetBagInfo":
                 result = ModuleResult.Ok(await shop.BuildGetBagInfoRetAsync(ctx.ProfileId, ctx.Ct));
                 break;
+            case "bag.GetNormalTreasureInfo":
+                ShopService.TreasureOpenResult treasure =
+                    await shop.BuildOpenNormalTreasureRetAsync(request, ctx.ProfileId, ctx.Ct);
+                result = new ModuleResult
+                {
+                    Ret = treasure.Ret,
+                    Err = treasure.Changed ? 0 : 1,
+                    ErrMsg = treasure.Error,
+                    // 宝箱成功回调会立即重读背包并展示装备；先刷新所有可能受奖励影响的缓存。
+                    PrePushes = treasure.Changed
+                        ? await services.BuildBuyPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct,
+                            treasure.RemovedTreasureTemplateId > 0
+                                ? [treasure.RemovedTreasureTemplateId]
+                                : null)
+                        : [],
+                };
+                break;
             case "shop.RefreshShop":
             default:
                 result = ModuleResult.Empty;

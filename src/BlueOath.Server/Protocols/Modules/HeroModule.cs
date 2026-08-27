@@ -201,13 +201,43 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     PrePushes = BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
                 };
                 break;
+            case "hero.HeroRemould":
+                HeroService.RemouldResult remould =
+                    await hero.BuildHeroRemouldRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (!remould.Changed || remould.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = remould.Ret,
+                        Err = 1,
+                        ErrMsg = remould.Error,
+                    };
+                    break;
+                }
+                PlayerAccount remouldAccount = await ctx.GetAccountAsync();
+                uint remouldNow = (uint)ctx.Now;
+                result = new ModuleResult
+                {
+                    Ret = remould.Ret,
+                    // Lua 成功回调会立即重读节点、技能、背包和货币，均需在应答前刷新。
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(
+                                [GameServices.ToHeroGrid(remould.UpdatedHero)], remouldAccount.Dock.BagSize)),
+                            Time: remouldNow)),
+                        services.BuildBagPush(remouldAccount, remouldNow),
+                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, remouldNow, ctx.Ct),
+                    ],
+                };
+                break;
             case "hero.HeroIntensify":
             case "hero.HeroAdvanceMUB":
             case "hero.AutoEquip":
             case "hero.AutoUnEquip":
             case "hero.HeroAdvMaxLv":
             case "hero.HeroEquipEffect":
-            case "hero.HeroRemould":
             case "hero.EquipBinding":
             case "hero.EquipUnBinding":
             case "hero.EquipLockTransplant":
