@@ -221,6 +221,7 @@ static async Task TcpIntegrationTest()
     var data = Path.Combine(Path.GetTempPath(), "blueoath-tcp-" + Guid.NewGuid().ToString("N"));
     var startInfo = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
     startInfo.ArgumentList.Add(serverDll); startInfo.ArgumentList.Add("--port=0"); startInfo.ArgumentList.Add("--region=jp"); startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -260,6 +261,7 @@ static async Task GameLoginIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -331,6 +333,7 @@ static async Task TacticIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -403,8 +406,7 @@ static async Task FashionUnlockIntegrationTest()
     var root = FindRepositoryRoot();
     var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
-    // 数据目录必须位于项目根之下，ConfigDbLoader.FindConfigDir 向上最多 8 级才能命中
-    // blueoath/.../StreamingAssets/config（临时目录在系统盘，永远找不到）。
+    // 游戏客户端配置目录由 --client-path 直接指定（不再依赖数据目录位置向上逐级查找）。
     var data = Path.Combine(root, "test-fashion-tmp");
     Directory.CreateDirectory(data);
     var startInfo = new ProcessStartInfo("dotnet")
@@ -419,6 +421,7 @@ static async Task FashionUnlockIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -533,6 +536,7 @@ static async Task HeroMutationIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {

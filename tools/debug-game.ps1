@@ -21,6 +21,7 @@ if (-not $SkipBuild) {
 $stamp     = Get-Date -Format 'yyyyMMdd-HHmmss'
 $runRoot   = Join-Path $root "runtime\debug\$stamp"
 $dataRoot  = Join-Path $root 'runtime\jp'
+$clientPath = Join-Path $root 'blueoath\blueoath'
 $tlsRoot   = Join-Path $runRoot 'tls'
 $traffic   = Join-Path $runRoot 'traffic'
 $serverOut = Join-Path $runRoot 'server.stdout.log'
@@ -60,7 +61,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "TLS material generation failed: $materialLine" }
   $material = $materialLine | ConvertFrom-Json
 
-  $serverArgs = @($serverDll,  '--port=0', '--region=jp', "--data=$dataRoot", "--capture=$traffic", '--game-login-port=7201', '--gm-port=9780')
+  $serverArgs = @($serverDll,  '--port=0', '--region=jp', "--data=$dataRoot", "--client-path=$clientPath", "--capture=$traffic", '--game-login-port=7201', '--gm-port=9780')
   $serverStart = [System.Diagnostics.ProcessStartInfo]::new('dotnet')
   $serverStart.UseShellExecute = $false
   $serverStart.CreateNoWindow = $true

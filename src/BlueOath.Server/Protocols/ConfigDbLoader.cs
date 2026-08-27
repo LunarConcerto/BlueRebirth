@@ -18,20 +18,13 @@ internal static class ConfigDbLoader
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
-    /// 从 dataRoot 向上逐级查找游戏配置目录
-    /// （blueoath/blueoath/blueoath_Data/StreamingAssets/config）。
-    /// 适配不同 --data 深度（如 runtime/jp 下 dataRoot/../.. 即项目根，
-    /// bin/Debug/net8.0/data 需向上 6 级）。
+    /// 直接由启动参数传入的客户端路径计算游戏配置目录
+    /// （<c>{clientPath}/blueoath_Data/StreamingAssets/config</c>），不再向上逐级查找。
     /// </summary>
-    public static string FindConfigDir(string dataRoot)
+    public static string BuildConfigDir(string clientPath)
     {
-        var dir = new DirectoryInfo(dataRoot);
-        for (var i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
-        {
-            var cand = Path.Combine(dir.FullName, "blueoath", "blueoath", "blueoath_Data", "StreamingAssets", "config");
-            if (Directory.Exists(cand)) return cand;
-        }
-        return dataRoot;
+        if (string.IsNullOrEmpty(clientPath)) return "";
+        return Path.Combine(clientPath, "blueoath_Data", "StreamingAssets", "config");
     }
 
     /// <summary>

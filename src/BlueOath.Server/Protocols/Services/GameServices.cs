@@ -39,23 +39,25 @@ internal sealed class GameServices
         _repo = repo;
         _logger = loggerFactory.CreateLogger<GameServices>();
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
+        // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
+        string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
         _gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
-        FashionConfigLoader.Load(options.DataRoot);
+        FashionConfigLoader.Load(configDir);
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
-        (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(options.DataRoot);
-        (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
-        _copyRandomFactors = RandomFactorLoader.Load(options.DataRoot);
-        ChapterCopyLoader.Load(options.DataRoot);
-        CopyBattleLoader.Load(options.DataRoot);
-        MissionChainLoader.Load(options.DataRoot);
-        ShipMainLoader.Load(options.DataRoot);
-        AssistShipLoader.Load(options.DataRoot);
-        EquipLoader.Load(options.DataRoot);
-        AffectionItemLoader.Load(options.DataRoot);
-        ShipHandbookLoader.Load(options.DataRoot);
-        PlotTriggerLoader.Load(options.DataRoot);
+        (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
+        (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
+        _copyRandomFactors = RandomFactorLoader.Load(configDir);
+        ChapterCopyLoader.Load(configDir);
+        CopyBattleLoader.Load(configDir);
+        MissionChainLoader.Load(configDir);
+        ShipMainLoader.Load(configDir);
+        AssistShipLoader.Load(configDir);
+        EquipLoader.Load(configDir);
+        AffectionItemLoader.Load(configDir);
+        ShipHandbookLoader.Load(configDir);
+        PlotTriggerLoader.Load(configDir);
     }
 
     /// <summary>文件日志（game-login.log）供各模块记录帧级诊断。</summary>

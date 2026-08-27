@@ -9,6 +9,7 @@ internal sealed record ServerOptions(
     int Port,
     ProtocolProfile Profile,
     string DataRoot,
+    string ClientPath,
     bool EnableTls,
     string? TlsOutputRoot,
     string? CaptureRoot,
@@ -23,6 +24,7 @@ internal sealed record ServerOptions(
         var port = 0;
         var profile = ProtocolProfile.Japan;
         var dataRoot = Path.Combine(AppContext.BaseDirectory, "data");
+        var clientPath = "";
         var enableTls = false;
         string? tlsOutputRoot = null;
         string? captureRoot = null;
@@ -40,6 +42,8 @@ internal sealed record ServerOptions(
                 profile = ProtocolProfile.China;
             else if (arg.StartsWith("--data=", StringComparison.OrdinalIgnoreCase))
                 dataRoot = arg[7..];
+            else if (arg.StartsWith("--client-path=", StringComparison.OrdinalIgnoreCase))
+                clientPath = arg[14..];
             else if (arg.StartsWith("--capture=", StringComparison.OrdinalIgnoreCase))
                 captureRoot = Path.GetFullPath(arg[10..]);
             else if (arg.StartsWith("--tls-output=", StringComparison.OrdinalIgnoreCase))
@@ -59,7 +63,7 @@ internal sealed record ServerOptions(
                 gmPort = parsedGmPort;
         }
 
-        return new ServerOptions(port, profile, dataRoot, enableTls, tlsOutputRoot, captureRoot,
+        return new ServerOptions(port, profile, dataRoot, clientPath, enableTls, tlsOutputRoot, captureRoot,
             tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort);
     }
 }
