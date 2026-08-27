@@ -151,6 +151,10 @@ CopyIfExists(Path.Combine(root, "tools", "tls-loopback-proxy.py"), toolsDst);
 // Baseline
 CopyIfExists(Path.Combine(root, "baseline.json"), outputDir);
 
+var modsSrc = Path.Combine(root, "Mods");
+if (Directory.Exists(modsSrc))
+    CopyDirectory(modsSrc, Path.Combine(outputDir, "Mods"));
+
 Console.WriteLine("  Runtime files copied.");
 
 // Step 5: Bundle Python embeddable

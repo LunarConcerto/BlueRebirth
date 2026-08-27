@@ -111,6 +111,30 @@ dotnet run --project .\src\BlueOath.Launcher\BlueOath.Launcher.csproj -- --regio
 
 `tools/baseline.ps1` 生成 `baseline.json`，记录两服版本、架构和关键文件 SHA-256。示例 Mod 位于 `Mods/example.mod`。`BlueOath.Mods` 负责清单、目标版本、依赖和加载顺序发现，并将事件排队给后续 xLua runtime handoff。
 
+### xLua Mod Loader（JP 1.4.0 实验版）
+
+Payload 会等待已知版本的 `xlua.dll` 加载，在一次正常 `lua_pcallk` 返回后从游戏 Lua
+线程执行 `Mods/bootstrap.lua`。实验版只接受基线中的 JP 1.4.0 `xlua.dll` SHA-256；
+未知版本会记录 `hook refused` 并保持客户端代码不变。
+如需紧急回退，可用 `tools/build-native.ps1 -DisableLuaMods` 构建不含 Loader 的主 Payload；
+隔离 Probe 仍会保留，便于继续诊断。
+
+首次验证时查看 `native/bin-x86/BlueOath.Payload.log`：
+
+```text
+[LuaModLoader] lua_pcallk hook installed; waiting for Lua environment
+[LuaModLoader] lua: [BlueOath.Mods] example.mod/main.lua: example.mod bootstrap active
+[LuaModLoader] lua: [BlueOath.Mods] bootstrap complete; loaded 1 mod(s)
+[LuaModLoader] bootstrap executed successfully: ...\\Mods\\bootstrap.lua
+```
+
+`bootstrap.lua` 当前通过一个显式入口列表加载 `example.mod/main.lua`，用于验证明文 Lua
+文件能够进入客户端运行时。通用的 `mod.json` 依赖排序、生命周期事件和模块覆盖仍属于后续工作。
+
+若完整 Payload 还受其它版本相关 hook 影响，可使用构建产物
+`native/bin-x86/BlueOath.LuaLoaderProbe.dll` 隔离验证 Loader；该 Probe 不包含网络、SDK、
+战斗或 UI hook，也不会被发布器打进正式包。
+
 ## 客户端配置数据库
 
 游戏客户端的 SQLite 配置表以 JSON 为数据单元，已知表结构为
