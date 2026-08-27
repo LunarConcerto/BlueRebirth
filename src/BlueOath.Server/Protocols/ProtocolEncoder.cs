@@ -368,10 +368,13 @@ internal static class ProtocolEncoder
         ms.Write(0x18, unchecked((ulong)copyRid));
         // CopyId (6) — 客户端用它在 config_copy_display 里查配置（键=显示 id，来自请求）
         ms.Write(0x30, unchecked((ulong)copyId));
-        // CopyType (7)：剧情=1(PlotCopy)，海域=2(SeaCopy)。海域关卡战斗初始化按 CopyType 分支。
-        // 海域侦察任务按 SeaCopy(2) 走索敌 3D 玩法，是正常逻辑，不能绕开（绕开会失去索敌玩法意义）。
-        bool isSeaCopy = ChapterCopyLoader.GetSeaLevels().Contains(copyId);
-        ms.Write(0x38, isSeaCopy ? 2UL : 1UL);
+        // CopyType (7) 必须与关卡所属章节一致。除剧情(1)/海域(2)外，
+        // アンブラ進軍使用 MubarCopy(33)；误发为 PlotCopy 会让客户端在收到
+        // StartBase 后走错战斗初始化分支并永久停在加载页。
+        int copyType = ChapterCopyLoader.GetCopyType(copyId);
+        if (copyType == 0) copyType = 1;
+        bool isSeaCopy = copyType == 2;
+        ms.Write(0x38, unchecked((ulong)copyType));
         // RandomFactors (12) — 海域索敌/侦察场景初始化依赖。按 copyId 查表：
         // config_copy_display.random_factor_sets → config_random_factor_set.factor_groups
         // → config_random_factor_group.factor（RandomFactorLoader）。海域 1600100 → [61]。

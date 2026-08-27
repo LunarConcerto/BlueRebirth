@@ -24,6 +24,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
     ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
     ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
+    ("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest),
     ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
     ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
@@ -87,6 +88,8 @@ if (args.Contains("--building-integration", StringComparer.OrdinalIgnoreCase))
     ];
 if (args.Contains("--login-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("protobuf login server creates a local profile", GameLoginIntegrationTest)];
+if (args.Contains("--mubar-battle-codec", StringComparer.OrdinalIgnoreCase))
+    tests = [("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest)];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -586,6 +589,16 @@ static async Task GameLoginIntegrationTest()
         var userInfo = await RoundTrip("user.GetUserInfo", null);
         Assert(userInfo.Method == "user.GetUserInfo", "get user info response method mismatch");
         Assert(userInfo.Ret is { Length: > 0 }, "get user info response was empty");
+
+        byte[] mubarStartArgs = new ProtocolPackage()
+            .Write(0x10, 932113UL) // CopyId(2)
+            .Write(0x48, 1UL)      // BattleMode(9)=Normal
+            .ToArray();
+        var mubarStart = await RoundTrip("copy.StartBase", mubarStartArgs);
+        Assert(mubarStart.Method == "copy.StartBase", "Mubar StartBase response method mismatch");
+        Assert(mubarStart.Ret is { Length: > 0 } &&
+               ProtocolDecoder.DecodeVarintField(mubarStart.Ret, 7) == 33,
+            "Mubar StartBase response did not preserve CopyType 33");
     }
     finally
     {
@@ -2001,6 +2014,26 @@ static string FindRepositoryRoot()
         current = current.Parent;
     }
     throw new DirectoryNotFoundException("Repository root not found");
+}
+
+static Task MubarBattleStartCodecTest()
+{
+    string configDir = FindClientConfigDir();
+    ChapterCopyLoader.Load(configDir);
+    CopyBattleLoader.Load(configDir);
+
+    const int copyId = 932113; // 实际客户端日志中的アンブラ進軍关卡
+    Assert(ChapterCopyLoader.GetCopyType(copyId) == 33,
+        "Mubar activity copy was not classified as CopyType 33");
+
+    PlayerAccount account = PlayerAccountFactory.CreateDefault("mubar-codec", 1);
+    byte[] payload = ProtocolEncoder.EncodeStartBaseRet(
+        copyId, account.Dock.Heroes.ToList(), account.Character);
+    Assert(ProtocolDecoder.DecodeVarintField(payload, 7) == 33,
+        "copy.StartBase downgraded MubarCopy to PlotCopy");
+    Assert(CopyBattleLoader.GetFleetIdList(copyId).Count > 0,
+        "Mubar activity copy has no enemy fleet data");
+    return Task.CompletedTask;
 }
 
 static string FindClientConfigDir()
