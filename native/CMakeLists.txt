@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.15)
+if(POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
 project(BlueOathNative LANGUAGES CXX)
+
+# The JP client ships its own 2018-era MSVC runtime DLLs. A payload linked with
+# the current dynamic runtime resolves MSVCP/VCRUNTIME imports to those older
+# copies after injection and can crash before signalling the ready event.
+# Keep the native tools self-contained so their C++ runtime always matches the
+# compiler that produced them.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
   message(FATAL_ERROR "BlueOath native components must be built for x86")
