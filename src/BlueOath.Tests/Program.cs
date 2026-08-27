@@ -33,6 +33,8 @@ if (args.Contains("--retire-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--hero-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -359,6 +361,14 @@ static async Task TacticIntegrationTest()
             new byte[] { 0x0A, 0x04, (byte)'t', (byte)'a', (byte)'c', (byte)'1', 0x10, 0x01 });
         await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
 
+        // An explicitly encoded empty tacticName lets the Lua client distinguish the default
+        // name from nil and replace it with the localized First..Fifth Fleet text.
+        var defaults = await RoundTrip("tactic.GetHerosTactic", null);
+        for (byte fleetId = 1; fleetId <= 5; fleetId++)
+            Assert(defaults.Ret is { Length: > 0 } &&
+                ContainsSequence(defaults.Ret, new byte[] { 0x0A, 0x00, 0x18, fleetId }),
+                $"default fleet {fleetId} did not contain an explicit empty localized-name marker");
+
         // tactic.SetHerosTactic: tactics[0] { heroInfo=[1], modeId=1, strategyId=0, formationId=2, type=1 }
         var entry = new ProtocolPackage();
         entry.Write(0x10, 1UL); // heroInfo (2)
@@ -602,8 +612,9 @@ static async Task HeroMutationIntegrationTest()
         Assert(retire.Err == 0 && retire.Ret is { Length: > 0 }, "retirement response did not contain rewards");
         TResponse heroPush = pushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
             ?? throw new InvalidDataException("retirement did not push a hero deletion marker");
-        Assert(heroPush.Ret is { Length: > 0 } && ContainsSequence(heroPush.Ret, new byte[] { 0x08, 0x02 }),
-            "hero deletion marker did not include HeroId=2");
+        Assert(heroPush.Ret is { Length: > 0 } &&
+            ContainsSequence(heroPush.Ret, new byte[] { 0x08, 0x02, 0x10, 0x00 }),
+            "hero deletion marker did not explicitly include HeroId=2 and TemplateId=0");
         Assert(pushes.Any(p => p.Method == "user.UpdateUserInfo"), "retirement did not refresh currencies");
         Assert(pushes.Any(p => p.Method == "equip.UpdateEquipBagData"), "retirement did not refresh equipment");
 

@@ -588,8 +588,10 @@ internal static class ProtocolEncoder
         {
             ProtocolPackage entry = new();
             // tacticName (1)
-            if (!string.IsNullOrEmpty(t.TacticName))
-                entry.Write(0x0A, t.TacticName);
+            // Empty means "use the localized default fleet name". The Lua protobuf runtime
+            // represents an omitted optional string as nil, while FleetLogic only applies its
+            // localized fallback when tacticName == "", so the zero-length field is required.
+            entry.Write(0x0A, t.TacticName ?? "");
             // heroInfo (2, repeated int32)
             if (t.HeroInfo is { Count: > 0 })
                 foreach (int h in t.HeroInfo)

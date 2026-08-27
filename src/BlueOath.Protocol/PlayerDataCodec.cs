@@ -329,7 +329,11 @@ var reader = new GameLoginCodec.ProtoReader(payload);
     {
         using var output = new MemoryStream();
         if (value.HeroId != 0) WriteVarintField(output, 1, value.HeroId);
-        if (value.TemplateId != 0) WriteVarintField(output, 2, unchecked((ulong)value.TemplateId));
+        // TemplateId=0 is the deletion marker consumed by herodata.SetData. The Lua protobuf
+        // runtime leaves an omitted optional scalar as nil (rather than applying a zero default),
+        // so omitting this field makes a retired hero enter the normal update branch and aborts
+        // the remaining client-side refresh before its equipment can be shown for dismantling.
+        WriteVarintField(output, 2, unchecked((ulong)value.TemplateId));
         // Equips (field 3, repeated)：每个 FleetType 编码一个 EquipsInfoByType。
         // EquipsId 无条件编码 0：RefreshHeroEquipData 里 `equip.EquipsId > 0` 判断，nil 会崩。
         var slots = value.EquipSlots;
