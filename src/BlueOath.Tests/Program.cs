@@ -17,6 +17,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
     ("equipment renovation request decodes consumed equipment ids", EquipRiseStarArgsCodecTest),
     ("zero-count bag entries encode an explicit deletion marker", BagDeletionMarkerCodecTest),
+    ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
@@ -42,6 +43,8 @@ if (args.Contains("--marry-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase and consecutive marriages are atomic", HeroMutationIntegrationTest)];
 if (args.Contains("--shop-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase refreshes inventory before its response", HeroMutationIntegrationTest)];
+if (args.Contains("--treasure-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("equipment treasure consumes its box and persists a new equipment instance", TreasureIntegrationTest)];
 if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
 var failed = 0;
@@ -108,6 +111,20 @@ static Task BagDeletionMarkerCodecTest()
     var payload = PlayerDataCodec.Encode(new BagGridInfo(10180, 0));
     Assert(payload.AsSpan().SequenceEqual(new byte[] { 0x08, 0xC4, 0x4F, 0x10, 0x00 }),
         "zero-count bag entry omitted the explicit Num=0 deletion marker");
+    return Task.CompletedTask;
+}
+
+static Task TreasureCodecTest()
+{
+    var arg = PlayerDataCodec.DecodeBagNormalTreasureInfoArg(
+        new byte[] { 0x08, 0xBC, 0x50, 0x10, 0x01 });
+    Assert(arg == new BagNormalTreasureInfoArg(10300, 1),
+        "normal treasure request protobuf mismatch");
+
+    var payload = PlayerDataCodec.Encode(new BagTreasureInfoRet(
+        [new CommonReward(Type: 2, ConfigId: 30164, Num: 1, Id: 7)], TreasureId: 10300));
+    Assert(payload.Length > 5 && payload[0] == 0x0A && payload[^3..].SequenceEqual(new byte[] { 0x10, 0xBC, 0x50 }),
+        "normal treasure response protobuf mismatch");
     return Task.CompletedTask;
 }
 
@@ -321,6 +338,93 @@ static async Task GameLoginIntegrationTest()
         var userInfo = await RoundTrip("user.GetUserInfo", null);
         Assert(userInfo.Method == "user.GetUserInfo", "get user info response method mismatch");
         Assert(userInfo.Ret is { Length: > 0 }, "get user info response was empty");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+static async Task TreasureIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var data = Path.Combine(root, "test-treasure-tmp");
+    Directory.CreateDirectory(data);
+    const string profileId = "treasure-player";
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "treasure test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        var port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        var stream = client.GetStream();
+
+        async Task<TResponse> RoundTrip(string method, byte[]? args, ICollection<TResponse>? prePushes = null)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return response;
+                prePushes?.Add(response);
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("player.GetUserList", null);
+        await RoundTrip("player.CreateUser",
+            new byte[] { 0x0A, 0x04, (byte)'b', (byte)'o', (byte)'x', (byte)'1', 0x10, 0x01 });
+        await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
+
+        // GM 商品 10001（shop 18）发放一个 10300「激稀有武器箱」。
+        TResponse bought = await RoundTrip("shop.BuyGoods",
+            new byte[] { 0x08, 0x12, 0x10, 0x91, 0x4E, 0x18, 0x01 });
+        Assert(bought.Err == 0, "equipment treasure could not be granted");
+        var repo = new SqliteGameRepository(data);
+        PlayerAccount before = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("treasure profile was not persisted");
+        int equipCountBefore = before.Equip?.Items.Count ?? 0;
+        Assert(before.Bag?.Items.Any(x => x.TemplateId == 10300 && x.Num == 1) == true,
+            "granted equipment treasure was missing from the bag");
+
+        var openPushes = new List<TResponse>();
+        TResponse opened = await RoundTrip("bag.GetNormalTreasureInfo",
+            new byte[] { 0x08, 0xBC, 0x50, 0x10, 0x01 }, openPushes);
+        Assert(opened.Err == 0 && opened.Ret is { Length: > 0 }, "equipment treasure response was empty");
+        Assert(opened.Ret![0] == 0x0A && opened.Ret[^3..].SequenceEqual(new byte[] { 0x10, 0xBC, 0x50 }),
+            "equipment treasure response did not contain reward and treasure id");
+        TResponse bagPush = openPushes.Single(x => x.Method == "bag.UpdateBagData");
+        Assert(bagPush.Ret is { Length: > 0 } &&
+            ContainsSequence(bagPush.Ret, new byte[] { 0x08, 0xBC, 0x50, 0x10, 0x00 }),
+            "consumed equipment treasure did not send a Num=0 bag deletion marker");
+
+        PlayerAccount after = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("opened treasure profile was not persisted");
+        Assert(after.Bag?.Items.All(x => x.TemplateId != 10300) != false,
+            "opened equipment treasure was not consumed");
+        Assert((after.Equip?.Items.Count ?? 0) == equipCountBefore + 1,
+            "opening the treasure did not create exactly one equipment instance");
     }
     finally
     {

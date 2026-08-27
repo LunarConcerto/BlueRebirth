@@ -105,6 +105,13 @@ public sealed record BagGridInfo(int TemplateId = 0, int Num = 0);
 /// <summary>仓库信息（TBagInfoRet）。bagType=BagType.ITEM_BAG/EQUIP_BAG。</summary>
 public sealed record BagInfoRet(int BagType = 0, int BagSize = 0, IReadOnlyList<BagGridInfo>? BagInfo = null);
 
+/// <summary>普通宝箱使用参数（TBagNormalTreasureInfoArg）。</summary>
+public sealed record BagNormalTreasureInfoArg(int TreasureId = 0, int TreasureNum = 0);
+
+/// <summary>宝箱开启结果（TBagTreasureInfoRet）。</summary>
+public sealed record BagTreasureInfoRet(
+    IReadOnlyList<CommonReward>? TreasuresInfo = null, int TreasureId = 0);
+
 /// <summary>单个船型的时装解锁信息（TFashionInfo）。</summary>
 public sealed record FashionInfo(int SfId = 0, IReadOnlyList<int>? FashionTid = null);
 
@@ -531,6 +538,34 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         // Always writing field 2 also makes zero-count sentinels in older saves self-heal
         // as soon as the inventory is synchronized.
         WriteVarintField(output, 2, unchecked((ulong)value.Num));
+        return output.ToArray();
+    }
+
+    public static BagNormalTreasureInfoArg DecodeBagNormalTreasureInfoArg(ReadOnlySpan<byte> payload)
+    {
+        var treasureId = 0;
+        var treasureNum = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: treasureId = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: treasureNum = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return new BagNormalTreasureInfoArg(treasureId, treasureNum);
+    }
+
+    public static byte[] Encode(BagTreasureInfoRet value)
+    {
+        using var output = new MemoryStream();
+        if (value.TreasuresInfo is not null)
+            foreach (var reward in value.TreasuresInfo)
+                WriteMessage(output, 1, Encode(reward));
+        if (value.TreasureId != 0)
+            WriteVarintField(output, 2, unchecked((ulong)value.TreasureId));
         return output.ToArray();
     }
 

@@ -130,6 +130,16 @@ internal static class BuildShipExtractLoader
     }
 }
 
+/// <summary>加载可使用道具配置（宝箱 id → 掉落池 id）。</summary>
+internal static class ItemInfoLoader
+{
+    public static Dictionary<int, ConfigItemInfo> Load(string dataRoot)
+    {
+        var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+        return ConfigDbLoader.LoadAll<ConfigItemInfo>(configDir, "config_item_info.db");
+    }
+}
+
 internal static class ShipLevelupLoader
 {
     public static (Dictionary<int, int> ExpPerItem, Dictionary<int, int> ExpNeeded) Load(string dataRoot)

@@ -29,6 +29,7 @@ internal sealed class GameServices
     private readonly IReadOnlyList<GmMailConfig> _gmMails;
     private readonly Dictionary<int, ConfigExtractShip> _extractShips;
     private readonly Dictionary<int, ConfigDropItem> _dropItems;
+    private readonly Dictionary<int, ConfigItemInfo> _itemInfos;
     private readonly Dictionary<int, ConfigSpecialdraw> _specialDraws;
     private readonly Dictionary<int, ConfigShipInfo> _shipInfos;
     private readonly Dictionary<int, int> _expPerItem;
@@ -47,6 +48,7 @@ internal sealed class GameServices
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(options.DataRoot);
+        _itemInfos = ItemInfoLoader.Load(options.DataRoot);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
         _copyRandomFactors = RandomFactorLoader.Load(options.DataRoot);
         ChapterCopyLoader.Load(options.DataRoot);
@@ -84,6 +86,9 @@ internal sealed class GameServices
 
     /// <summary>掉落物品配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigDropItem> DropItems => _dropItems;
+
+    /// <summary>道具配置（宝箱道具通过 DropId 指向 config_drop_item）。</summary>
+    internal IReadOnlyDictionary<int, ConfigItemInfo> ItemInfos => _itemInfos;
 
     /// <summary>船信息配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigShipInfo> ShipInfos => _shipInfos;
@@ -830,11 +835,15 @@ internal sealed class GameServices
         return account with { Bag = bag with { Items = items } };
     }
 
-    /// <summary>仓库数据推送（bag.UpdateBagData）。</summary>
-    public byte[] BuildBagPush(PlayerAccount account, uint now)
+    /// <summary>仓库数据推送（bag.UpdateBagData）。<paramref name="removedTemplateIds"/> 为本次
+    /// 完全消耗的道具模板 ID，以 Num=0 的删除标记追加，使客户端 bagdata.SetData 清除旧条目。</summary>
+    public byte[] BuildBagPush(PlayerAccount account, uint now, IReadOnlyList<int>? removedTemplateIds = null)
     {
         var bag = account.Bag ?? new PlayerBag([], 100);
         var info = bag.Items.Select(i => new BagGridInfo(i.TemplateId, i.Num)).ToList();
+        if (removedTemplateIds is { Count: > 0 })
+            foreach (int templateId in removedTemplateIds)
+                info.Add(new BagGridInfo(templateId, 0));
         var push = new TResponse(Method: "bag.UpdateBagData",
             Ret: PlayerDataCodec.Encode(new BagInfoRet(BagType: 1, BagSize: bag.BagSize, BagInfo: info)),
             Time: now);
@@ -869,13 +878,14 @@ internal sealed class GameServices
     }
 
     /// <summary>购买数据推送（货币 + 仓库 + 时装 + 装备），必须在 shop.BuyGoods 应答前发出。</summary>
-    public async Task<IReadOnlyList<byte[]>> BuildBuyPushesAsync(string profileId, uint now, CancellationToken ct)
+    public async Task<IReadOnlyList<byte[]>> BuildBuyPushesAsync(string profileId, uint now, CancellationToken ct,
+        IReadOnlyList<int>? removedBagTemplateIds = null)
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
         return
         [
             await BuildUpdateUserInfoPushAsync(profileId, now, ct),
-            BuildBagPush(account, now),
+            BuildBagPush(account, now, removedBagTemplateIds),
             BuildFashionPush(account, now),
             BuildEquipPush(account, now),
         ];
