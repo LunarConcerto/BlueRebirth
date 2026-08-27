@@ -4,7 +4,7 @@ using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
-/// <summary>舰娘服务：hero.* / tactic.* 的领域逻辑（换装/升星/结婚/经验/锁定/退役/改名/好感度）。</summary>
+/// <summary>舰娘服务：hero.* / tactic.* 的领域逻辑（换装/升星/改造/结婚/经验/锁定/退役/改名/好感度）。</summary>
 internal sealed class HeroService(GameServices services)
 {
     internal sealed record RetireResult(
@@ -26,6 +26,12 @@ internal sealed class HeroService(GameServices services)
         string Error);
 
     internal sealed record MarryResult(
+        byte[] Ret,
+        Hero? UpdatedHero,
+        bool Changed,
+        string Error);
+
+    internal sealed record RemouldResult(
         byte[] Ret,
         Hero? UpdatedHero,
         bool Changed,
@@ -458,6 +464,197 @@ internal sealed class HeroService(GameServices services)
         await services.SaveAccountAsync(account, ct);
         byte[] ret = EncodeStudySkillRet(heroId, skillId);
         return ret;
+    }
+
+    /// <summary>
+    /// 处理 hero.HeroRemould：校验当前阶段、前置节点、等级/突破与全部消耗，随后原子写入
+    /// 改造节点、阶段进度和技能新增/替换结果。
+    /// </summary>
+    internal async Task<RemouldResult> BuildHeroRemouldRetAsync(
+        TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null)
+            return new([], null, false, "remould request is missing");
+
+        HeroRemouldArg arg = ProtocolDecoder.DecodeHeroRemouldArg(request.Args);
+        if (arg.HeroId == 0 || arg.EffectId <= 0)
+            return new([], null, false, "remould request is invalid");
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+        List<Hero> heroes = account.Dock.Heroes.ToList();
+        int heroIndex = heroes.FindIndex(h => h.HeroId == arg.HeroId);
+        if (heroIndex < 0)
+            return new([], null, false, "hero was not found");
+
+        Hero hero = heroes[heroIndex];
+        int shipInfoId = GameServices.ToIllustrateId(hero.TemplateId);
+        if (!services.ShipInfos.TryGetValue(shipInfoId, out ConfigShipInfo? shipInfo) ||
+            shipInfo.RemouldTemplate is not { Count: > 0 } stageIds)
+            return new([], null, false, "this hero cannot be remoulded");
+        if (hero.Level < shipInfo.MinLevel)
+            return new([], null, false, "hero level is too low for remoulding");
+
+        ConfigShipRemouldEffect? effect = RemouldConfigLoader.GetEffect(arg.EffectId);
+        if (effect is null)
+            return new([], null, false, "remould effect was not found");
+
+        int effectStage = FindEffectStage(stageIds, arg.EffectId);
+        if (effectStage < 0)
+            return new([], null, false, "remould effect does not belong to this hero");
+
+        HashSet<int> completed = (hero.RemouldEffects ?? []).Where(id => id > 0).ToHashSet();
+        if (completed.Contains(arg.EffectId))
+            return new([], null, false, "remould effect is already active");
+
+        int currentStage = CalculateRemouldLevel(stageIds, completed);
+        if (currentStage >= stageIds.Count || effectStage != currentStage)
+            return new([], null, false, "remould effect is not in the current stage");
+
+        List<long> prerequisites = effect.RemouldPrev?.Where(id => id > 0).ToList() ?? [];
+        // 客户端 GetRemouldEffectData 的定义是：多个前置节点中完成任意一个即可解锁。
+        if (prerequisites.Count > 0 && !prerequisites.Any(id => completed.Contains(checked((int)id))))
+            return new([], null, false, "remould prerequisite is not complete");
+        if (hero.Level < effect.LimitLevel)
+            return new([], null, false, "hero level is too low for this remould effect");
+        int advance = Math.Max(hero.Advance,
+            checked((int)(ShipMainLoader.Get(hero.TemplateId)?.BreakLevel ?? 0)));
+        if (advance < effect.LimitStar)
+            return new([], null, false, "hero advance level is too low for this remould effect");
+
+        if (!TryBuildRemouldCosts(effect.Cost, out Dictionary<(int Type, int Id), long> costs,
+                out string costError))
+            return new([], null, false, costError);
+
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        foreach (var (key, amount) in costs)
+        {
+            if (key.Type == GameServices.GoodsTypeCurrency)
+            {
+                if (!GameServices.TryGetCurrency(account, key.Id, out int current) || current < amount)
+                    return new([], null, false, "not enough currency for remoulding");
+            }
+            else
+            {
+                int current = bag.Items.FirstOrDefault(i => i.TemplateId == key.Id)?.Num ?? 0;
+                if (current < amount)
+                    return new([], null, false, "not enough items for remoulding");
+            }
+        }
+
+        foreach (var (key, amount) in costs)
+        {
+            int delta = checked(-(int)amount);
+            account = key.Type == GameServices.GoodsTypeCurrency
+                ? GameServices.AddCurrency(account, key.Id, delta)
+                : GameServices.AddBagItem(account, key.Id, delta);
+        }
+
+        completed.Add(arg.EffectId);
+        List<int> remouldEffects = [.. completed.OrderBy(id => id)];
+        int remouldLevel = CalculateRemouldLevel(stageIds, completed);
+        List<PSkillEntry> skills = ApplyRemouldSkills(hero.PSkills, effect.RemouldEffectType);
+        Hero updatedHero = hero with
+        {
+            RemouldEffects = remouldEffects,
+            RemouldLevel = remouldLevel,
+            PSkills = skills,
+        };
+        heroes[heroIndex] = updatedHero;
+        account = account with { Dock = account.Dock with { Heroes = heroes } };
+        await services.SaveAccountAsync(account, ct);
+        return new([], updatedHero, true, "");
+    }
+
+    private static int FindEffectStage(IReadOnlyList<long> stageIds, int effectId)
+    {
+        for (int i = 0; i < stageIds.Count; i++)
+        {
+            ConfigShipRemouldTemplate? stage = RemouldConfigLoader.GetTemplate(checked((int)stageIds[i]));
+            if (stage?.RemouldItemGroup?.Contains(effectId) == true) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>返回从第一阶段起连续完成的阶段数；尾部空阶段也视为完成。</summary>
+    private static int CalculateRemouldLevel(IReadOnlyList<long> stageIds, HashSet<int> completed)
+    {
+        int level = 0;
+        foreach (long stageId in stageIds)
+        {
+            ConfigShipRemouldTemplate? stage = RemouldConfigLoader.GetTemplate(checked((int)stageId));
+            if (stage is null) break;
+            List<long> group = stage.RemouldItemGroup?.Where(id => id > 0).ToList() ?? [];
+            if (group.Count > 0 && !group.All(id => completed.Contains(checked((int)id)))) break;
+            level++;
+        }
+        return level;
+    }
+
+    private static bool TryBuildRemouldCosts(
+        IReadOnlyList<List<long>>? configured,
+        out Dictionary<(int Type, int Id), long> costs,
+        out string error)
+    {
+        costs = [];
+        error = "";
+        foreach (List<long> cost in configured ?? [])
+        {
+            if (cost.Count < 3 || cost[0] <= 0 || cost[1] <= 0 || cost[2] <= 0 ||
+                cost[0] > int.MaxValue || cost[1] > int.MaxValue || cost[2] > int.MaxValue)
+            {
+                error = "remould cost configuration is invalid";
+                return false;
+            }
+            int type = (int)cost[0];
+            int id = (int)cost[1];
+            // 舰船和装备是实例型资产，不能按背包堆叠直接扣除；当前配置不应使用这两类。
+            if (type is 2 or 3)
+            {
+                error = "unsupported remould cost type";
+                return false;
+            }
+            var key = (Type: type, Id: id);
+            try { costs[key] = checked(costs.GetValueOrDefault(key) + cost[2]); }
+            catch (OverflowException)
+            {
+                error = "remould cost is too large";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static List<PSkillEntry> ApplyRemouldSkills(
+        IReadOnlyList<PSkillEntry>? current,
+        IReadOnlyList<List<long>>? effects)
+    {
+        List<PSkillEntry> skills = (current ?? [])
+            .Select(skill => new PSkillEntry(skill.PSkillId, skill.PSkillExp, skill.Level, skill.Replace))
+            .ToList();
+        foreach (List<long> item in effects ?? [])
+        {
+            if (item.Count < 2) continue;
+            int type = checked((int)item[0]);
+            if (type == 4 && item[1] is > 0 and <= uint.MaxValue)
+            {
+                uint skillId = checked((uint)item[1]);
+                if (skills.All(skill => skill.PSkillId != skillId))
+                    skills.Add(new PSkillEntry(skillId, level: 1));
+            }
+            else if (type == 5 && item.Count >= 3 &&
+                     item[1] is > 0 and <= uint.MaxValue && item[2] is > 0 and <= int.MaxValue)
+            {
+                uint oldSkillId = checked((uint)item[1]);
+                int newSkillId = checked((int)item[2]);
+                PSkillEntry? skill = skills.FirstOrDefault(value => value.PSkillId == oldSkillId);
+                if (skill is null)
+                    skills.Add(new PSkillEntry(oldSkillId, level: 1, replace: newSkillId));
+                else
+                    skill.Replace = newSkillId;
+            }
+        }
+        return skills;
     }
 
     /// <summary>编码 hero.StudySkill 响应 (THeroSkill): HeroId(1, uint32), SkillId(2, int32)。</summary>

@@ -54,7 +54,8 @@ public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, 
     int Exp = 0, int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
     long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "",
     int ChangeNameTime = 0, bool Lock = false, int Advance = 0, int AdvLv = 0,
-    IReadOnlyList<PSkillEntry>? PSkills = null);
+    IReadOnlyList<PSkillEntry>? PSkills = null, IReadOnlyList<int>? ArrRemouldEffect = null,
+    int RemouldLV = 0);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -391,6 +392,14 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         if (value.UpdateTime != 0) WriteVarintField(output, 20, unchecked((ulong)value.UpdateTime));
         WriteVarintField(output, 21, unchecked((ulong)value.MarryType));
         if (value.Fashioning != 0) WriteVarintField(output, 22, unchecked((ulong)value.Fashioning));
+        // ArrRemouldEffect / RemouldLV 对应改造页的节点集合与已完成阶段数。
+        if (value.ArrRemouldEffect is { Count: > 0 } remouldEffects)
+            foreach (int effectId in remouldEffects)
+                WriteVarintField(output, 23, unchecked((ulong)effectId));
+        // 即使尚未完成第一阶段也显式编码 0，避免 Lua 侧拿到 nil 后参与数值比较。
+        WriteVarintField(output, 24, unchecked((ulong)value.RemouldLV));
+        // AdvLv 是协议中独立于 Advance 的字段，改造详情也会读取它。
+        WriteVarintField(output, 25, unchecked((ulong)value.AdvLv));
         // Advance (field 6, int32)：突破等级，必须编码，nil 会导致 break_page 星级计算崩溃。
         WriteVarintField(output, 6, unchecked((ulong)value.Advance));
         WriteStringField(output, 15, value.Name);

@@ -61,6 +61,7 @@ internal sealed class GameServices
         ShipHandbookLoader.Load(options.DataRoot);
         PlotTriggerLoader.Load(options.DataRoot);
         CharacterStoryLoader.Load(options.DataRoot);
+        RemouldConfigLoader.Load(options.DataRoot);
     }
 
     /// <summary>文件日志（game-login.log）供各模块记录帧级诊断。</summary>
@@ -416,7 +417,8 @@ internal sealed class GameServices
     internal static HeroGrid ToHeroGrid(Hero hero) =>
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
             hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType,
-            hero.EquipSlots, hero.Name, hero.ChangeNameTime, hero.Lock, hero.Advance, hero.AdvLv, hero.PSkills);
+            hero.EquipSlots, hero.Name, hero.ChangeNameTime, hero.Lock, hero.Advance, hero.AdvLv, hero.PSkills,
+            hero.RemouldEffects, hero.RemouldLevel);
 
     /// <summary>
     /// 由舰娘 TemplateId（config_ship_main 的 key）推导图鉴 IllustrateId
@@ -798,6 +800,40 @@ internal sealed class GameServices
     /// （constants.lua CurrencyType 与 user_pb.lua TGetUserInfoRet 字段的并集，排除非 UserInfo
     /// 的战斗/建筑临时值如 BULLET/GAS/ELECTRIC 等）。
     /// </summary>
+    internal static bool TryGetCurrency(PlayerAccount account, int currencyType, out int value)
+    {
+        PlayerCharacter c = account.Character;
+        value = currencyType switch
+        {
+            1 => c.Gold,
+            2 => c.Diamond,
+            5 => c.Supply,
+            8 => c.MainGun,
+            9 => c.Torpedo,
+            10 => c.Plane,
+            11 => c.Other,
+            12 => c.Retire,
+            13 => c.Bath,
+            14 => c.Strategy,
+            15 => c.Medal,
+            18 => c.Tower,
+            22 => c.CopyTrainPoint,
+            23 => c.FashionPoint,
+            24 => c.GuildContri,
+            25 => c.Lucky,
+            26 => c.TeacherMedal,
+            27 => c.TeacherPrestige,
+            28 => c.BattlePassExp,
+            29 => c.BattlePassGold,
+            30 => c.PvePt,
+            31 => c.GuildCoinII,
+            32 => c.UrEquipCoin,
+            33 => c.ActivityBattlePassExp,
+            _ => int.MinValue,
+        };
+        return value != int.MinValue;
+    }
+
     internal static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)
     {
         var c = account.Character;

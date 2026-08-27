@@ -71,7 +71,9 @@ public sealed record Hero(
     bool Lock = false,
     int Advance = 0,
     int AdvLv = 0,
-    IReadOnlyList<PSkillEntry>? PSkills = null);
+    IReadOnlyList<PSkillEntry>? PSkills = null,
+    IReadOnlyList<int>? RemouldEffects = null,
+    int RemouldLevel = 0);
 
 /// <summary>
 /// 船坞（玩家拥有的全部舰娘）。对应 <c>hero.UpdateHeroBagData</c> 的 HeroBag

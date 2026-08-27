@@ -2,6 +2,7 @@ using BlueOath.Core;
 using BlueOath.Mods;
 using BlueOath.Protocol;
 using BlueOath.Server.Protocols;
+using BlueOath.Server.Configs;
 using BlueOath.Storage;
 using System.Diagnostics;
 using System.Net;
@@ -22,6 +23,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
     ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
     ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
+    ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
@@ -35,6 +37,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
     ("all fashions unlocked on account creation", FashionUnlockIntegrationTest),
     ("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest),
+    ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest)];
@@ -60,6 +63,11 @@ if (args.Contains("--story-unlock", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
         ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest)
+    ];
+if (args.Contains("--remould-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
+        ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest)
     ];
 var failed = 0;
 foreach (var (name, run) in tests)
@@ -102,6 +110,46 @@ static async Task GameLoginFrameTest()
     var decoded = await GameLoginFrameCodec.ReadAsync(input);
     Assert(decoded?.Operation == GameOperationCodes.Login &&
         GameLoginCodec.DecodeLogin(decoded.Payload).Pid == "frame-player", "game login frame mismatch");
+}
+
+static Task RemouldConfigAndCodecTest()
+{
+    string root = FindRepositoryRoot();
+    RemouldConfigLoader.Load(root);
+    Assert(RemouldConfigLoader.AllEffects.Count >= 800,
+        "ship remould effect config was not loaded");
+    ConfigShipRemouldTemplate stage = RemouldConfigLoader.GetTemplate(525)
+        ?? throw new InvalidDataException("Oakland remould stage 525 was not loaded");
+    IReadOnlyList<long> stageEffects = stage.RemouldItemGroup is { Count: > 0 } configuredEffects
+        ? configuredEffects
+        : throw new InvalidDataException("Oakland remould stage has no effects");
+    Assert(stageEffects.All(id => RemouldConfigLoader.GetEffect(checked((int)id)) is not null),
+        "a stage references a missing remould effect");
+    Assert(RemouldConfigLoader.AllEffects.Values
+        .SelectMany(effect => effect.Cost ?? [])
+        .All(cost => cost.Count >= 3 && cost[0] is not (2 or 3)),
+        "remould config contains an unsupported instance-asset cost");
+
+    var args = new ProtocolPackage();
+    args.Write(0x08, 7UL);
+    args.Write(0x10, 388UL);
+    HeroRemouldArg decoded = ProtocolDecoder.DecodeHeroRemouldArg(args.ToArray());
+    Assert(decoded == new HeroRemouldArg(7, 388), "TRemouldArg field layout did not decode");
+
+    byte[] hero = PlayerDataCodec.Encode(new HeroGrid(
+        HeroId: 7,
+        TemplateId: PlayerAccountFactory.DefaultHeroTemplateId,
+        Lvl: 80,
+        AdvLv: 3,
+        ArrRemouldEffect: [388, 400],
+        RemouldLV: 2));
+    Assert(ContainsSequence(hero, new byte[] { 0xB8, 0x01, 0x84, 0x03 }) &&
+        ContainsSequence(hero, new byte[] { 0xB8, 0x01, 0x90, 0x03 }),
+        "THeroGrid did not encode repeated ArrRemouldEffect field 23");
+    Assert(ContainsSequence(hero, new byte[] { 0xC0, 0x01, 0x02 }) &&
+        ContainsSequence(hero, new byte[] { 0xC8, 0x01, 0x03 }),
+        "THeroGrid did not encode RemouldLV/AdvLv fields 24/25");
+    return Task.CompletedTask;
 }
 
 static Task StoryUnlockConfigTest()
@@ -820,6 +868,217 @@ static async Task EquipEnhanceIntegrationTest()
             "equipped UR bound enhancement did not consume configured currencies");
         Assert(!boundEnhanced.Bag!.Items.Any(i => i.TemplateId is 60003 or 10000),
             "equipped UR bound enhancement did not consume configured bag materials");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+static async Task HeroRemouldIntegrationTest()
+{
+    string root = FindRepositoryRoot();
+    string serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0",
+        "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the server first");
+
+    RemouldConfigLoader.Load(root);
+    ConfigShipRemouldTemplate stage = RemouldConfigLoader.GetTemplate(525)
+        ?? throw new InvalidDataException("Oakland remould stage was not loaded");
+    ConfigShipRemouldTemplate nextStage = RemouldConfigLoader.GetTemplate(526)
+        ?? throw new InvalidDataException("Oakland second remould stage was not loaded");
+    List<int> stageEffectIds = (stage.RemouldItemGroup ?? []).Select(id => checked((int)id)).ToList();
+    List<int> nextStageEffectIds = (nextStage.RemouldItemGroup ?? [])
+        .Select(id => checked((int)id)).ToList();
+    List<int> allEffectIds = [.. stageEffectIds, .. nextStageEffectIds];
+    int effectId = stageEffectIds
+        .First(id => RemouldConfigLoader.GetEffect(checked((int)id))?.RemouldPrev is not { Count: > 0 });
+    ConfigShipRemouldEffect effect = RemouldConfigLoader.GetEffect(effectId)
+        ?? throw new InvalidDataException("initial Oakland remould effect was not loaded");
+    Dictionary<(int Type, int Id), int> selectedCosts = (effect.Cost ?? [])
+        .GroupBy(cost => (Type: checked((int)cost[0]), Id: checked((int)cost[1])))
+        .ToDictionary(group => group.Key, group => checked((int)group.Sum(cost => cost[2])));
+    Dictionary<(int Type, int Id), int> stageCosts = allEffectIds
+        .SelectMany(id => RemouldConfigLoader.GetEffect(id)?.Cost ?? [])
+        .GroupBy(cost => (Type: checked((int)cost[0]), Id: checked((int)cost[1])))
+        .ToDictionary(group => group.Key, group => checked((int)group.Sum(cost => cost[2])));
+
+    string data = Path.Combine(root, ".test-data", "blueoath-remould-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "remould-test";
+    var repo = new SqliteGameRepository(data);
+    await repo.CreateAsync(profileId, profileId);
+    PlayerAccount seeded = await repo.LoadAccountAsync(profileId)
+        ?? throw new InvalidDataException("failed to seed remould account");
+    Hero hero = seeded.Dock.Heroes.Single() with
+    {
+        Level = Math.Max(100, checked((int)effect.LimitLevel)),
+        Advance = Math.Max(10, checked((int)effect.LimitStar)),
+    };
+    seeded = seeded with { Dock = seeded.Dock with { Heroes = [hero] } };
+    foreach (var (key, amount) in stageCosts)
+    {
+        if (key.Type == GameServices.GoodsTypeCurrency)
+        {
+            Assert(GameServices.TryGetCurrency(seeded, key.Id, out int current),
+                $"unsupported remould currency {key.Id}");
+            if (current < amount + 10)
+                seeded = GameServices.AddCurrency(seeded, key.Id, amount + 10 - current);
+        }
+        else
+        {
+            int current = seeded.Bag?.Items.FirstOrDefault(i => i.TemplateId == key.Id)?.Num ?? 0;
+            if (current < amount + 10)
+                seeded = GameServices.AddBagItem(seeded, key.Id, amount + 10 - current);
+        }
+    }
+    await repo.SaveAccountAsync(seeded);
+
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "remould test server did not start");
+        string readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20))
+            ?? throw new InvalidDataException("server did not report ready");
+        using var ready = JsonDocument.Parse(readyLine);
+        int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        NetworkStream stream = client.GetStream();
+
+        async Task<(TResponse Response, List<TResponse> Pushes)> RoundTrip(string method, byte[]? requestArgs)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, requestArgs, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            List<TResponse> pushes = [];
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return (response, pushes);
+                pushes.Add(response);
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("hero.GetHeroInfo", null); // drain login synchronization pushes
+
+        byte[] EncodeRemouldArg(int id)
+        {
+            var value = new ProtocolPackage();
+            value.Write(0x08, 1UL);
+            value.Write(0x10, checked((ulong)id));
+            return value.ToArray();
+        }
+
+        byte[] remouldArg = EncodeRemouldArg(effectId);
+        var (response, pushes) = await RoundTrip("hero.HeroRemould", remouldArg);
+        Assert(response.Err == 0, $"valid remould request was rejected: {response.ErrMsg}");
+        Assert(pushes.Any(push => push.Method == "hero.UpdateHeroBagData"),
+            "remould did not refresh hero data before its response");
+        Assert(pushes.Any(push => push.Method == "bag.UpdateBagData"),
+            "remould did not refresh item costs before its response");
+        Assert(pushes.Any(push => push.Method == "user.UpdateUserInfo"),
+            "remould did not refresh currency costs before its response");
+
+        PlayerAccount saved = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("remould account disappeared");
+        Hero savedHero = saved.Dock.Heroes.Single();
+        Assert(savedHero.RemouldEffects?.Contains(effectId) == true,
+            "completed remould effect was not persisted");
+        Assert(savedHero.RemouldLevel == 0,
+            "a partially completed first stage advanced RemouldLevel");
+        foreach (var (key, amount) in selectedCosts)
+        {
+            if (key.Type == GameServices.GoodsTypeCurrency)
+            {
+                Assert(GameServices.TryGetCurrency(seeded, key.Id, out int before) &&
+                    GameServices.TryGetCurrency(saved, key.Id, out int after) && after == before - amount,
+                    $"remould currency {key.Id} was not deducted exactly once");
+            }
+            else
+            {
+                int before = seeded.Bag?.Items.FirstOrDefault(i => i.TemplateId == key.Id)?.Num ?? 0;
+                int after = saved.Bag?.Items.FirstOrDefault(i => i.TemplateId == key.Id)?.Num ?? 0;
+                Assert(after == before - amount, $"remould item {key.Id} was not deducted exactly once");
+            }
+        }
+
+        var (duplicate, duplicatePushes) = await RoundTrip("hero.HeroRemould", remouldArg);
+        Assert(duplicate.Err != 0 && duplicatePushes.Count == 0,
+            "duplicate remould request was not rejected atomically");
+        PlayerAccount unchanged = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("remould account disappeared after duplicate request");
+        Assert(unchanged.Dock.Heroes.Single().RemouldEffects?.Count(id => id == effectId) == 1,
+            "duplicate remould request changed persisted state");
+
+        int nextEffectId = checked((int)(nextStage.RemouldItemGroup ?? [])
+            .First(id => RemouldConfigLoader.GetEffect(checked((int)id))?.RemouldPrev is not { Count: > 0 }));
+        var (earlyStage, earlyPushes) = await RoundTrip("hero.HeroRemould", EncodeRemouldArg(nextEffectId));
+        Assert(earlyStage.Err != 0 && earlyPushes.Count == 0,
+            "a second-stage remould effect was accepted before the first stage completed");
+
+        var completed = new HashSet<int> { effectId };
+        while (completed.Count < stageEffectIds.Count)
+        {
+            int candidate = stageEffectIds.First(id => !completed.Contains(id) &&
+                (RemouldConfigLoader.GetEffect(id)?.RemouldPrev is not { Count: > 0 } prerequisites ||
+                 prerequisites.Any(prev => completed.Contains(checked((int)prev)))));
+            var (nodeResponse, _) = await RoundTrip("hero.HeroRemould", EncodeRemouldArg(candidate));
+            Assert(nodeResponse.Err == 0,
+                $"valid first-stage remould effect {candidate} was rejected: {nodeResponse.ErrMsg}");
+            completed.Add(candidate);
+        }
+
+        PlayerAccount stageCompleted = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("remould account disappeared after stage completion");
+        Hero completedHero = stageCompleted.Dock.Heroes.Single();
+        Assert(completedHero.RemouldLevel == 1 &&
+            stageEffectIds.All(id => completedHero.RemouldEffects?.Contains(id) == true),
+            "completing every first-stage node did not advance RemouldLevel to 1");
+        while (completed.Count < allEffectIds.Count)
+        {
+            int candidate = nextStageEffectIds.First(id => !completed.Contains(id) &&
+                (RemouldConfigLoader.GetEffect(id)?.RemouldPrev is not { Count: > 0 } prerequisites ||
+                 prerequisites.Any(prev => completed.Contains(checked((int)prev)))));
+            var (nodeResponse, _) = await RoundTrip("hero.HeroRemould", EncodeRemouldArg(candidate));
+            Assert(nodeResponse.Err == 0,
+                $"valid second-stage remould effect {candidate} was rejected: {nodeResponse.ErrMsg}");
+            completed.Add(candidate);
+        }
+
+        PlayerAccount fullyRemoulded = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("remould account disappeared after completion");
+        Hero fullyRemouldedHero = fullyRemoulded.Dock.Heroes.Single();
+        Assert(fullyRemouldedHero.RemouldLevel == 3 &&
+            allEffectIds.All(id => fullyRemouldedHero.RemouldEffects?.Contains(id) == true),
+            "completing both node stages did not include the terminal empty stage in RemouldLevel");
+        foreach (List<long> skillEffect in allEffectIds
+                     .SelectMany(id => RemouldConfigLoader.GetEffect(id)?.RemouldEffectType ?? [])
+                     .Where(value => value.Count >= 2 && value[0] is 4 or 5))
+        {
+            uint oldSkillId = checked((uint)skillEffect[1]);
+            PSkillEntry? skill = fullyRemouldedHero.PSkills?.FirstOrDefault(value => value.PSkillId == oldSkillId);
+            Assert(skill is not null, $"remould skill {oldSkillId} was not added to PSkill");
+            if (skillEffect[0] == 5)
+                Assert(skill!.Replace == checked((int)skillEffect[2]),
+                    $"remould skill {oldSkillId} was not replaced");
+        }
     }
     finally
     {

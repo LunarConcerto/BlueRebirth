@@ -582,6 +582,46 @@ internal static class AffectionItemLoader
     public static IReadOnlyDictionary<int, ConfigAffectionItem> All => _items;
 }
 
+/// <summary>舰船改造节点与阶段配置。</summary>
+internal static class RemouldConfigLoader
+{
+    private static readonly Dictionary<int, ConfigShipRemouldEffect> _effects = new();
+    private static readonly Dictionary<int, ConfigShipRemouldTemplate> _templates = new();
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _effects.Clear();
+            _templates.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigShipRemouldEffect>(
+                         configDir, "config_ship_remould_effect.db"))
+                _effects[id] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigShipRemouldTemplate>(
+                         configDir, "config_ship_remould_template.db"))
+                _templates[id] = cfg;
+            Console.Error.WriteLine(
+                $"[Remould] loaded {_effects.Count} effects / {_templates.Count} stages from {configDir}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Remould] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    public static ConfigShipRemouldEffect? GetEffect(int id)
+        => _effects.TryGetValue(id, out var cfg) ? cfg : null;
+
+    public static ConfigShipRemouldTemplate? GetTemplate(int id)
+        => _templates.TryGetValue(id, out var cfg) ? cfg : null;
+
+    public static IReadOnlyDictionary<int, ConfigShipRemouldEffect> AllEffects => _effects;
+}
+
 internal static class ChapterCopyLoader
 {
     private static readonly Dictionary<int, List<int>> _chapterCopies = new();

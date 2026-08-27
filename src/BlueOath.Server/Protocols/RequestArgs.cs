@@ -38,5 +38,8 @@ internal sealed record ChangeHeroNameArg(uint HeroId = 0, string Name = "");
 /// <summary>THeroAddAffectionArg（hero.AddAffection）: HeroId(1, uint32) / TemplateId(2, int32) / Num(3, int32)。</summary>
 internal sealed record HeroAddAffectionArg(uint HeroId = 0, int TemplateId = 0, int Num = 0);
 
+/// <summary>TRemouldArg（hero.HeroRemould）: HeroId(1, uint32) / EffectId(2, int32)。</summary>
+internal sealed record HeroRemouldArg(uint HeroId = 0, int EffectId = 0);
+
 /// <summary>TFashionEquipArg（fashion.Equip）: FashionTid(1, int32) / EquipStatus(2, int32) / HeroId(3, uint32)。</summary>
 internal sealed record FashionEquipArg(int FashionTid = 0, int EquipStatus = 0, uint HeroId = 0);

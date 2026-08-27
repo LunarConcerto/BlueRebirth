@@ -60,6 +60,22 @@ internal static class ProtocolDecoder
         return new MarryArg(heroId, marryType);
     }
 
+    /// <summary>解码 hero.HeroRemould 参数：HeroId(1, uint32), EffectId(2, int32)。</summary>
+    internal static HeroRemouldArg DecodeHeroRemouldArg(ReadOnlySpan<byte> payload)
+    {
+        ProtoReader reader = new(payload);
+        uint heroId = 0;
+        int effectId = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
+                case 2 when wire == 0: effectId = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        return new HeroRemouldArg(heroId, effectId);
+    }
+
     /// <summary>解码 TBuildShipArg: Id(1, int32), Num(2, int32), CacheId(3, string)。</summary>
     internal static BuildShipArg DecodeBuildShipArg(ReadOnlySpan<byte> payload)
     {
