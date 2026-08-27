@@ -10,14 +10,27 @@ internal sealed class FashionModule(GameServices services) : IGameModule
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {
-        byte[] ret = request.Method switch
+        ModuleResult result;
+        switch (request.Method)
         {
-            "fashion.Equip" => await BuildFashionEquipRetAsync(ctx, request),
-            "fashion.updateData" => [],
-            "fashion.fashionReplaceReward" => [],
-            _ => []
-        };
-        return ModuleResult.Ok(ret);
+            case "fashion.Equip":
+                var ret = await BuildFashionEquipRetAsync(ctx, request);
+                // 更换时装后推送船坞数据，让客户端 Data.heroData 的 Fashioning 立即更新。
+                var account = await ctx.GetAccountAsync();
+                var heroes = account.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+                var heroPush = TMessageCodec.EncodeResponse(new TResponse(
+                    Method: "hero.UpdateHeroBagData",
+                    Ret: PlayerDataCodec.Encode(new HeroBag(heroes.ToList(), account.Dock.BagSize)),
+                    Time: (uint)ctx.Now));
+                result = new ModuleResult { Ret = ret, PrePushes = [heroPush] };
+                break;
+            case "fashion.updateData":
+            case "fashion.fashionReplaceReward":
+            default:
+                result = ModuleResult.Ok([]);
+                break;
+        }
+        return result;
     }
 
     private async Task<byte[]> BuildFashionEquipRetAsync(GameContext ctx, TRequest request)
@@ -50,5 +63,11 @@ internal sealed class FashionModule(GameServices services) : IGameModule
                 default: reader.Skip(wire); break;
             }
         return new FashionEquipArg(fashionTid, equipStatus, heroId);
+    }
+
+    private static HeroGrid ToHeroGridWithName(Hero h)
+    {
+        var grid = GameServices.ToHeroGrid(h);
+        return grid with { Name = ShipHandbookLoader.GetShipName(h.TemplateId) };
     }
 }
