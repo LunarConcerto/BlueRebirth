@@ -215,7 +215,10 @@ if (File.Exists(launcherExe))
 
 var settings = new
 {
-    gameClientPath = "..\\..\\blueoath\\blueoath",
+    // A release bundle is rooted at the launcher directory. Users may place the
+    // supported client in the bundle's blueoath folder; when it is absent the
+    // launcher asks them to select blueoath.exe/clsy.exe explicitly.
+    gameClientPath = "blueoath",
     serverDllPath = "server\\BlueOath.Server.dll",
     pythonPath = "tools\\python\\python.exe",
     injectorPath = "native\\BlueOath.Injector.exe",

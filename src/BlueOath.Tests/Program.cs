@@ -37,6 +37,10 @@ if (args.Contains("--affection-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--rename-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero rename supports Unicode, reset and client synchronization", HeroMutationIntegrationTest)];
+if (args.Contains("--marry-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("oath ring purchase and consecutive marriages are atomic", HeroMutationIntegrationTest)];
+if (args.Contains("--shop-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("oath ring purchase refreshes inventory before its response", HeroMutationIntegrationTest)];
 if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
 var failed = 0;
@@ -512,11 +516,19 @@ static async Task HeroMutationIntegrationTest()
     Hero second = seeded.Dock.Heroes[0] with
     {
         HeroId = 2,
+        TemplateId = 40320111,
+        Fashioning = 4032011,
+        Affection = 1_060_000,
         EquipSlots = new uint[] { 77, 0, 0, 0, 0, 0 },
+    };
+    Hero third = seeded.Dock.Heroes[0] with
+    {
+        HeroId = 3,
+        Affection = 1_000_000,
     };
     seeded = seeded with
     {
-        Dock = seeded.Dock with { Heroes = [seeded.Dock.Heroes[0], second] },
+        Dock = seeded.Dock with { Heroes = [seeded.Dock.Heroes[0], second, third] },
         Equip = new PlayerEquip([new EquipItem(77, 30421, HeroId: 2)], 2000),
         // Existing profiles may predate affection gifts and therefore have an empty bag.
         Bag = new PlayerBag([], 100),
@@ -569,6 +581,9 @@ static async Task HeroMutationIntegrationTest()
         Assert(initialHeroResponse.Ret is { Length: > 0 } &&
             ContainsSequence(initialHeroResponse.Ret, new byte[] { 0x80, 0x01, 0x00 }),
             "hero data did not explicitly initialize ChangeNameTime=0");
+        Assert(ContainsSequence(initialHeroResponse.Ret!, new byte[] { 0x98, 0x01, 0x00 }) &&
+            ContainsSequence(initialHeroResponse.Ret!, new byte[] { 0xA8, 0x01, 0x00 }),
+            "unmarried hero data did not explicitly initialize MarryTime/MarryType=0");
 
         int initialAffection = second.Affection;
         var giftArgs = new ProtocolPackage();
@@ -672,18 +687,71 @@ static async Task HeroMutationIntegrationTest()
             ?? throw new InvalidDataException("unlock account disappeared");
         Assert(!unlocked.Dock.Heroes.Single(h => h.HeroId == 2).Lock, "unlock state was not persisted");
 
-        // A hero mutation refreshes the full dock. HeroGrid.Name is a custom nickname, not the
-        // handbook's Chinese display name; otherwise the JP client mixes Chinese and Japanese
-        // names after a ship is built or updated.
+        // The ring shop uses a retired event token in the JP config. Existing profiles must receive
+        // that client-side currency, and the purchased ring must be pushed before the Lua callback.
+        var buyRingArgs = new ProtocolPackage();
+        buyRingArgs.Write(0x08, 1072UL);
+        buyRingArgs.Write(0x10, 102021UL);
+        buyRingArgs.Write(0x18, 1UL);
+        var (buyRingResponse, buyRingPushes) =
+            await RoundTrip("shop.BuyGoods", buyRingArgs.ToArray());
+        Assert(buyRingResponse.Err == 0 && buyRingResponse.Ret is { Length: > 0 },
+            "oath ring purchase did not return a reward");
+        Assert(buyRingPushes.Any(p => p.Method == "bag.UpdateBagData"),
+            "oath ring purchase did not refresh inventory before its response");
+        PlayerAccount ringPurchased = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("ring purchase account disappeared");
+        Assert(ringPurchased.Bag?.Items.Single(i => i.TemplateId == 10180).Num == 1,
+            "purchased oath ring was not persisted");
+        Assert(ringPurchased.Bag?.Items.Single(i => i.TemplateId == 17553).Num == 99_999_999,
+            "retired-event currency required by the ring shop was not provisioned");
+
+        // A hero mutation refreshes the client cache before success. HeroGrid.Name is a custom
+        // nickname, not the handbook's Chinese display name, so JP/CN clients stay localized.
         var marryArgs = new ProtocolPackage();
         marryArgs.Write(0x08, 2UL);
         marryArgs.Write(0x10, 1UL);
-        var (_, marryPushes) = await RoundTrip("hero.Marry", marryArgs.ToArray());
+        var (marryResponse, marryPushes) = await RoundTrip("hero.Marry", marryArgs.ToArray());
+        Assert(marryResponse.Err == 0, "Blucher marriage was rejected");
         TResponse marryHeroPush = marryPushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
             ?? throw new InvalidDataException("marriage did not refresh hero data");
         Assert(marryHeroPush.Ret is { Length: > 0 } &&
             !ContainsSequence(marryHeroPush.Ret, Encoding.UTF8.GetBytes("奥克兰")),
             "hero update incorrectly sent the Chinese handbook name as a custom nickname");
+        Assert(marryPushes.Any(p => p.Method == "bag.UpdateBagData") &&
+            marryPushes.Any(p => p.Method == "user.UpdateUserInfo"),
+            "marriage did not refresh ring inventory and MarriedNum before its response");
+        PlayerAccount married = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("marriage account disappeared");
+        Assert(married.Dock.Heroes.Single(h => h.HeroId == 2).MarryTime > 0 &&
+            married.Bag?.Items.Single(i => i.TemplateId == 10180).Num == 0,
+            "marriage and ring deduction were not persisted atomically");
+
+        var noRingArgs = new ProtocolPackage();
+        noRingArgs.Write(0x08, 3UL);
+        noRingArgs.Write(0x10, 1UL);
+        var (noRingResponse, noRingPushes) = await RoundTrip("hero.Marry", noRingArgs.ToArray());
+        Assert(noRingResponse.Err != 0 && noRingPushes.Count == 0,
+            "marriage without an oath ring was reported as success");
+        PlayerAccount rejectedMarriage = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("rejected marriage account disappeared");
+        Assert(rejectedMarriage.Dock.Heroes.Single(h => h.HeroId == 3).MarryTime == 0 &&
+            rejectedMarriage.Character.MarriedNum == married.Character.MarriedNum,
+            "failed marriage changed persistent data");
+
+        var (secondRingResponse, _) = await RoundTrip("shop.BuyGoods", buyRingArgs.ToArray());
+        Assert(secondRingResponse.Err == 0, "second oath ring purchase was rejected");
+        var (secondMarryResponse, secondMarryPushes) =
+            await RoundTrip("hero.Marry", noRingArgs.ToArray());
+        Assert(secondMarryResponse.Err == 0 &&
+            secondMarryPushes.Any(p => p.Method == "hero.UpdateHeroBagData"),
+            "a second eligible ship could not be married after purchasing another ring");
+        PlayerAccount twiceMarried = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("second marriage account disappeared");
+        Assert(twiceMarried.Dock.Heroes.Single(h => h.HeroId == 3).MarryTime > 0 &&
+            twiceMarried.Character.MarriedNum == married.Character.MarriedNum + 1 &&
+            twiceMarried.Bag?.Items.Single(i => i.TemplateId == 10180).Num == 0,
+            "consecutive marriage state was not persisted correctly");
 
         // The shipped Lua protobuf runtime uses the proto2 unpacked representation for HeroIds.
         var retireArgs = new ProtocolPackage();

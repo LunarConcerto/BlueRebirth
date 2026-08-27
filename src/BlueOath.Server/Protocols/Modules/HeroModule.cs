@@ -20,12 +20,40 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     PostPushes = await services.BuildPostEquipPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
                 };
                 break;
-            case "hero.Marry":
             case "hero.AddExp":
-                byte[] ret = request.Method == "hero.AddExp" ?
-                    await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct) :
+                result = await UpdateHero(ctx,
+                    await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct));
+                break;
+            case "hero.Marry":
+                HeroService.MarryResult marry =
                     await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
-                result = await UpdateHero(ctx, ret);
+                if (!marry.Changed || marry.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = marry.Ret,
+                        Err = 1,
+                        ErrMsg = marry.Error,
+                    };
+                    break;
+                }
+                PlayerAccount marryAccount = await ctx.GetAccountAsync();
+                uint marryNow = (uint)ctx.Now;
+                result = new ModuleResult
+                {
+                    Ret = marry.Ret,
+                    // MarrySuccess 会立即读取 HeroData、BagData 和 MarriedNum。
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(
+                                [GameServices.ToHeroGrid(marry.UpdatedHero)], marryAccount.Dock.BagSize)),
+                            Time: marryNow)),
+                        services.BuildBagPush(marryAccount, marryNow),
+                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, marryNow, ctx.Ct),
+                    ],
+                };
                 break;
             case "hero.LockHero":
                 byte[] lockRet = await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct);

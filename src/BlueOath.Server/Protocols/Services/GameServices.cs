@@ -18,6 +18,8 @@ namespace BlueOath.Server.Protocols;
 internal sealed class GameServices
 {
     private const int DefaultAffectionGiftCount = 999;
+    private const int OathShopCurrencyId = 17553;
+    private const int DefaultOathShopCurrencyCount = 99_999_999;
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
@@ -309,6 +311,7 @@ internal sealed class GameServices
             account = EnsureHeroPSkills(account);
             account = EnsureAllFashion(account);
             account = EnsureAffectionGifts(account);
+            account = EnsureOathShopCurrency(account);
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
@@ -318,6 +321,7 @@ internal sealed class GameServices
         created = EnsureHeroPSkills(created);
         created = EnsureAllFashion(created);
         created = EnsureAffectionGifts(created);
+        created = EnsureOathShopCurrency(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -335,11 +339,13 @@ internal sealed class GameServices
             account = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
             account = EnsureHeroPSkills(account);
             account = EnsureAllFashion(account);
-            return EnsureAffectionGifts(account);
+            account = EnsureAffectionGifts(account);
+            return EnsureOathShopCurrency(account);
         }
         account = EnsureHeroPSkills(account);
         account = EnsureAllFashion(account);
         account = EnsureAffectionGifts(account);
+        account = EnsureOathShopCurrency(account);
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
@@ -594,6 +600,28 @@ internal sealed class GameServices
     }
 
     /// <summary>
+    /// 戒指商品 102021 使用已结束活动的兑换道具 17553 作为客户端侧价格。
+    /// 本地 GM 商店虽然不会在服务端扣款，但 Lua 会在发送 shop.BuyGoods 前检查库存；
+    /// 因此为新旧档案补齐兑换额度；数量不足单价时也会恢复，符合免费 GM 商店语义。
+    /// </summary>
+    private static PlayerAccount EnsureOathShopCurrency(PlayerAccount account)
+    {
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> items = bag.Items.ToList();
+        int idx = items.FindIndex(i => i.TemplateId == OathShopCurrencyId);
+        if (idx >= 0)
+        {
+            if (items[idx].Num >= 15_000) return account;
+            items[idx] = items[idx] with { Num = DefaultOathShopCurrencyCount };
+        }
+        else
+        {
+            items.Add(new BagItem(OathShopCurrencyId, DefaultOathShopCurrencyCount));
+        }
+        return account with { Bag = bag with { Items = items } };
+    }
+
+    /// <summary>
     /// 构建 FashionTid → SfId 完整映射：优先 config_fashion.belong_to_ship（全量），
     /// 再补 gm-goods.json 手写白名单中配置表缺失的项。
     /// </summary>
@@ -793,8 +821,8 @@ internal sealed class GameServices
         return TMessageCodec.EncodeResponse(push);
     }
 
-    /// <summary>购买后的数据推送（货币 + 仓库 + 时装 + 装备），供会话在 shop.BuyGoods 应答后发出。</summary>
-    public async Task<IReadOnlyList<byte[]>> BuildPostBuyPushesAsync(string profileId, uint now, CancellationToken ct)
+    /// <summary>购买数据推送（货币 + 仓库 + 时装 + 装备），必须在 shop.BuyGoods 应答前发出。</summary>
+    public async Task<IReadOnlyList<byte[]>> BuildBuyPushesAsync(string profileId, uint now, CancellationToken ct)
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
         return

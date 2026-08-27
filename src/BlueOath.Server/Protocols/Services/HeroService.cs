@@ -25,6 +25,12 @@ internal sealed class HeroService(GameServices services)
         bool Changed,
         string Error);
 
+    internal sealed record MarryResult(
+        byte[] Ret,
+        Hero? UpdatedHero,
+        bool Changed,
+        string Error);
+
     internal async Task<byte[]> BuildChangeEquipRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null)
@@ -68,25 +74,46 @@ internal sealed class HeroService(GameServices services)
         return [];
     }
 
-    internal async Task<byte[]> BuildMarryRetAsync(TRequest request, string profileId, int now, CancellationToken ct)
+    internal async Task<MarryResult> BuildMarryRetAsync(
+        TRequest request, string profileId, int now, CancellationToken ct)
     {
-        MarryArg arg = ProtocolDecoder.DecodeMarryArg(request.Args ?? []);
-        var account = await services.GetOrCreateAccountAsync(profileId, ct);
+        if (request.Args is null)
+            return new([], null, false, "marriage request is missing");
+        MarryArg arg = ProtocolDecoder.DecodeMarryArg(request.Args);
+        if (arg.HeroId == 0 || arg.MarryType is < 1 or > 2)
+            return new([], null, false, "marriage request is invalid");
 
-        var heroes = account.Dock.Heroes.ToList();
-        var heroIdx = heroes.FindIndex(h => h.HeroId == arg.HeroId);
-        if (heroIdx < 0) return TMessageCodec.EncodeResponse(new TResponse(Err: 1, ErrMsg: "hero not found"));
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+        List<Hero> heroes = account.Dock.Heroes.ToList();
+        int heroIdx = heroes.FindIndex(h => h.HeroId == arg.HeroId);
+        if (heroIdx < 0)
+            return new([], null, false, "hero was not found");
 
-        var hero = heroes[heroIdx];
-        if (hero.MarryTime != 0) return TMessageCodec.EncodeResponse(new TResponse(Err: 2, ErrMsg: "already married"));
+        Hero hero = heroes[heroIdx];
+        if (hero.MarryTime != 0)
+            return new([], null, false, "hero is already married");
 
-        heroes[heroIdx] = hero with { MarryTime = now, MarryType = arg.MarryType };
-        account = account with { Dock = account.Dock with { Heroes = heroes } };
-        account = account with { Character = account.Character with { MarriedNum = account.Character.MarriedNum + 1 } };
-        account = GameServices.AddBagItem(account, 10180, -1);
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> bagItems = bag.Items.ToList();
+        int ringIdx = bagItems.FindIndex(i => i.TemplateId == 10180);
+        if (ringIdx < 0 || bagItems[ringIdx].Num < 1)
+            return new([], null, false, "an oath ring is required");
+
+        Hero updatedHero = hero with { MarryTime = now, MarryType = arg.MarryType };
+        heroes[heroIdx] = updatedHero;
+        // 保留 Num=0 作为 bag.UpdateBagData 的删除标记，客户端会据此清掉旧缓存。
+        bagItems[ringIdx] = bagItems[ringIdx] with { Num = bagItems[ringIdx].Num - 1 };
+        account = account with
+        {
+            Dock = account.Dock with { Heroes = heroes },
+            Character = account.Character with { MarriedNum = account.Character.MarriedNum + 1 },
+            Bag = bag with { Items = bagItems },
+        };
 
         await services.SaveAccountAsync(account, ct);
-        return TMessageCodec.EncodeResponse(new TResponse(Method: "hero.Marry", Time: checked((uint)now)));
+        // TMarryRet 没有客户端需要读取的字段；业务错误由外层 TResponse.Err 返回。
+        return new([], updatedHero, true, "");
     }
 
     internal async Task<byte[]> BuildAddExpRetAsync(TRequest request, string profileId, CancellationToken ct)
