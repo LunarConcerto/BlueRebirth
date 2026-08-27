@@ -19,6 +19,12 @@ internal sealed class HeroService(GameServices services)
         bool Changed,
         string Error);
 
+    internal sealed record ChangeNameResult(
+        byte[] Ret,
+        Hero? UpdatedHero,
+        bool Changed,
+        string Error);
+
     internal async Task<byte[]> BuildChangeEquipRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null)
@@ -258,20 +264,29 @@ internal sealed class HeroService(GameServices services)
             true);
     }
 
-    internal async Task<byte[]> BuildChangeNameRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<ChangeNameResult> BuildChangeNameRetAsync(
+        TRequest request, string profileId, int now, CancellationToken ct)
     {
-        if (request.Args is null) return [];
+        if (request.Args is null)
+            return new([], null, false, "rename request is missing");
         ChangeHeroNameArg arg = ProtocolDecoder.DecodeChangeHeroNameArg(request.Args);
-        if (arg.HeroId == 0 || string.IsNullOrEmpty(arg.Name)) return [];
+        // 空字符串是客户端“重置”按钮的合法语义：清除自定义名并恢复本地语言名称。
+        if (arg.HeroId == 0)
+            return new([], null, false, "rename request is invalid");
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
         int heroIdx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
-        if (heroIdx < 0) return [];
-        heroList[heroIdx] = heroList[heroIdx] with { Name = arg.Name };
+        if (heroIdx < 0)
+            return new([], null, false, "hero was not found");
+
+        Hero updatedHero = heroList[heroIdx] with { Name = arg.Name, ChangeNameTime = now };
+        heroList[heroIdx] = updatedHero;
         account = account with { Dock = dock with { Heroes = heroList } };
         await services.SaveAccountAsync(account, ct);
-        return [];
+        return new([], updatedHero, true, "");
     }
 
     internal async Task<AddAffectionResult> BuildAddAffectionRetAsync(

@@ -35,6 +35,8 @@ if (args.Contains("--hero-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--affection-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--rename-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("hero rename supports Unicode, reset and client synchronization", HeroMutationIntegrationTest)];
 if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
 var failed = 0;
@@ -561,6 +563,12 @@ static async Task HeroMutationIntegrationTest()
         }
 
         await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        // Login synchronization is emitted immediately after the login response, so the next
+        // request observes those queued pushes before its own response.
+        var (initialHeroResponse, _) = await RoundTrip("hero.GetHeroInfo", null);
+        Assert(initialHeroResponse.Ret is { Length: > 0 } &&
+            ContainsSequence(initialHeroResponse.Ret, new byte[] { 0x80, 0x01, 0x00 }),
+            "hero data did not explicitly initialize ChangeNameTime=0");
 
         int initialAffection = second.Affection;
         var giftArgs = new ProtocolPackage();
@@ -598,6 +606,39 @@ static async Task HeroMutationIntegrationTest()
         Assert(giftRejected.Dock.Heroes.Single(h => h.HeroId == 2).Affection == giftedAffection &&
             giftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 997,
             "failed gift request changed persisted data");
+
+        const string customName = "马克西姆";
+        var renameArgs = new ProtocolPackage();
+        renameArgs.Write(0x08, 2UL);
+        renameArgs.Write(0x12, customName);
+        var (renameResponse, renamePushes) = await RoundTrip("hero.ChangeName", renameArgs.ToArray());
+        Assert(renameResponse.Err == 0, "Unicode hero rename was rejected");
+        TResponse renameHeroPush = renamePushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("rename did not refresh hero data before its response");
+        Assert(renameHeroPush.Ret is { Length: > 0 } &&
+            ContainsSequence(renameHeroPush.Ret, Encoding.UTF8.GetBytes(customName)),
+            "rename update did not contain the UTF-8 custom name");
+        PlayerAccount renamed = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("rename account disappeared");
+        Hero renamedHero = renamed.Dock.Heroes.Single(h => h.HeroId == 2);
+        Assert(renamedHero.Name == customName && renamedHero.ChangeNameTime > 0,
+            "Unicode custom name or rename time was not persisted");
+
+        var resetNameArgs = new ProtocolPackage();
+        resetNameArgs.Write(0x08, 2UL);
+        resetNameArgs.Write(0x12, "");
+        var (resetNameResponse, resetNamePushes) =
+            await RoundTrip("hero.ChangeName", resetNameArgs.ToArray());
+        Assert(resetNameResponse.Err == 0, "resetting a custom hero name was rejected");
+        TResponse resetNamePush = resetNamePushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("name reset did not refresh hero data before its response");
+        Assert(resetNamePush.Ret is { Length: > 0 } &&
+            ContainsSequence(resetNamePush.Ret, new byte[] { 0x7A, 0x00 }),
+            "name reset did not explicitly clear the cached custom name");
+        PlayerAccount resetNameAccount = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("name reset account disappeared");
+        Assert(resetNameAccount.Dock.Heroes.Single(h => h.HeroId == 2).Name == "",
+            "custom name reset was not persisted");
 
         var lockArgs = new ProtocolPackage();
         lockArgs.Write(0x08, 2UL);

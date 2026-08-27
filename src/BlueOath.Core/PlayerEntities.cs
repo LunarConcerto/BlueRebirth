@@ -67,6 +67,7 @@ public sealed record Hero(
     long CurHp = 0,
     IReadOnlyList<uint>? EquipSlots = null,
     string Name = "",
+    int ChangeNameTime = 0,
     bool Lock = false,
     int Advance = 0,
     int AdvLv = 0,

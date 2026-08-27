@@ -53,7 +53,7 @@ public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, 
 public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
     int Exp = 0, int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
     long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "",
-    bool Lock = false, int Advance = 0, int AdvLv = 0,
+    int ChangeNameTime = 0, bool Lock = false, int Advance = 0, int AdvLv = 0,
     IReadOnlyList<PSkillEntry>? PSkills = null);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
@@ -377,6 +377,9 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         // Advance (field 6, int32)：突破等级，必须编码，nil 会导致 break_page 星级计算崩溃。
         WriteVarintField(output, 6, unchecked((ulong)value.Advance));
         WriteStringField(output, 15, value.Name);
+        // ChangeNamePage 会直接用该值参与冷却时间加法；即使尚未改名也必须编码 0，
+        // 否则 Lua protobuf 返回 nil，点击确认时会在发送请求前中断。
+        WriteVarintField(output, 16, unchecked((ulong)value.ChangeNameTime));
         // Lock 必须无条件编码。解锁时若省略 false，客户端增量合并后可能继续保留旧的 true。
         WriteVarintField(output, 12, value.Lock ? 1UL : 0UL);
         return output.ToArray();

@@ -78,7 +78,32 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 };
                 break;
             case "hero.ChangeName":
-                result = ModuleResult.Ok(await hero.BuildChangeNameRetAsync(request, ctx.ProfileId, ctx.Ct));
+                HeroService.ChangeNameResult rename =
+                    await hero.BuildChangeNameRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
+                if (!rename.Changed || rename.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = rename.Ret,
+                        Err = 1,
+                        ErrMsg = rename.Error,
+                    };
+                    break;
+                }
+                PlayerAccount renameAccount = await ctx.GetAccountAsync();
+                result = new ModuleResult
+                {
+                    Ret = rename.Ret,
+                    // ChangeNameSuccess 会立刻从 HeroData 读取名称，必须先刷新客户端缓存。
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(
+                                [GameServices.ToHeroGrid(rename.UpdatedHero)], renameAccount.Dock.BagSize)),
+                            Time: (uint)ctx.Now)),
+                    ],
+                };
                 break;
             case "hero.AddAffection":
                 HeroService.AddAffectionResult affection =
