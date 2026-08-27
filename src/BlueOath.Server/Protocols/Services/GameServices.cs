@@ -680,11 +680,14 @@ internal sealed class GameServices
         List<Hero> heroes = dock.Heroes.ToList();
         int idx = heroes.FindIndex(h => h.HeroId == heroId);
         if (idx < 0) return account;
-        int maxAffection = heroes[idx].MarryTime == 0
+        Hero hero = heroes[idx];
+        int maxAffection = hero.MarryTime == 0
             ? PlayerAccountFactory.UnmarriedMaxAffection
             : PlayerAccountFactory.MarriedMaxAffection;
-        int affection = Math.Clamp(
-            checked(amount * PlayerAccountFactory.AffectionScale), 0, maxAffection);
+        int affection = (int)Math.Clamp(
+            checked((long)amount * PlayerAccountFactory.AffectionScale),
+            0L,
+            maxAffection);
         heroes[idx] = heroes[idx] with { Affection = affection };
         return account with { Dock = dock with { Heroes = heroes } };
     }

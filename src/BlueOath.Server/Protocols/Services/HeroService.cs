@@ -337,24 +337,31 @@ internal sealed class HeroService(GameServices services)
         if (heroIdx < 0)
             return new([], null, false, "hero was not found");
 
-        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
-        List<BagItem> bagItems = bag.Items.ToList();
-        int bagIdx = bagItems.FindIndex(i => i.TemplateId == arg.TemplateId);
-        if (bagIdx < 0 || bagItems[bagIdx].Num < arg.Num)
-            return new([], null, false, "not enough gifts");
-
         Hero hero = heroList[heroIdx];
         int maxAffection = hero.MarryTime == 0
             ? PlayerAccountFactory.UnmarriedMaxAffection
             : PlayerAccountFactory.MarriedMaxAffection;
-        long requestedAffection = checked((long)hero.Affection + gift.AffectionExp * arg.Num);
-        int affection = checked((int)Math.Min(requestedAffection, maxAffection));
-        if (affection <= hero.Affection)
+        int remainingAffection = maxAffection - hero.Affection;
+        if (remainingAffection <= 0)
             return new([], null, false, "affection is already at its current limit");
+
+        // 客户端通常会限制滑块；服务端也只消耗达到当前上限实际需要的数量，
+        // 避免旧档单位异常或并发刷新时多扣礼物。
+        int giftsNeeded = checked((int)(((long)remainingAffection + gift.AffectionExp - 1) / gift.AffectionExp));
+        int giftsToConsume = Math.Min(arg.Num, giftsNeeded);
+
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> bagItems = bag.Items.ToList();
+        int bagIdx = bagItems.FindIndex(i => i.TemplateId == arg.TemplateId);
+        if (bagIdx < 0 || bagItems[bagIdx].Num < giftsToConsume)
+            return new([], null, false, "not enough gifts");
+
+        long requestedAffection = checked((long)hero.Affection + (long)gift.AffectionExp * giftsToConsume);
+        int affection = checked((int)Math.Min(requestedAffection, maxAffection));
 
         Hero updatedHero = hero with { Affection = affection };
         heroList[heroIdx] = updatedHero;
-        bagItems[bagIdx] = bagItems[bagIdx] with { Num = bagItems[bagIdx].Num - arg.Num };
+        bagItems[bagIdx] = bagItems[bagIdx] with { Num = bagItems[bagIdx].Num - giftsToConsume };
         account = account with
         {
             Dock = dock with { Heroes = heroList },

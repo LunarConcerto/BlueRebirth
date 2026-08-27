@@ -601,7 +601,7 @@ static async Task HeroMutationIntegrationTest()
         var giftArgs = new ProtocolPackage();
         giftArgs.Write(0x08, 2UL);
         giftArgs.Write(0x10, 280002UL);
-        giftArgs.Write(0x18, 1UL);
+        giftArgs.Write(0x18, 2UL);
         var (giftResponse, giftPushes) = await RoundTrip("hero.AddAffection", giftArgs.ToArray());
         Assert(giftResponse.Err == 0 && giftResponse.Ret is { Length: > 0 } &&
             ContainsSequence(giftResponse.Ret, new byte[] { 0x10, 0x02 }),
@@ -617,7 +617,7 @@ static async Task HeroMutationIntegrationTest()
             giftedAffection > initialAffection,
             "gift did not cap persisted unmarried affection at 100");
         Assert(gifted.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 998,
-            "starter gift inventory was not provisioned and deducted atomically");
+            "gift count was not limited to the quantity actually needed");
         Assert(gifted.Bag?.Items.Count(i => i.Num == 999) == 7,
             "not all configured affection gift types were provisioned for the existing profile");
 
