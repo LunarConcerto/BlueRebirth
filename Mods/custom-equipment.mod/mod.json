@@ -1,0 +1,9 @@
+{
+  "id": "custom-equipment.mod",
+  "version": "0.1.0",
+  "entry": "main.lua",
+  "targetClients": ["jp-1.4.0"],
+  "dependencies": [],
+  "loadOrder": 55,
+  "enabled": true
+}

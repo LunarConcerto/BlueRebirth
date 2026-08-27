@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Threading.Tasks;
@@ -13,6 +14,7 @@ public class LaunchViewModel : ViewModelBase
     private readonly ProcessManager _processManager;
     private readonly MainViewModel _mainViewModel;
     private readonly SettingsService _settingsService;
+    private readonly AccountService _accountService;
 
     private List<Announcement> _announcements = new();
     private Announcement? _selectedAnnouncement;
@@ -56,19 +58,46 @@ public class LaunchViewModel : ViewModelBase
         set { _config.ServerPort = value; OnPropertyChanged(); }
     }
 
+    public ObservableCollection<AccountProfile> Accounts => _accountService.Accounts;
+
+    public AccountProfile ActiveAccount
+    {
+        get => _accountService.ActiveAccount;
+        set
+        {
+            if (value is null || ReferenceEquals(value, _accountService.ActiveAccount)) return;
+            try
+            {
+                _accountService.Select(value);
+                OnPropertyChanged();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "账号切换失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public ICommand LaunchCommand { get; }
     public ICommand DebugLaunchCommand { get; }
+    public ICommand ManageAccountsCommand { get; }
 
     public string Version => VersionInfo.Version;
 
-    public LaunchViewModel(ProcessManager processManager, MainViewModel mainViewModel, SettingsService settingsService)
+    public LaunchViewModel(ProcessManager processManager, MainViewModel mainViewModel,
+        SettingsService settingsService, AccountService accountService)
     {
         _processManager = processManager;
         _mainViewModel = mainViewModel;
         _settingsService = settingsService;
+        _accountService = accountService;
 
         LaunchCommand = new RelayCommand(async () => await Launch(true));
         DebugLaunchCommand = new RelayCommand(async () => await Launch(false));
+        ManageAccountsCommand = new RelayCommand(() => _mainViewModel.NavigateTo(2));
+
+        _accountService.ActiveAccountChanged += (_, _) => OnPropertyChanged(nameof(ActiveAccount));
 
         _processManager.StageChanged += (s, stage) =>
         {
@@ -132,6 +161,8 @@ public class LaunchViewModel : ViewModelBase
 
         if (!TryResolveGameClientPath()) return;
 
+        _config.ProfileId = ActiveAccount.Id;
+        _config.ProfileName = ActiveAccount.Name;
         var validationError = _processManager.ValidatePaths(_config, startServer);
         if (validationError is not null)
         {

@@ -1,4 +1,7 @@
 ﻿#include "hooks.h"
+#ifdef BLUEOATH_LUA_MODS
+#include "lua_mod_loader.h"
+#endif
 #include <ws2tcpip.h>
 #include <wincrypt.h>
 #include <bcrypt.h>
@@ -7453,6 +7456,9 @@ void InitializeHooks(HMODULE module) {
     const auto eventName = L"Local\\BlueOath.Inject." + std::to_wstring(GetCurrentProcessId());
     HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, eventName.c_str());
     if (event) { SetEvent(event); CloseHandle(event); }
+#ifdef BLUEOATH_LUA_MODS
+    StartLuaModLoader(module);
+#endif
 
     if (!redirectEnabled || !originalGetAddrInfo || !originalFreeAddrInfo || !originalCertOpenStore ||
         !originalCertEnumCertificatesInStore || !originalCertGetCertificateChain ||
@@ -7582,7 +7588,13 @@ void InitializeHooks(HMODULE module) {
         TryApplyRelationCoeHook();
         TryApplyGetASkillAttrHook();
         TryApplyGetComponentsNeedHook();
+#ifdef BLUEOATH_LUA_MODS
+        // lua_pcallk is owned by the shared lua_mod_loader.cpp hook. Besides
+        // executing Mods/bootstrap.lua it retains the same protected-call
+        // error logging, so installing this older debug hook would conflict.
+#else
         TryApplyLuaPcallKHook();
+#endif
         TryApplySdkLoginHook();
         TryApplyLoginMethodHook();
         TrySetSimulationMode();

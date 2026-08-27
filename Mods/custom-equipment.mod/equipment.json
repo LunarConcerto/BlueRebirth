@@ -1,0 +1,24 @@
+{
+  "equipment": [
+    {
+      "id": 900001,
+      "sourceTemplateId": 30023,
+      "overrides": {
+        "name": "未来試作砲",
+        "equip_prop": [[8, 90], [3200, 300]],
+        "enhance_prop": [[8, 6], [3200, 20]],
+        "drop_path": [],
+        "no_resolve": 1
+      }
+    }
+  ],
+  "goods": [
+    {
+      "goodId": 990001,
+      "shopId": 5,
+      "type": 2,
+      "itemId": 900001,
+      "num": 1
+    }
+  ]
+}

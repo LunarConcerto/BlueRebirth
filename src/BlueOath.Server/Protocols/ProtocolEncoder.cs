@@ -368,10 +368,13 @@ internal static class ProtocolEncoder
         ms.Write(0x18, unchecked((ulong)copyRid));
         // CopyId (6) — 客户端用它在 config_copy_display 里查配置（键=显示 id，来自请求）
         ms.Write(0x30, unchecked((ulong)copyId));
-        // CopyType (7)：剧情=1(PlotCopy)，海域=2(SeaCopy)。海域关卡战斗初始化按 CopyType 分支。
-        // 海域侦察任务按 SeaCopy(2) 走索敌 3D 玩法，是正常逻辑，不能绕开（绕开会失去索敌玩法意义）。
-        bool isSeaCopy = ChapterCopyLoader.GetSeaLevels().Contains(copyId);
-        ms.Write(0x38, isSeaCopy ? 2UL : 1UL);
+        // CopyType (7) 必须与关卡所属章节一致。除剧情(1)/海域(2)外，
+        // アンブラ進軍使用 MubarCopy(33)；误发为 PlotCopy 会让客户端在收到
+        // StartBase 后走错战斗初始化分支并永久停在加载页。
+        int copyType = ChapterCopyLoader.GetCopyType(copyId);
+        if (copyType == 0) copyType = 1;
+        bool isSearch3d = CopyBattleLoader.IsSearch3d(copyId);
+        ms.Write(0x38, unchecked((ulong)copyType));
         // RandomFactors (12) — 海域索敌/侦察场景初始化依赖。按 copyId 查表：
         // config_copy_display.random_factor_sets → config_random_factor_set.factor_groups
         // → config_random_factor_group.factor（RandomFactorLoader）。海域 1600100 → [61]。
@@ -411,8 +414,9 @@ internal static class ProtocolEncoder
             ms.Write(0xD0, unchecked((ulong)matchType));
         }
 
-        // 海域索敌：补齐未编码字段（IsFinal/AnimMode/WeatherGroupId），索敌核心初始化可能检查。
-        if (isSeaCopy)
+        // 索敌玩法：补齐未编码字段（IsFinal/AnimMode/WeatherGroupId），索敌核心初始化可能检查。
+        // 不能只判断 SeaCopy；MubarCopy(33) 中也有 search_3d=1 的关卡。
+        if (isSearch3d)
         {
             // IsFinal (19) = false
             ms.Write(0x98, 0UL);
@@ -425,10 +429,10 @@ internal static class ProtocolEncoder
 
         // Token (16) = ""
         ms.Write(0x82, "1111111111111111111111111111111111111");
-        // arrRes (4) — TCopyRes[]。海域索敌 InitResPoint 遍历 copyRess（=arrRes）用元素查
-        // battlefield_resource，海域 battlefield_resource[copyId] 缺失导致 GetDict null 卡死。
-        // 海域 arrRes 发空（copyRess 空 → InitResPoint 跳过资源点生成）。
-        if (!isSeaCopy)
+        // arrRes (4) — TCopyRes[]。search_3d 的 InitResPoint 遍历 copyRess（=arrRes）用元素查
+        // battlefield_resource；活动/海域关卡常无对应记录，GetDict null 会永久卡加载。
+        // 所有 search_3d 关卡均发空，让 InitResPoint 安全跳过资源点生成。
+        if (!isSearch3d)
         {
             ProtocolPackage cr = new();
             cr.Write(0x08, unchecked((ulong)copyId)); // id
@@ -454,14 +458,9 @@ internal static class ProtocolEncoder
             ms.Write(0x28, unchecked((ulong)fid));
         }
 
-        // SkipVcr (17) — TCopySkipVcr[]。客户端 skipDatas 以 shipinfoId（config_ship_info.si_id）
-        // 为 key，ShipDataComponent.SetData 对每艘船（含敌舰/NPC）用自身 DictShipInfo.si_id
-        // 查询是否跳过进场 VCR(skipEnterBattleAnim)/沉没 VCR(skipDeadAnim)，未命中返回 false →
-        // 播放/等待 VCR 演出。因此要让敌舰跳过 VCR，必须下发**敌舰的 ship_info_id**
-        // （config_ship_enemy.ship_info_id），仅发玩家船 si_id 对敌舰落空。海域索敌副本
-        // StartVcr/EndVcr=true 全跳，避免状态机卡在演出等待导致"无法操作"。
-        // 注意按 si_id 去重：重复 key 会使客户端 skipDatas Dictionary.Add 抛异常。
-        HashSet<int> vcrSent = new();
+        // SkipVcr (17) — TCopySkipVcr[]。客户端按 config_ship_info.si_id 查找，
+        // 因而必须同时覆盖玩家与敌舰；search_3d 的过期活动演出可能无法完成，统一跳过。
+        HashSet<int> vcrSent = [];
         void EmitVcr(int shipInfoId)
         {
             if (shipInfoId <= 0 || !vcrSent.Add(shipInfoId)) return;
@@ -532,7 +531,7 @@ internal static class ProtocolEncoder
         // PveCoreCreator._InitWithStartDataCore 用 ConfigDatas[52002(0xCB22)] 作为索敌限时（秒）
         // 覆盖 battlefieldTime：ConfigDatas[52002]=v → 索敌限时=v*1000 ms。之前发 (52002,1) 导致
         // 索敌限时 1 秒立即耗尽。删除 52002 → TryGetValue 失败回退 dictCopy.battle_time=180。
-        if (isSeaCopy)
+        if (isSearch3d)
             foreach ((int t, int v) in new[] { (50000, 1), (0, 1) })
             {
                 ProtocolPackage ce = new();
@@ -763,6 +762,30 @@ internal static class ProtocolEncoder
 
         ms.Write(0x10, unchecked((ulong)maxCopyId)); // MaxCopyId(2)
         ms.Write(0x18, 2UL); // CopyType(3)=SeaCopy
+        return ms.ToArray();
+    }
+
+    /// <summary>编码アンブラ進軍海域（MubarCopy, CopyType=33）数据。
+    /// 该系统的主页入口由客户端长期周期配置直接开放；缺少这份同步时，
+    /// MubarCopyPage 会拿到空章节列表，既不显示节点，也无法正常完成页面初始化。</summary>
+    public static byte[] EncodeMubarCopyInfo()
+    {
+        List<int> levels = ChapterCopyLoader.GetMubarLevels();
+        ProtocolPackage ms = new();
+        foreach (int cid in levels)
+        {
+            ProtocolPackage baseInfo = new();
+            baseInfo.Write(0x08, unchecked((ulong)cid)); // BaseId(1)
+            baseInfo.Write(0x10, 0UL); // Rid(2)=0
+            baseInfo.Write(0x18, 7UL); // StarLevel(3)，与当前离线开放策略一致
+            baseInfo.Write(0x20, 0UL); // IsRunningFight(4)=0
+            baseInfo.Write(0x28, 0UL); // LBPoint(5)=0
+            baseInfo.Write(0x30, 1UL); // FirstPassTime(6)，开放全部章节
+            ms.Write(0x0A, baseInfo.ToArray());
+        }
+
+        ms.Write(0x10, unchecked((ulong)ChapterCopyLoader.GetMubarLastCopyId())); // MaxCopyId(2)
+        ms.Write(0x18, 33UL); // CopyType(3)=MubarCopy
         return ms.ToArray();
     }
 

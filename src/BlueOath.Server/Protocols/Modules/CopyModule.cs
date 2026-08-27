@@ -21,15 +21,18 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                 break;
             case "copy.PassBase":
                 var ret = await battle.BuildPassBaseRetAsync(request, ctx.ProfileId, ctx.Ct);
-                // 通关后推送最新关卡进度（剧情/海域各一分支）。
+                // 通关后推送与关卡类型匹配的最新进度。
                 var account = await ctx.GetAccountAsync();
                 int copyId = ProtocolDecoder.DecodePassBaseCopyId(request.Args ?? []);
                 int copyType = ChapterCopyLoader.GetCopyType(copyId);
                 byte[] copyPush = TMessageCodec.EncodeResponse(new TResponse(
                     Method: "copy.GetCopy",
-                    Ret: copyType == 2
-                        ? ProtocolEncoder.EncodeSeaCopyInfo(account.SeaProgress)
-                        : ProtocolEncoder.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
+                    Ret: copyType switch
+                    {
+                        2 => ProtocolEncoder.EncodeSeaCopyInfo(account.SeaProgress),
+                        33 => ProtocolEncoder.EncodeMubarCopyInfo(),
+                        _ => ProtocolEncoder.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
+                    },
                     Time: (uint)ctx.Now));
                 result = new ModuleResult { Ret = ret, PostPushes = [copyPush] };
                 break;

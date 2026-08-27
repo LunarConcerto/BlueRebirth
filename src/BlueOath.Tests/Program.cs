@@ -3,6 +3,8 @@ using BlueOath.Mods;
 using BlueOath.Protocol;
 using BlueOath.Server.Protocols;
 using BlueOath.Server.Configs;
+using BlueOath.Server;
+using BlueOath.Server.Hosting;
 using BlueOath.Storage;
 using System.Diagnostics;
 using System.Net;
@@ -14,6 +16,8 @@ var tests = new (string Name, Func<Task> Run)[]
 {
     ("frame codec handles fragmented input", FrameCodecTest),
     ("real login protobuf payload round-trips", LoginProtobufTest),
+    ("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest),
+    ("launcher profile names initialize and migrate character names", AccountProfileNameMigrationTest),
     ("client login wire envelope round-trips", ClientLoginWireTest),
     ("temporary game login frame round-trips", GameLoginFrameTest),
     ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
@@ -24,12 +28,15 @@ var tests = new (string Name, Func<Task> Run)[]
     ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
     ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
     ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
+    ("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest),
     ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
     ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
     ("mod manager filters target and orders mods", ModTest),
+    ("equipment mod adds a client/server template and GM shop good", EquipmentModTest),
+    ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
     ("kcp fragments reassemble across sticky and split buffers", KcpReassemblyTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
 };
@@ -37,7 +44,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
     ("protobuf login server creates a local profile", GameLoginIntegrationTest),
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
-    ("all fashions unlocked on account creation", FashionUnlockIntegrationTest),
+    ("fashion synchronization and shops use configured catalog", FashionUnlockIntegrationTest),
     ("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest),
     ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest),
     ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest),
@@ -45,6 +52,10 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest)];
+if (args.Contains("--equipment-mod", StringComparer.OrdinalIgnoreCase))
+    tests = [("equipment mod adds a client/server template and GM shop good", EquipmentModTest)];
+if (args.Contains("--equipment-mod-config", StringComparer.OrdinalIgnoreCase))
+    tests = [("equipment mod overlays the real client equipment database", EquipmentModConfigIntegrationTest)];
 if (args.Contains("--retire-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--hero-integration", StringComparer.OrdinalIgnoreCase))
@@ -57,6 +68,8 @@ if (args.Contains("--marry-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase and consecutive marriages are atomic", HeroMutationIntegrationTest)];
 if (args.Contains("--shop-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase refreshes inventory before its response", HeroMutationIntegrationTest)];
+if (args.Contains("--fashion-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("fashion synchronization and shops use configured catalog", FashionUnlockIntegrationTest)];
 if (args.Contains("--treasure-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipment treasure consumes its box and persists a new equipment instance", TreasureIntegrationTest)];
 if (args.Contains("--buildship-codec", StringComparer.OrdinalIgnoreCase))
@@ -82,6 +95,17 @@ if (args.Contains("--building-integration", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
         ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest)
+    ];
+if (args.Contains("--fashion-preview-mod", StringComparer.OrdinalIgnoreCase))
+    tests = [("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest)];
+if (args.Contains("--login-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("protobuf login server creates a local profile", GameLoginIntegrationTest)];
+if (args.Contains("--mubar-battle-codec", StringComparer.OrdinalIgnoreCase))
+    tests = [("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest)];
+if (args.Contains("--account-profile", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest),
+        ("launcher profile names initialize and migrate character names", AccountProfileNameMigrationTest)
     ];
 var failed = 0;
 foreach (var (name, run) in tests)
@@ -128,8 +152,7 @@ static async Task GameLoginFrameTest()
 
 static Task RemouldConfigAndCodecTest()
 {
-    string root = FindRepositoryRoot();
-    RemouldConfigLoader.Load(root);
+    RemouldConfigLoader.Load(FindClientConfigDir());
     Assert(RemouldConfigLoader.AllEffects.Count >= 800,
         "ship remould effect config was not loaded");
     ConfigShipRemouldTemplate stage = RemouldConfigLoader.GetTemplate(525)
@@ -168,7 +191,7 @@ static Task RemouldConfigAndCodecTest()
 
 static Task ConstructionConfigAndCodecTest()
 {
-    ConstructionConfigLoader.Load(FindRepositoryRoot());
+    ConstructionConfigLoader.Load(FindClientConfigDir());
     Assert(ConstructionConfigLoader.Formulas.Count == 4,
         "traditional construction formulas were not loaded");
     Assert(ConstructionConfigLoader.Qualities.Count == 2020,
@@ -213,7 +236,7 @@ static Task ConstructionConfigAndCodecTest()
 
 static Task BuildingCodecTest()
 {
-    BuildingConfigLoader.Load(FindRepositoryRoot());
+    BuildingConfigLoader.Load(FindClientConfigDir());
     Assert(BuildingConfigLoader.Infos.Count == 35 && BuildingConfigLoader.Lands.Count == 10,
         "building or land configs were not loaded");
     Assert(BuildingConfigLoader.GetInfo(11) is { Type: 2, Level: 1 } &&
@@ -266,9 +289,9 @@ static Task BuildingCodecTest()
 
 static Task StoryUnlockConfigTest()
 {
-    var root = FindRepositoryRoot();
-    ChapterCopyLoader.Load(root);
-    CharacterStoryLoader.Load(root);
+    string configDir = FindClientConfigDir();
+    ChapterCopyLoader.Load(configDir);
+    CharacterStoryLoader.Load(configDir);
 
     Assert(ChapterCopyLoader.GetCopyIds(1).Count > 0, "main story chapter was not loaded");
     Assert(ChapterCopyLoader.GetCopyIds(14005).Contains(953001), "event story chapter was not loaded");
@@ -434,7 +457,7 @@ static async Task AccountStorageTest()
     await repo.CreateAsync("hero", "Hero");
     var account = await repo.LoadAccountAsync("hero");
     Assert(account is not null, "account was not created with profile");
-    Assert(account!.Character.Uid == 1 && account.Character.Name == "hero", "character defaults mismatch");
+    Assert(account!.Character.Uid == 1 && account.Character.Name == "Hero", "character defaults mismatch");
     Assert(account.Character.SecretaryId == 1, "secretary id mismatch");
     Assert(account.Dock.Heroes.Count == 1, "dock should contain one hero");
     Assert(account.Dock.Heroes[0].HeroId == account.Character.SecretaryId, "secretary hero not in dock");
@@ -479,6 +502,147 @@ static Task ModTest()
     File.WriteAllText(Path.Combine(dir, "main.lua"), "function on_login() end");
     var manager = new ModManager(root, "jp-1.4.0"); manager.LoadAll(); Assert(manager.LoadedIds.SequenceEqual(["sample"]), "targeted mod was not loaded");
     Directory.Delete(root, true); return Task.CompletedTask;
+}
+
+static Task AccountProfileBootstrapTest()
+{
+    const string profileId = "player-test_01";
+    const string profileName = "测试账号";
+    ServerOptions options = ServerOptions.Parse([
+        "--profile-id=" + profileId,
+        "--profile-name=" + profileName
+    ]);
+    Assert(options.ProfileId == profileId && options.ProfileName == profileName,
+        "server profile identity options mismatch");
+
+    var endpoints = new ServerEndpoints { GameLoginPort = 8123 };
+    var responder = new BootstrapHttpResponder(endpoints, new AnnouncementConfig(), options);
+
+    using JsonDocument plData = JsonDocument.Parse(
+        responder.BuildResponse("GET /phone/getPlData/getPlData HTTP/1.1").Body);
+    Assert(plData.RootElement.GetProperty("pid").GetString() == profileId,
+        "getPlData did not expose selected profile");
+
+    using JsonDocument login = JsonDocument.Parse(
+        responder.BuildResponse("GET /login?test=1 HTTP/1.1").Body);
+    Assert(login.RootElement.GetProperty("Pid").GetString() == profileId &&
+        login.RootElement.GetProperty("openid").GetString() == profileId,
+        "SDK login did not expose selected profile");
+
+    using JsonDocument hash = JsonDocument.Parse(
+        responder.BuildResponse("GET /gethash HTTP/1.1").Body);
+    Assert(hash.RootElement.GetProperty("pid").GetString() == profileId,
+        "gethash did not expose selected profile");
+    return Task.CompletedTask;
+}
+
+static Task AccountProfileNameMigrationTest()
+{
+    const string profileId = "player-legacy01";
+    PlayerAccount legacy = PlayerAccountFactory.CreateDefault(profileId, 1) with
+    {
+        ProfileDisplayName = null
+    };
+
+    PlayerAccount migrated = GameServices.SynchronizeProfileDisplayName(legacy, "Asa");
+    Assert(migrated.Character.Name == "Asa" && migrated.ProfileDisplayName == "Asa",
+        "legacy profile id name was not migrated to the launcher account name");
+
+    PlayerAccount renamedInLauncher = GameServices.SynchronizeProfileDisplayName(migrated, "Bob");
+    Assert(renamedInLauncher.Character.Name == "Bob" && renamedInLauncher.ProfileDisplayName == "Bob",
+        "launcher-managed character name did not follow account rename");
+
+    PlayerAccount custom = renamedInLauncher with
+    {
+        Character = renamedInLauncher.Character with { Name = "游戏内昵称" }
+    };
+    PlayerAccount preserved = GameServices.SynchronizeProfileDisplayName(custom, "Carol");
+    Assert(preserved.Character.Name == "游戏内昵称" && preserved.ProfileDisplayName == "Carol",
+        "custom in-game character name was overwritten");
+    return Task.CompletedTask;
+}
+
+static Task EquipmentModTest()
+{
+    string modsRoot = Path.Combine(FindRepositoryRoot(), "Mods");
+    EquipmentModCatalog catalog = EquipmentModLoader.Load(modsRoot, "jp-1.4.0");
+    EquipmentModDefinition definition = catalog.Equipment.Single(x => x.Id == 900001);
+    Assert(definition.SourceTemplateId == 30023,
+        "custom equipment does not clone the expected built-in template");
+    Assert(catalog.Goods.Single(x => x.GoodId == 990001) is
+        { ShopId: 5, Type: GameServices.GoodsTypeEquip, ItemId: 900001, Num: 1 },
+        "custom equipment GM shop good is invalid");
+
+    var source = new ConfigEquip
+    {
+        EId = 30023,
+        Name = "source",
+        Quality = 3,
+        EnhanceLevelMax = 30,
+        StarMax = 5,
+        EquipProp = [[8, 67], [3200, 225]],
+        EnhanceProp = [[8, 4], [3200, 15]],
+    };
+    ConfigEquip custom = EquipmentModLoader.BuildConfig(source, definition);
+    Assert(custom.EId == 900001 && custom.Name == "未来試作砲" && custom.NoResolve == 1,
+        "custom equipment overrides were not applied");
+    Assert(custom.EquipProp is [[8, 90], [3200, 300]] &&
+           custom.EnhanceProp is [[8, 6], [3200, 20]],
+        "custom equipment attributes were not applied");
+    Assert(source.EId == 30023 && source.Name == "source",
+        "building custom equipment mutated its source template");
+
+    var merged = EquipmentModLoader.MergeGoods(
+        new GmGoodsConfig([], new Dictionary<int, int>()), catalog);
+    Assert(merged.Goods.Any(x => x.GoodId == 990001),
+        "custom equipment was not merged into the GM shop catalog");
+    Assert(EquipmentModLoader.Load(modsRoot, "cn-1.5.20").Equipment.Count == 0,
+        "JP custom equipment loaded for the CN client");
+    return Task.CompletedTask;
+}
+
+static Task EquipmentModConfigIntegrationTest()
+{
+    string root = FindRepositoryRoot();
+    string clientPath = Environment.GetEnvironmentVariable("BLUEOATH_TEST_CLIENT_PATH")
+        ?? Path.Combine(root, "blueoath", "blueoath");
+    string configDir = ConfigDbLoader.BuildConfigDir(clientPath);
+    Assert(File.Exists(Path.Combine(configDir, "config_equip.db")),
+        "real config_equip.db is missing");
+    EquipmentModCatalog catalog = EquipmentModLoader.Load(Path.Combine(root, "Mods"), "jp-1.4.0");
+    EquipLoader.Load(configDir, catalog.Equipment);
+    ConfigEquip? custom = EquipLoader.Get(900001);
+    Assert(custom is { EId: 900001, Name: "未来試作砲", NoResolve: 1 },
+        "custom equipment was not added to the real server catalog");
+    Assert(custom!.EquipProp is [[8, 90], [3200, 300]],
+        "real server catalog contains incorrect custom equipment attributes");
+    Assert(EquipLoader.Get(30023) is { EId: 30023 },
+        "source equipment disappeared after applying the mod overlay");
+    return Task.CompletedTask;
+}
+
+static Task FashionPreviewModTest()
+{
+    string root = FindRepositoryRoot();
+    string modsRoot = Path.Combine(root, "Mods");
+    var manager = new ModManager(modsRoot, "jp-1.4.0");
+    manager.LoadAll();
+    Assert(manager.LoadedIds.Contains("fashion-preview-fix.mod"),
+        "fashion preview fix was not discoverable by the JP mod loader");
+
+    string entry = File.ReadAllText(Path.Combine(modsRoot, "fashion-preview-fix.mod", "main.lua"));
+    Assert(entry.Contains("GetOwnFashionByHeroId", StringComparison.Ordinal) &&
+           entry.Contains("hero_id == nil", StringComparison.Ordinal) &&
+           entry.Contains("self:GetOwnFashion(sf_id)", StringComparison.Ordinal),
+        "fashion preview hook does not guard nil heroes through ship-level ownership");
+    Assert(!entry.Contains("key ~= \"heroId\"", StringComparison.Ordinal),
+        "fashion preview hook still strips heroId and can break remould ownership checks");
+    string bootstrap = File.ReadAllText(Path.Combine(modsRoot, "bootstrap.lua"));
+    Assert(bootstrap.Contains("fashion-preview-fix.mod/main.lua", StringComparison.Ordinal) &&
+           bootstrap.Contains("global_watchers", StringComparison.Ordinal) &&
+           bootstrap.Contains("watch_global = function", StringComparison.Ordinal),
+        "fashion preview fix is missing its shared runtime global watcher");
+    return Task.CompletedTask;
 }
 
 static async Task TcpIntegrationTest()
@@ -529,7 +693,9 @@ static async Task GameLoginIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
-    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
+    var clientPath = Environment.GetEnvironmentVariable("BLUEOATH_CLIENT_PATH")
+        ?? Path.Combine(root, "blueoath", "blueoath");
+    startInfo.ArgumentList.Add("--client-path=" + clientPath);
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -541,6 +707,7 @@ static async Task GameLoginIntegrationTest()
         using var client = new TcpClient();
         await client.ConnectAsync("127.0.0.1", port, timeout.Token);
         var stream = client.GetStream();
+        var observedPushes = new List<TResponse>();
 
         async Task<TResponse> RoundTrip(string method, byte[]? args)
         {
@@ -554,6 +721,7 @@ static async Task GameLoginIntegrationTest()
                 // 服务器可能在应答前主动推送（IsResponse == 0），跳过直到拿到真正响应。
                 if (response.IsResponse == 1)
                     return response;
+                observedPushes.Add(response);
             }
         }
 
@@ -572,10 +740,23 @@ static async Task GameLoginIntegrationTest()
         var userLogin = await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
         Assert(userLogin.Method == "user.UserLogin", "user login response method mismatch");
         Assert(TMessageCodec.DecodeRetUserLogin(userLogin.Ret!) == "ok", "user login response ret mismatch");
+        Assert(observedPushes.Any(p => p.Method == "copy.GetCopy" && p.Ret is { Length: > 20 } &&
+            p.Ret[^2] == 0x18 && p.Ret[^1] == 33),
+            "user login did not synchronize MubarCopy (CopyType=33), leaving アンブラ進軍 empty");
 
         var userInfo = await RoundTrip("user.GetUserInfo", null);
         Assert(userInfo.Method == "user.GetUserInfo", "get user info response method mismatch");
         Assert(userInfo.Ret is { Length: > 0 }, "get user info response was empty");
+
+        byte[] mubarStartArgs = new ProtocolPackage()
+            .Write(0x10, 932113UL) // CopyId(2)
+            .Write(0x48, 1UL)      // BattleMode(9)=Normal
+            .ToArray();
+        var mubarStart = await RoundTrip("copy.StartBase", mubarStartArgs);
+        Assert(mubarStart.Method == "copy.StartBase", "Mubar StartBase response method mismatch");
+        Assert(mubarStart.Ret is { Length: > 0 } &&
+               ProtocolDecoder.DecodeVarintField(mubarStart.Ret, 7) == 33,
+            "Mubar StartBase response did not preserve CopyType 33");
     }
     finally
     {
@@ -893,6 +1074,18 @@ static async Task BuildingAssignmentIntegrationTest()
 static async Task FashionUnlockIntegrationTest()
 {
     var root = FindRepositoryRoot();
+    string clientPath = Path.Combine(root, "blueoath", "blueoath");
+    string configDir = ConfigDbLoader.BuildConfigDir(clientPath);
+    FashionConfigLoader.Load(configDir);
+    FashionShopCatalog catalog = FashionShopGoodsLoader.Load(configDir);
+    Assert(catalog.Goods.Count(g => g.ShopId == 23) == 32 &&
+           catalog.Goods.Count(g => g.ShopId == 29) == 51,
+        "fashion catalog was not rebuilt from the 32 featured and 51 broken shelf entries");
+    Assert(catalog.Goods.Single(g => g.ItemId == 4011014).ShopId == 29,
+        "legacy Z1 broken fashion was not moved from its stale shop_id 23 to shelf shop 29");
+    Assert(catalog.Goods.All(g => g.ItemId != 1062024),
+        "archived Ranger broken fashion was reintroduced despite being absent from both shelves");
+
     var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     // 游戏客户端配置目录由 --client-path 直接指定（不再依赖数据目录位置向上逐级查找）。
@@ -910,7 +1103,7 @@ static async Task FashionUnlockIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
-    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
+    startInfo.ArgumentList.Add("--client-path=" + clientPath);
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -964,12 +1157,156 @@ static async Task FashionUnlockIntegrationTest()
             "login synchronization did not initialize an empty study progress list");
         Assert(fashionRet is { Length: > 100 },
             $"fashion.updateData push did not contain unlocked fashions (ret length: {fashionRet?.Length ?? 0})");
+
+        var shopsResponse = await RoundTrip("shop.GetShopsInfo", null);
+        Dictionary<int, List<int>> shopGoods = DecodeShopGoods(shopsResponse.Ret ?? []);
+        Assert(shopGoods.GetValueOrDefault(23) is { Count: 32 },
+            $"featured fashion shop 23 did not contain its 32 shelf fashions " +
+            $"(actual: {shopGoods.GetValueOrDefault(23)?.Count ?? 0})");
+        Assert(shopGoods.GetValueOrDefault(29) is { Count: 51 },
+            $"broken fashion shop 29 did not contain its 51 shelf fashions " +
+            $"(actual: {shopGoods.GetValueOrDefault(29)?.Count ?? 0})");
+        Assert(!shopGoods[23].Intersect(shopGoods[29]).Any(),
+            "featured and broken fashion shops contained overlapping shelf goods");
+        Assert(shopGoods.GetValueOrDefault(1)?.Contains(500) != true,
+            "legacy unassigned fashion good 500 remained visible in shop 1");
+
+        int fashionGoodId = shopGoods[23][0];
+        var buyResponse = await RoundTrip("shop.BuyGoods", EncodeBuyGoodsRequest(23, fashionGoodId));
+        Assert(buyResponse.Err == 0,
+            $"fashion good {fashionGoodId} was listed in shop 23 but purchase validation rejected it");
+
+        int brokenFashionGoodId = shopGoods[29][0];
+        var brokenBuyResponse = await RoundTrip(
+            "shop.BuyGoods", EncodeBuyGoodsRequest(29, brokenFashionGoodId));
+        Assert(brokenBuyResponse.Err == 0,
+            $"broken fashion good {brokenFashionGoodId} was listed in shop 29 but purchase validation rejected it");
     }
     finally
     {
         if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
         if (Directory.Exists(data)) Directory.Delete(data, true);
     }
+}
+
+static Dictionary<int, List<int>> DecodeShopGoods(byte[] payload)
+{
+    var shops = new Dictionary<int, List<int>>();
+    int offset = 0;
+    while (offset < payload.Length)
+    {
+        ulong key = ReadTestVarint(payload, ref offset);
+        int field = checked((int)(key >> 3));
+        int wire = (int)(key & 7);
+        if (field != 1 || wire != 2)
+        {
+            SkipTestField(payload, ref offset, wire);
+            continue;
+        }
+
+        byte[] shopPayload = ReadTestBytes(payload, ref offset);
+        int shopOffset = 0;
+        int shopId = 0;
+        var goods = new List<int>();
+        while (shopOffset < shopPayload.Length)
+        {
+            ulong shopKey = ReadTestVarint(shopPayload, ref shopOffset);
+            int shopField = checked((int)(shopKey >> 3));
+            int shopWire = (int)(shopKey & 7);
+            if (shopField == 1 && shopWire == 0)
+            {
+                shopId = checked((int)ReadTestVarint(shopPayload, ref shopOffset));
+            }
+            else if (shopField == 3 && shopWire == 2)
+            {
+                byte[] goodsPayload = ReadTestBytes(shopPayload, ref shopOffset);
+                int goodsOffset = 0;
+                while (goodsOffset < goodsPayload.Length)
+                {
+                    ulong goodsKey = ReadTestVarint(goodsPayload, ref goodsOffset);
+                    int goodsField = checked((int)(goodsKey >> 3));
+                    int goodsWire = (int)(goodsKey & 7);
+                    if (goodsField == 1 && goodsWire == 0)
+                        goods.Add(checked((int)ReadTestVarint(goodsPayload, ref goodsOffset)));
+                    else
+                        SkipTestField(goodsPayload, ref goodsOffset, goodsWire);
+                }
+            }
+            else
+            {
+                SkipTestField(shopPayload, ref shopOffset, shopWire);
+            }
+        }
+        if (shopId != 0) shops[shopId] = goods;
+    }
+    return shops;
+}
+
+static byte[] EncodeBuyGoodsRequest(int shopId, int goodId)
+{
+    var bytes = new List<byte>();
+    AppendTestVarint(bytes, 1 << 3);
+    AppendTestVarint(bytes, checked((ulong)shopId));
+    AppendTestVarint(bytes, 2 << 3);
+    AppendTestVarint(bytes, checked((ulong)goodId));
+    AppendTestVarint(bytes, 3 << 3);
+    AppendTestVarint(bytes, 1);
+    return bytes.ToArray();
+}
+
+static void AppendTestVarint(List<byte> bytes, ulong value)
+{
+    while (value >= 0x80)
+    {
+        bytes.Add((byte)(value | 0x80));
+        value >>= 7;
+    }
+    bytes.Add((byte)value);
+}
+
+static ulong ReadTestVarint(byte[] payload, ref int offset)
+{
+    ulong value = 0;
+    for (int shift = 0; shift < 64; shift += 7)
+    {
+        if (offset >= payload.Length) throw new EndOfStreamException("truncated test protobuf varint");
+        byte current = payload[offset++];
+        value |= (ulong)(current & 0x7f) << shift;
+        if ((current & 0x80) == 0) return value;
+    }
+    throw new InvalidDataException("test protobuf varint is too long");
+}
+
+static byte[] ReadTestBytes(byte[] payload, ref int offset)
+{
+    int length = checked((int)ReadTestVarint(payload, ref offset));
+    if (length < 0 || offset + length > payload.Length)
+        throw new EndOfStreamException("truncated test protobuf bytes");
+    byte[] value = payload.AsSpan(offset, length).ToArray();
+    offset += length;
+    return value;
+}
+
+static void SkipTestField(byte[] payload, ref int offset, int wire)
+{
+    switch (wire)
+    {
+        case 0:
+            ReadTestVarint(payload, ref offset);
+            return;
+        case 1:
+            offset = checked(offset + 8);
+            break;
+        case 2:
+            offset = checked(offset + checked((int)ReadTestVarint(payload, ref offset)));
+            break;
+        case 5:
+            offset = checked(offset + 4);
+            break;
+        default:
+            throw new InvalidDataException($"unsupported test protobuf wire type {wire}");
+    }
+    if (offset > payload.Length) throw new EndOfStreamException("truncated test protobuf field");
 }
 
 static bool ContainsSequence(byte[] haystack, byte[] needle)
@@ -1276,7 +1613,7 @@ static async Task HeroRemouldIntegrationTest()
         "BlueOath.Server.dll");
     Assert(File.Exists(serverDll), "server assembly is missing; build the server first");
 
-    RemouldConfigLoader.Load(root);
+    RemouldConfigLoader.Load(FindClientConfigDir());
     ConfigShipRemouldTemplate stage = RemouldConfigLoader.GetTemplate(525)
         ?? throw new InvalidDataException("Oakland remould stage was not loaded");
     ConfigShipRemouldTemplate nextStage = RemouldConfigLoader.GetTemplate(526)
@@ -1853,6 +2190,66 @@ static string FindRepositoryRoot()
         current = current.Parent;
     }
     throw new DirectoryNotFoundException("Repository root not found");
+}
+
+static Task MubarBattleStartCodecTest()
+{
+    string configDir = FindClientConfigDir();
+    ChapterCopyLoader.Load(configDir);
+    CopyBattleLoader.Load(configDir);
+
+    const int copyId = 932113; // 实际客户端日志中的アンブラ進軍关卡
+    Assert(ChapterCopyLoader.GetCopyType(copyId) == 33,
+        "Mubar activity copy was not classified as CopyType 33");
+
+    PlayerAccount account = PlayerAccountFactory.CreateDefault("mubar-codec", 1);
+    byte[] payload = ProtocolEncoder.EncodeStartBaseRet(
+        copyId, account.Dock.Heroes.ToList(), account.Character);
+    Assert(ProtocolDecoder.DecodeVarintField(payload, 7) == 33,
+        "copy.StartBase downgraded MubarCopy to PlotCopy");
+    Assert(CopyBattleLoader.IsSearch3d(copyId),
+        "Mubar activity copy was not classified as search_3d");
+
+    bool hasCopyResource = false;
+    bool hasConfigData = false;
+    bool skipsEnemyVcr = false;
+    ProtocolDecoder.ProtoReader reader = new(payload);
+    while (reader.TryReadField(out int field, out int wire))
+    {
+        if (field == 4) hasCopyResource = true;
+        if (field == 25) hasConfigData = true;
+        if (field == 17 && wire == 2)
+        {
+            ProtocolDecoder.ProtoReader skip = new(reader.ReadBytes());
+            while (skip.TryReadField(out int skipField, out int skipWire))
+            {
+                if ((skipField == 2 || skipField == 3) && skipWire == 0)
+                {
+                    if (skip.ReadVarint() == 1)
+                        skipsEnemyVcr = true;
+                }
+                else
+                    skip.Skip(skipWire);
+            }
+            continue;
+        }
+        reader.Skip(wire);
+    }
+    Assert(!hasCopyResource,
+        "search_3d Mubar battle included arrRes and can stall on missing battlefield_resource");
+    Assert(hasConfigData, "search_3d Mubar battle omitted search initialization ConfigData");
+    Assert(skipsEnemyVcr, "search_3d Mubar battle did not skip blocking fleet VCR sequences");
+    Assert(CopyBattleLoader.GetFleetIdList(copyId).Count > 0,
+        "Mubar activity copy has no enemy fleet data");
+    return Task.CompletedTask;
+}
+
+static string FindClientConfigDir()
+{
+    string root = FindRepositoryRoot();
+    string clientPath = Environment.GetEnvironmentVariable("BLUEOATH_CLIENT_PATH")
+        ?? Path.Combine(root, "blueoath", "blueoath");
+    return ConfigDbLoader.BuildConfigDir(clientPath);
 }
 
 static void Assert(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }

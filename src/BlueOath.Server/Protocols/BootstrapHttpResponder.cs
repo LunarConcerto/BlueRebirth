@@ -12,9 +12,11 @@ internal sealed record BootstrapHttpResponse(
 /// 服务器列表、登录角色等）。所有响应体都经过逆向确认，字段类型（字符串/数字）需与客户端
 /// 解析方式精确匹配。
 /// </summary>
-internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints, AnnouncementConfig announcementConfig)
+internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints, AnnouncementConfig announcementConfig,
+    ServerOptions options)
 {
     private readonly ServerEndpoints _endpoints = endpoints;
+    private readonly string _profileIdJson = JsonSerializer.Serialize(options.ProfileId);
 
     public BootstrapHttpResponse BuildResponse(string requestLine, string? host = null)
     {
@@ -66,7 +68,7 @@ internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints, Announce
             }
             return new(200, "OK", "application/json; charset=utf-8",
                 "{\"errornu\":0,\"errordesc\":\"\",\"networkCheck\":\"1\"," +
-                "\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"pid\":\"local-player\"," +
+                "\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"pid\":" + _profileIdJson + "," +
                 "\"serverId\":\"jp\",\"pl\":\"google_windows\",\"os\":\"android\",\"gn\":\"jpshipgirl\"," +
                 "\"sensorInfo\":\"\",\"localInfo\":\"\",\"timeZoneId\":\"\"," +
                 "\"screenWidth\":\"1920\",\"screenHeight\":\"1080\",\"dangerWidth\":\"0\",\"strDeviceInfo\":\"\"," +
@@ -75,16 +77,16 @@ internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints, Announce
 
         if (requestLine.Contains("/login?", StringComparison.OrdinalIgnoreCase))
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":0,\"errordesc\":\"\",\"Pid\":\"local-player\",\"UID\":\"local-player\"," +
-                "\"uid\":\"local-player\",\"uuid\":\"00000000-0000-4000-8000-000000000001\"," +
-                "\"token\":\"local-token\",\"openid\":\"local-player\",\"ServerID\":\"jp\"," +
+                "{\"errornu\":0,\"errordesc\":\"\",\"Pid\":" + _profileIdJson + ",\"UID\":" + _profileIdJson + "," +
+                "\"uid\":" + _profileIdJson + ",\"uuid\":\"00000000-0000-4000-8000-000000000001\"," +
+                "\"token\":\"local-token\",\"openid\":" + _profileIdJson + ",\"ServerID\":\"jp\"," +
                 "\"serverid\":\"jp\",\"newuser\":\"0\",\"qid\":\"1\",\"id\":\"1\"}");
 
         if (requestLine.Contains("/gethash", StringComparison.OrdinalIgnoreCase))
         {
             var gamePort = _endpoints.ResolvedGameLoginPort;
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":\"0\",\"errordesc\":\"\",\"pid\":\"local-player\",\"serverID\":\"game1\"," +
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"pid\":" + _profileIdJson + ",\"serverID\":\"game1\"," +
                 "\"feignRoleId\":\"1\",\"qid\":\"1\",\"uuid\":\"00000000-0000-4000-8000-000000000001\"," +
                 "\"offset\":\"0\",\"host\":\"127.0.0.1\",\"port\":" + gamePort + "}");
         }

@@ -60,6 +60,95 @@ internal static class GmGoodsConfigLoader
     }
 }
 
+internal sealed record FashionShopCatalog(
+    IReadOnlyList<GmGoodConfig> Goods,
+    IReadOnlySet<int> ShelfGoodIds);
+
+/// <summary>
+/// 从客户端货架配置重建精选换装（23）和大破换装（29）商品。
+/// config_fashion.shop_id 含有旧版单商店时期的遗留值；当前分栏应以
+/// config_shop.shelf_list 为准。每个商店内每个 FashionTid 只保留一个商品，
+/// 避免同一时装的历史复刻商品重复出现。
+/// </summary>
+internal static class FashionShopGoodsLoader
+{
+    private static readonly int[] FashionShopIds = [23, 29];
+
+    public static FashionShopCatalog Load(string configDir)
+    {
+        try
+        {
+            Dictionary<int, ConfigShopGoods> goodsConfigs =
+                ConfigDbLoader.LoadAll<ConfigShopGoods>(configDir, "config_shop_goods.db");
+            Dictionary<int, ConfigShop> shopConfigs =
+                ConfigDbLoader.LoadAll<ConfigShop>(configDir, "config_shop.db");
+            var shopByGoodId = new Dictionary<int, int>();
+            foreach (int shopId in FashionShopIds)
+            {
+                if (!shopConfigs.TryGetValue(shopId, out ConfigShop? shop))
+                    throw new InvalidDataException($"fashion shop {shopId} is missing from config_shop.db");
+                foreach (long rawGoodId in shop.ShelfList ?? [])
+                {
+                    int goodId = checked((int)rawGoodId);
+                    if (shopByGoodId.TryGetValue(goodId, out int otherShopId) && otherShopId != shopId)
+                        throw new InvalidDataException(
+                            $"fashion good {goodId} belongs to both shop {otherShopId} and {shopId}");
+                    shopByGoodId[goodId] = shopId;
+                }
+            }
+
+            var candidates = shopByGoodId
+                .Where(kv => goodsConfigs.ContainsKey(kv.Key))
+                .Select(kv => new
+                {
+                    GoodId = kv.Key,
+                    ShopId = kv.Value,
+                    Config = goodsConfigs[kv.Key],
+                })
+                .Where(x => x.Config.GoodsVisible == 1 &&
+                            x.Config.Goods is { Count: >= 2 } goods &&
+                            goods[0] == GameServices.GoodsTypeFashion &&
+                            FashionConfigLoader.FashionSfIdMap.ContainsKey(checked((int)goods[1])))
+                .Select(x => new
+                {
+                    x.GoodId,
+                    x.ShopId,
+                    x.Config,
+                    FashionId = checked((int)x.Config.Goods![1]),
+                    Num = x.Config.Goods!.Count >= 3 ? checked((int)x.Config.Goods[2]) : 1,
+                })
+                .ToList();
+
+            var result = candidates
+                .GroupBy(x => (x.ShopId, x.FashionId))
+                // 无期限商品优先；只有限时复刻时选最新的一条。
+                .Select(group => group
+                    .OrderByDescending(x => x.Config.PeriodBuy is not { Count: > 0 })
+                    .ThenByDescending(x => x.GoodId)
+                    .First())
+                .Select(x => new GmGoodConfig(
+                    x.GoodId,
+                    x.ShopId,
+                    GameServices.GoodsTypeFashion,
+                    x.FashionId,
+                    Math.Max(1, x.Num)))
+                .OrderBy(x => x.ShopId)
+                .ThenBy(x => x.GoodId)
+                .ToList();
+            int ignoredShelfGoods = shopByGoodId.Count - candidates.Count;
+            Console.Error.WriteLine(
+                $"[fashion-shop] cataloged {result.Count} fashions from {shopByGoodId.Count} shelf goods" +
+                (ignoredShelfGoods == 0 ? "" : $"; ignored {ignoredShelfGoods} invalid shelf goods"));
+            return new FashionShopCatalog(result, shopByGoodId.Keys.ToHashSet());
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[fashion-shop] failed to load goods: {ex.Message}");
+            return new FashionShopCatalog([], new HashSet<int>());
+        }
+    }
+}
+
 internal static class GmMailsConfigLoader
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -273,6 +362,7 @@ internal static class CopyBattleLoader{
     private static readonly Dictionary<int, bool> _fleetHasAttached = new();
     private static readonly Dictionary<int, EnemyStat> _enemyStats = new();
     private static readonly Dictionary<int, List<int>> _copyMissions = new();
+    private static readonly HashSet<int> _search3dCopies = [];
     private static bool _loaded;
 
     public sealed record EnemyStat(int Hp, int Attack, int Defense, int Level, int ShipInfoId,
@@ -287,6 +377,7 @@ internal static class CopyBattleLoader{
             LoadFleetEnemies(configDir);
             LoadEnemyStats(configDir);
             LoadCopyMissions(configDir);
+            LoadCopyDisplay(configDir);
         }
         catch { }
         _loaded = true;
@@ -413,6 +504,23 @@ internal static class CopyBattleLoader{
         }
         catch { }
     }
+
+    private static void LoadCopyDisplay(string configDir)
+    {
+        try
+        {
+            ConfigDbLoader.LoadRows(configDir, "config_copy_display.db", (id, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("search_3d", out var search3d) &&
+                    search3d.ValueKind == JsonValueKind.Number && search3d.GetInt32() == 1)
+                    _search3dCopies.Add(id);
+            });
+        }
+        catch { }
+    }
+
+    public static bool IsSearch3d(int copyId) => _search3dCopies.Contains(copyId);
 
     public static int GetFleetIdWithAttached(int copyId)
         => GetFleetId(copyId);
@@ -548,7 +656,9 @@ internal static class EquipLoader
     private static readonly Dictionary<int, ConfigEquipEnhanceRenovate> _renovateLevels = new();
     private static bool _loaded;
 
-    public static void Load(string configDir)
+    public static void Load(
+        string configDir,
+        IReadOnlyList<EquipmentModDefinition>? modEquipment = null)
     {
         if (_loaded) return;
         try
@@ -566,6 +676,22 @@ internal static class EquipLoader
                 _levelbreakItems[id] = cfg;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceRenovate>(configDir, "config_equip_enhance_renovate.db"))
                 _renovateLevels[id] = cfg;
+            foreach (EquipmentModDefinition definition in modEquipment ?? [])
+            {
+                if (_equips.ContainsKey(definition.Id))
+                {
+                    Console.Error.WriteLine(
+                        $"[equipment-mod] {definition.ModId} id {definition.Id} conflicts with config_equip.db and was skipped");
+                    continue;
+                }
+                if (!_equips.TryGetValue(definition.SourceTemplateId, out ConfigEquip? source))
+                {
+                    Console.Error.WriteLine(
+                        $"[equipment-mod] {definition.ModId} source id {definition.SourceTemplateId} is missing");
+                    continue;
+                }
+                _equips[definition.Id] = EquipmentModLoader.BuildConfig(source, definition);
+            }
         }
         catch { }
         _loaded = true;
@@ -616,7 +742,9 @@ internal static class RemouldConfigLoader
     private static readonly Dictionary<int, ConfigShipRemouldTemplate> _templates = new();
     private static bool _loaded;
 
-    public static void Load(string configDir)
+    public static void Load(
+        string configDir,
+        IReadOnlyList<EquipmentModDefinition>? modEquipment = null)
     {
         if (_loaded) return;
         try
@@ -654,6 +782,7 @@ internal static class ChapterCopyLoader
     private static readonly Dictionary<int, int> _firstCopyMap = new();
     private static readonly List<ChapterMemory> _allChapterMemories = [];
     private static readonly Dictionary<int, List<int>> _seaChapterCopies = new();
+    private static readonly Dictionary<int, List<int>> _mubarChapterCopies = new();
     private static int _seaFirstChapterId = 0;
     private static readonly Dictionary<int, int> _copyTypeMap = new();
     private static int _seaFirstCopyId = 0;
@@ -700,6 +829,14 @@ internal static class ChapterCopyLoader
                         _seaFirstCopyId = copies[0];
                     }
                 }
+                else if (ct == 33)
+                {
+                    // アンブラ進軍（MubarCopy）。主页入口按活动周期直接开放，
+                    // 因此登录时也必须有对应的 copy.GetCopy 数据，否则页面会以
+                    // 空章节列表启动并在动画结束后访问 chapterInfo[1]。
+                    _mubarChapterCopies[id] = copies;
+                    foreach (var cid in copies) _copyTypeMap[cid] = 33;
+                }
             });
             _allChapterMemories.Sort(static (left, right) => left.ChapterId.CompareTo(right.ChapterId));
             Console.Error.WriteLine(
@@ -736,6 +873,20 @@ internal static class ChapterCopyLoader
     {
         var levels = GetSeaLevels();
         return levels.Count > 0 ? levels[^1] : _seaFirstCopyId;
+    }
+
+    public static List<int> GetMubarLevels()
+    {
+        var result = new List<int>();
+        foreach (var chapterId in _mubarChapterCopies.Keys.OrderBy(x => x))
+            result.AddRange(_mubarChapterCopies[chapterId]);
+        return result;
+    }
+
+    public static int GetMubarLastCopyId()
+    {
+        var levels = GetMubarLevels();
+        return levels.Count > 0 ? levels[^1] : 0;
     }
 
     public static int GetCopyType(int copyId)

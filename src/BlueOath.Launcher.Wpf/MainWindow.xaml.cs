@@ -24,17 +24,20 @@ public partial class MainWindow : Window
     private void InitializeViews(string rootDir, SettingsService settingsService, BlueOath.Launcher.Wpf.Models.SettingsConfig settings)
     {
         var processManager = new ProcessManager(rootDir, settings);
+        var accountService = new AccountService();
 
-        var launchViewModel = new LaunchViewModel(processManager, _mainViewModel, settingsService);
+        var launchViewModel = new LaunchViewModel(processManager, _mainViewModel, settingsService, accountService);
         _mainViewModel.RegisterLaunchViewModel(launchViewModel);
         var announcementService = new AnnouncementService();
         launchViewModel.LoadAnnouncements(announcementService.LoadAnnouncements());
 
         var guardianViewModel = new GuardianViewModel(processManager, _mainViewModel);
+        var accountsViewModel = new AccountsViewModel(accountService);
         var settingsViewModel = new SettingsViewModel(settingsService, _mainViewModel);
 
         _mainViewModel.AddPage(launchViewModel);
         _mainViewModel.AddPage(guardianViewModel);
+        _mainViewModel.AddPage(accountsViewModel);
         _mainViewModel.AddPage(settingsViewModel);
         _mainViewModel.SelectedPageIndex = 0;
 

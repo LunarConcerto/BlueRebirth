@@ -29,7 +29,7 @@
 
 ### 3.1 版本与本地准备
 
-1. 启动器版本由 `src/BlueOath.Launcher.Wpf/version.txt` 的生成规则自动增量，无需手工设置目标版本。
+1. 确认 `src/BlueOath.Launcher.Wpf/version.txt` 的当前版本；需要升版时，在发布命令中加入 `--increment-version`，否则版本保持不变。
 2. 确认仓库根目录下 `baseline.json`、原始配置文件、运行时文件准备就绪。
 3. 检查 `autoUpdate` 配置策略是否已确定（默认关闭空值）：
    - 若发版后立即启用自动更新，请先准备 manifest 链接。
@@ -41,6 +41,7 @@ dotnet run --project src\BlueOath.Publisher\BlueOath.Publisher.csproj -- --outpu
 ```
 
 - 默认输出：`release\BlueOath-Release`（可通过 `--output` 指定到固定目录便于后续打包）。
+- 需要将修订号递增一次时，额外传入 `--increment-version`；普通构建和默认发布不会修改版本文件。
 
 ### 3.3 脚本执行内含阶段
 
@@ -106,3 +107,7 @@ BlueOath-Release
   - 检查 `autoUpdateEnabled` 是否为 `true`；
   - `updateManifestUrl` 是否可访问；
   - 清单 `version` 大于当前版本（严格比较）。
+- 双击启动器仍提示安装或更新 .NET：
+  - 启动器采用轻量的框架依赖发布，不在发行包中内置 .NET 运行库；
+  - 必须安装与程序架构一致的 **.NET Desktop Runtime 8 x64**，普通 **.NET Runtime** 不包含 WPF；
+  - 安装后可用 `dotnet --list-runtimes` 确认存在 `Microsoft.WindowsDesktop.App 8.0.x`。

@@ -24,9 +24,16 @@ if (!string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase) &
 
 var skipBuild = args.Contains("--skip-build", StringComparer.OrdinalIgnoreCase);
 var skipNative = args.Contains("--skip-native", StringComparer.OrdinalIgnoreCase);
+var incrementVersion = args.Contains("--increment-version", StringComparer.OrdinalIgnoreCase);
+if (skipBuild && incrementVersion)
+{
+    Console.Error.WriteLine("--increment-version cannot be combined with --skip-build.");
+    return 2;
+}
 
 Console.WriteLine($"=== Blue Oath Release Publisher ===");
 Console.WriteLine($"  Output: {outputDir}");
+Console.WriteLine($"  Increment launcher version: {(incrementVersion ? "yes" : "no")}");
 Console.WriteLine();
 
 Directory.CreateDirectory(outputDir);
@@ -106,6 +113,30 @@ if (!skipBuild)
     Console.WriteLine("[3/5] Publishing WPF launcher...");
     var launcherProj = Path.Combine(root, "src", "BlueOath.Launcher.Wpf", "BlueOath.Launcher.Wpf.csproj");
     var launcherOutput = Path.Combine(outputDir, "launcher");
+
+    if (incrementVersion)
+    {
+        var incrementPsi = new ProcessStartInfo("dotnet")
+        {
+            Arguments = $"msbuild \"{launcherProj}\" -t:IncrementLauncherVersion",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        var incrementProc = Process.Start(incrementPsi)!;
+        incrementProc.OutputDataReceived += (s, e) => { if (e.Data != null) Console.WriteLine($"  {e.Data}"); };
+        incrementProc.ErrorDataReceived += (s, e) => { if (e.Data != null) Console.Error.WriteLine($"  {e.Data}"); };
+        incrementProc.BeginOutputReadLine();
+        incrementProc.BeginErrorReadLine();
+        await incrementProc.WaitForExitAsync();
+        if (incrementProc.ExitCode != 0)
+        {
+            Console.Error.WriteLine("  Launcher version increment failed.");
+            return 1;
+        }
+    }
+
     var psi = new ProcessStartInfo("dotnet")
     {
         Arguments = $"publish \"{launcherProj}\" -c {configuration} -o \"{launcherOutput}\"",
@@ -150,6 +181,10 @@ CopyIfExists(Path.Combine(root, "tools", "tls-loopback-proxy.py"), toolsDst);
 
 // Baseline
 CopyIfExists(Path.Combine(root, "baseline.json"), outputDir);
+
+var modsSrc = Path.Combine(root, "Mods");
+if (Directory.Exists(modsSrc))
+    CopyDirectory(modsSrc, Path.Combine(outputDir, "Mods"));
 
 Console.WriteLine("  Runtime files copied.");
 

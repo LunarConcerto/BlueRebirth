@@ -6,6 +6,8 @@
     <RootNamespace>BlueOath.Launcher.Wpf</RootNamespace>
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+    <VersionFile>$(MSBuildProjectDirectory)\version.txt</VersionFile>
+    <VersionOutput>$(MSBuildProjectDirectory)\VersionInfo.g.cs</VersionOutput>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Resources\announcements.json" />
@@ -16,27 +18,33 @@
     </None>
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
-<Target Name="GenerateVersion" BeforeTargets="GenerateAssemblyInfo;BeforeBuild">
+  <!-- Explicit target: invoke it directly when a release needs a version bump. -->
+  <Target Name="IncrementLauncherVersion">
+    <ReadLinesFromFile File="$(VersionFile)">
+      <Output TaskParameter="Lines" ItemName="VersionToIncrementLines" />
+    </ReadLinesFromFile>
     <PropertyGroup>
-      <VersionFile>$(MSBuildProjectDirectory)\version.txt</VersionFile>
-      <VersionOutput>$(MSBuildProjectDirectory)\VersionInfo.g.cs</VersionOutput>
+      <VersionToIncrement>@(VersionToIncrementLines)</VersionToIncrement>
+      <VersionMajor>$([System.String]::new('$(VersionToIncrement)').Split('.')[0])</VersionMajor>
+      <VersionMinor>$([System.String]::new('$(VersionToIncrement)').Split('.')[1])</VersionMinor>
+      <VersionBuild>$([System.String]::new('$(VersionToIncrement)').Split('.')[2])</VersionBuild>
+      <IncrementedVersion>$(VersionMajor).$(VersionMinor).$([MSBuild]::Add($(VersionBuild), 1))</IncrementedVersion>
     </PropertyGroup>
+    <WriteLinesToFile File="$(VersionFile)" Lines="$(IncrementedVersion)" Overwrite="true" />
+    <Message Importance="high" Text="Launcher version incremented: $(VersionToIncrement) -> $(IncrementedVersion)" />
+  </Target>
+
+  <Target Name="GenerateVersion" BeforeTargets="GenerateAssemblyInfo;BeforeBuild">
     <ReadLinesFromFile File="$(VersionFile)">
       <Output TaskParameter="Lines" ItemName="VersionLines" />
     </ReadLinesFromFile>
     <PropertyGroup>
-      <VersionRaw>@(VersionLines)</VersionRaw>
-      <VersionMajor>$([System.String]::new('$(VersionRaw)').Split('.')[0])</VersionMajor>
-      <VersionMinor>$([System.String]::new('$(VersionRaw)').Split('.')[1])</VersionMinor>
-      <VersionBuild>$([System.String]::new('$(VersionRaw)').Split('.')[2])</VersionBuild>
-      <VersionBuildIncremented>$([MSBuild]::Add($(VersionBuild), 1))</VersionBuildIncremented>
-      <VersionString>$(VersionMajor).$(VersionMinor).$(VersionBuildIncremented)</VersionString>
+      <VersionString>@(VersionLines)</VersionString>
       <Version>$(VersionString)</Version>
       <AssemblyVersion>$(VersionString)</AssemblyVersion>
       <FileVersion>$(VersionString)</FileVersion>
       <InformationalVersion>$(VersionString)</InformationalVersion>
     </PropertyGroup>
-    <WriteLinesToFile File="$(VersionFile)" Lines="$(VersionString)" Overwrite="true" />
     <ItemGroup>
       <VersionCodeLines Include="namespace BlueOath.Launcher.Wpf" />
       <VersionCodeLines Include="{" />

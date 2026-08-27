@@ -25,6 +25,8 @@ internal sealed class GameServices
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
+    private readonly string _defaultProfileId;
+    private readonly string _defaultProfileName;
     private readonly GmGoodsConfig _gmGoods;
     private readonly Dictionary<int, GmGoodConfig> _gmGoodsMap;
     private readonly Dictionary<int, int> _fashionSfIdMap;
@@ -44,11 +46,20 @@ internal sealed class GameServices
         _repo = repo;
         _logger = loggerFactory.CreateLogger<GameServices>();
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
+        _defaultProfileId = options.ProfileId;
+        _defaultProfileName = options.ProfileName;
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
+        string clientId = options.Profile.Region == ClientRegion.Japan
+            ? $"jp-{options.Profile.ClientVersion}"
+            : $"cn-{options.Profile.ClientVersion}";
+        EquipmentModCatalog equipmentMods = EquipmentModLoader.Load(
+            EquipmentModLoader.ResolveModsRoot(options.ClientPath), clientId);
+        FashionConfigLoader.Load(configDir);
+        var gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
+        FashionShopCatalog fashionShopCatalog = FashionShopGoodsLoader.Load(configDir);
         _gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
-        FashionConfigLoader.Load(configDir);
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
@@ -62,7 +73,7 @@ internal sealed class GameServices
         MissionChainLoader.Load(configDir);
         ShipMainLoader.Load(configDir);
         AssistShipLoader.Load(configDir);
-        EquipLoader.Load(configDir);
+        EquipLoader.Load(configDir, equipmentMods.Equipment);
         AffectionItemLoader.Load(configDir);
         ShipHandbookLoader.Load(configDir);
         PlotTriggerLoader.Load(configDir);
@@ -124,27 +135,25 @@ internal sealed class GameServices
     internal ConfigAffectionItem? GetAffectionItem(int id) => AffectionItemLoader.Get(id);
 
     /// <summary>
-    /// 处理登录操作码：解码 <c>TArgLogin</c>，按 <c>Pid</c> 创建/加载本地档案，
-    /// 返回 <c>TRetLogin</c> 编码结果与解析出的 profileId（供会话后续关联账号）。
+    /// 处理登录操作码：解码 <c>TArgLogin</c>，按服务器启动时选定的账号创建/加载本地档案，
+    /// 返回 <c>TRetLogin</c> 编码结果与 profileId（供会话后续关联账号）。
     /// </summary>
     public async Task<LoginPayload> BuildLoginPayloadAsync(byte[] payload, CancellationToken ct)
     {
-        var request = GameLoginCodec.DecodeLogin(payload);
-        var profileId = string.IsNullOrWhiteSpace(request.Pid) ? PlayerAccountFactory.DefaultProfileId : request.Pid;
+        _ = GameLoginCodec.DecodeLogin(payload);
+        var profileId = _defaultProfileId;
         _logger.LogInformation("game-login login pid={ProfileId}", profileId);
         if (await _repo.LoadAsync(profileId, ct) is null)
-            await _repo.CreateAsync(profileId, profileId, ct);
+            await _repo.CreateAsync(profileId, _defaultProfileName, ct);
         var response = new TRetLogin("0", profileId);
         return new LoginPayload(GameOperationCodes.Login, GameLoginCodec.Encode(response), profileId);
     }
 
-    /// <summary>解析 <c>player.Login</c> 参数中的 Pid，返回关联的 profileId。</summary>
+    /// <summary>返回服务器启动时选定的账号，避免客户端缓存的旧 Pid 串档。</summary>
     public string ResolveLoginProfileId(TRequest request)
     {
-        if (request.Args is null)
-            return PlayerAccountFactory.DefaultProfileId;
-        var login = GameLoginCodec.DecodeLogin(request.Args);
-        return string.IsNullOrWhiteSpace(login.Pid) ? PlayerAccountFactory.DefaultProfileId : login.Pid;
+        _ = request;
+        return _defaultProfileId;
     }
 
     public async Task<byte[]> BuildUpdateUserInfoPushAsync(string profileId, uint now, CancellationToken ct)
@@ -268,6 +277,13 @@ internal sealed class GameServices
                 Ret: ProtocolEncoder.EncodeSeaCopyInfo(account.SeaProgress),
                 Time: now)),
 
+            // アンブラ進軍（MubarCopy, CopyType=33）。入口是客户端长期活动配置，
+            // 不依赖服务器活动列表；不推送会导致 MubarCopyPage 以空章节列表启动。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "copy.GetCopy",
+                Ret: ProtocolEncoder.EncodeMubarCopyInfo(),
+                Time: now)),
+
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目
             // （IllustrateId = config_ship_handbook 的 key = ship_info_id）；未列出的条目
             // 由 IllustrateData:UpdateHero 从 config_ship_handbook 生成 LOCK 状态。
@@ -348,14 +364,19 @@ internal sealed class GameServices
             PlayerAccount buildingMaterialsReady = EnsureBuildingMaterials(account);
             bool buildingMaterialsMigrated = !ReferenceEquals(buildingMaterialsReady, account);
             account = buildingMaterialsReady;
+            PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
+            bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
+            account = profileNameReady;
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
-            if (affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated)
+            if (affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
+                profileNameMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
-        var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        var created = PlayerAccountFactory.CreateDefault(profileId,
+            checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()), GetProfileDisplayName(profileId));
         created = EnsureHeroPSkills(created);
         created = EnsureAllFashion(created);
         created = NormalizeAffection(created);
@@ -377,7 +398,8 @@ internal sealed class GameServices
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is null)
         {
-            account = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            account = PlayerAccountFactory.CreateDefault(profileId,
+                checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()), GetProfileDisplayName(profileId));
             account = EnsureHeroPSkills(account);
             account = EnsureAllFashion(account);
             account = NormalizeAffection(account);
@@ -400,12 +422,37 @@ internal sealed class GameServices
         PlayerAccount buildingMaterialsReady = EnsureBuildingMaterials(account);
         bool buildingMaterialsMigrated = !ReferenceEquals(buildingMaterialsReady, account);
         account = buildingMaterialsReady;
+        PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
+        bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
+        account = profileNameReady;
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
-        if (affectionMigrated || buildingMigrated || buildingMaterialsMigrated)
+        if (affectionMigrated || buildingMigrated || buildingMaterialsMigrated || profileNameMigrated)
             await _repo.SaveAccountAsync(account, ct);
         return account;
+    }
+
+    private string GetProfileDisplayName(string profileId) =>
+        profileId.Equals(_defaultProfileId, StringComparison.Ordinal) ? _defaultProfileName : profileId;
+
+    /// <summary>
+    /// 同步启动器账号名。只有角色名仍等于上次由启动器管理的名称时才跟随更新，
+    /// 因此玩家在游戏内主动设置的昵称不会被覆盖。
+    /// </summary>
+    internal static PlayerAccount SynchronizeProfileDisplayName(PlayerAccount account, string displayName)
+    {
+        string normalized = string.IsNullOrWhiteSpace(displayName) ? account.ProfileId : displayName.Trim();
+        if (account.ProfileDisplayName == normalized)
+            return account;
+
+        bool isManagedName = account.ProfileDisplayName is null
+            ? account.Character.Name == account.ProfileId
+            : account.Character.Name == account.ProfileDisplayName;
+        PlayerCharacter character = isManagedName
+            ? account.Character with { Name = normalized }
+            : account.Character;
+        return account with { Character = character, ProfileDisplayName = normalized };
     }
 
     /// <summary>获取最近一次抽卡创建的新英雄 ID 列表（供会话层只推送增量 hero 数据）。</summary>

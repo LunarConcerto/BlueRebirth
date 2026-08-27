@@ -53,7 +53,8 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<BootstrapHttpResponder>(sp =>
             new BootstrapHttpResponder(
                 sp.GetRequiredService<ServerEndpoints>(),
-                sp.GetRequiredService<AnnouncementConfig>()));
+                sp.GetRequiredService<AnnouncementConfig>(),
+                sp.GetRequiredService<ServerOptions>()));
         builder.Services.AddSingleton<JsonGameSession>();
         builder.Services.AddSingleton<BootstrapHttpSession>();
 

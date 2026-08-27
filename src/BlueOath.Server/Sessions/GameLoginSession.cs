@@ -12,7 +12,7 @@ namespace BlueOath.Server.Sessions;
 /// NetSocket 帧）。会话内跟踪当前 profileId，并把所有请求交给 <see cref="MessageRouter"/>
 /// 分发到对应模块；按「前置推送 → 应答 → 后置推送」写回客户端。
 /// </summary>
-internal sealed class GameLoginSession(MessageRouter router, ILoggerFactory loggerFactory)
+internal sealed class GameLoginSession(MessageRouter router, ILoggerFactory loggerFactory, ServerOptions options)
 {
     private readonly MessageRouter _router = router;
     private readonly ILogger _fileLogger = loggerFactory.CreateLogger(GameLoginFileLoggerProvider.Category);
@@ -22,7 +22,7 @@ internal sealed class GameLoginSession(MessageRouter router, ILoggerFactory logg
     {
         using (client)
         {
-            var profileId = PlayerAccountFactory.DefaultProfileId;
+            var profileId = options.ProfileId;
             var remote = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
             _fileLogger.LogInformation("game-login[{ConnectionId}] accepted remote={Remote}", connectionId, remote);
             try
