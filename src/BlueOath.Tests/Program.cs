@@ -37,7 +37,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
     ("protobuf login server creates a local profile", GameLoginIntegrationTest),
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
-    ("all fashions unlocked on account creation", FashionUnlockIntegrationTest),
+    ("fashion synchronization and shops use configured catalog", FashionUnlockIntegrationTest),
     ("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest),
     ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest),
     ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest),
@@ -57,6 +57,8 @@ if (args.Contains("--marry-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase and consecutive marriages are atomic", HeroMutationIntegrationTest)];
 if (args.Contains("--shop-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("oath ring purchase refreshes inventory before its response", HeroMutationIntegrationTest)];
+if (args.Contains("--fashion-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("fashion synchronization and shops use configured catalog", FashionUnlockIntegrationTest)];
 if (args.Contains("--treasure-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipment treasure consumes its box and persists a new equipment instance", TreasureIntegrationTest)];
 if (args.Contains("--buildship-codec", StringComparer.OrdinalIgnoreCase))
@@ -961,12 +963,150 @@ static async Task FashionUnlockIntegrationTest()
             "login synchronization did not initialize an empty study progress list");
         Assert(fashionRet is { Length: > 100 },
             $"fashion.updateData push did not contain unlocked fashions (ret length: {fashionRet?.Length ?? 0})");
+
+        var shopsResponse = await RoundTrip("shop.GetShopsInfo", null);
+        Dictionary<int, List<int>> shopGoods = DecodeShopGoods(shopsResponse.Ret ?? []);
+        Assert(shopGoods.GetValueOrDefault(23) is { Count: > 0 },
+            "featured fashion shop 23 did not receive its configured goods");
+        Assert(shopGoods.GetValueOrDefault(29) is { Count: > 0 },
+            "broken fashion shop 29 did not receive its configured goods");
+
+        int fashionGoodId = shopGoods[23][0];
+        var buyResponse = await RoundTrip("shop.BuyGoods", EncodeBuyGoodsRequest(23, fashionGoodId));
+        Assert(buyResponse.Err == 0,
+            $"fashion good {fashionGoodId} was listed in shop 23 but purchase validation rejected it");
+
+        int brokenFashionGoodId = shopGoods[29][0];
+        var brokenBuyResponse = await RoundTrip(
+            "shop.BuyGoods", EncodeBuyGoodsRequest(29, brokenFashionGoodId));
+        Assert(brokenBuyResponse.Err == 0,
+            $"broken fashion good {brokenFashionGoodId} was listed in shop 29 but purchase validation rejected it");
     }
     finally
     {
         if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
         if (Directory.Exists(data)) Directory.Delete(data, true);
     }
+}
+
+static Dictionary<int, List<int>> DecodeShopGoods(byte[] payload)
+{
+    var shops = new Dictionary<int, List<int>>();
+    int offset = 0;
+    while (offset < payload.Length)
+    {
+        ulong key = ReadTestVarint(payload, ref offset);
+        int field = checked((int)(key >> 3));
+        int wire = (int)(key & 7);
+        if (field != 1 || wire != 2)
+        {
+            SkipTestField(payload, ref offset, wire);
+            continue;
+        }
+
+        byte[] shopPayload = ReadTestBytes(payload, ref offset);
+        int shopOffset = 0;
+        int shopId = 0;
+        var goods = new List<int>();
+        while (shopOffset < shopPayload.Length)
+        {
+            ulong shopKey = ReadTestVarint(shopPayload, ref shopOffset);
+            int shopField = checked((int)(shopKey >> 3));
+            int shopWire = (int)(shopKey & 7);
+            if (shopField == 1 && shopWire == 0)
+            {
+                shopId = checked((int)ReadTestVarint(shopPayload, ref shopOffset));
+            }
+            else if (shopField == 3 && shopWire == 2)
+            {
+                byte[] goodsPayload = ReadTestBytes(shopPayload, ref shopOffset);
+                int goodsOffset = 0;
+                while (goodsOffset < goodsPayload.Length)
+                {
+                    ulong goodsKey = ReadTestVarint(goodsPayload, ref goodsOffset);
+                    int goodsField = checked((int)(goodsKey >> 3));
+                    int goodsWire = (int)(goodsKey & 7);
+                    if (goodsField == 1 && goodsWire == 0)
+                        goods.Add(checked((int)ReadTestVarint(goodsPayload, ref goodsOffset)));
+                    else
+                        SkipTestField(goodsPayload, ref goodsOffset, goodsWire);
+                }
+            }
+            else
+            {
+                SkipTestField(shopPayload, ref shopOffset, shopWire);
+            }
+        }
+        if (shopId != 0) shops[shopId] = goods;
+    }
+    return shops;
+}
+
+static byte[] EncodeBuyGoodsRequest(int shopId, int goodId)
+{
+    var bytes = new List<byte>();
+    AppendTestVarint(bytes, 1 << 3);
+    AppendTestVarint(bytes, checked((ulong)shopId));
+    AppendTestVarint(bytes, 2 << 3);
+    AppendTestVarint(bytes, checked((ulong)goodId));
+    AppendTestVarint(bytes, 3 << 3);
+    AppendTestVarint(bytes, 1);
+    return bytes.ToArray();
+}
+
+static void AppendTestVarint(List<byte> bytes, ulong value)
+{
+    while (value >= 0x80)
+    {
+        bytes.Add((byte)(value | 0x80));
+        value >>= 7;
+    }
+    bytes.Add((byte)value);
+}
+
+static ulong ReadTestVarint(byte[] payload, ref int offset)
+{
+    ulong value = 0;
+    for (int shift = 0; shift < 64; shift += 7)
+    {
+        if (offset >= payload.Length) throw new EndOfStreamException("truncated test protobuf varint");
+        byte current = payload[offset++];
+        value |= (ulong)(current & 0x7f) << shift;
+        if ((current & 0x80) == 0) return value;
+    }
+    throw new InvalidDataException("test protobuf varint is too long");
+}
+
+static byte[] ReadTestBytes(byte[] payload, ref int offset)
+{
+    int length = checked((int)ReadTestVarint(payload, ref offset));
+    if (length < 0 || offset + length > payload.Length)
+        throw new EndOfStreamException("truncated test protobuf bytes");
+    byte[] value = payload.AsSpan(offset, length).ToArray();
+    offset += length;
+    return value;
+}
+
+static void SkipTestField(byte[] payload, ref int offset, int wire)
+{
+    switch (wire)
+    {
+        case 0:
+            ReadTestVarint(payload, ref offset);
+            return;
+        case 1:
+            offset = checked(offset + 8);
+            break;
+        case 2:
+            offset = checked(offset + checked((int)ReadTestVarint(payload, ref offset)));
+            break;
+        case 5:
+            offset = checked(offset + 4);
+            break;
+        default:
+            throw new InvalidDataException($"unsupported test protobuf wire type {wire}");
+    }
+    if (offset > payload.Length) throw new EndOfStreamException("truncated test protobuf field");
 }
 
 static bool ContainsSequence(byte[] haystack, byte[] needle)

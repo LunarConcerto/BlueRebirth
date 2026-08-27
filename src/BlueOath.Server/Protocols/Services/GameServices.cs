@@ -44,9 +44,21 @@ internal sealed class GameServices
         _repo = repo;
         _logger = loggerFactory.CreateLogger<GameServices>();
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
-        _gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
-        _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
         FashionConfigLoader.Load(options.DataRoot);
+        var gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
+        IReadOnlyList<GmGoodConfig> supplementalFashionGoods =
+            FashionShopGoodsLoader.Load(options.DataRoot, gmGoods.Goods);
+        // gm-goods.json 由 config_shop_goods 生成，而该表不记录时装所属商店。
+        // 历史生成器因此把时装默认放到了 shop 1，导致客户端的精选时装
+        // (23) 和大破时装 (29) 分类收到空列表。以 config_fashion.shop_id 为准
+        // 修正路由，同一份配置同时用于列表下发和购买校验。
+        _gmGoods = gmGoods with
+        {
+            Goods = gmGoods.Goods.Concat(supplementalFashionGoods)
+                .Select(RouteFashionGoodsToConfiguredShop)
+                .ToList(),
+        };
+        _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(options.DataRoot);
@@ -66,6 +78,14 @@ internal sealed class GameServices
         PlotTriggerLoader.Load(options.DataRoot);
         CharacterStoryLoader.Load(options.DataRoot);
         RemouldConfigLoader.Load(options.DataRoot);
+    }
+
+    private static GmGoodConfig RouteFashionGoodsToConfiguredShop(GmGoodConfig goods)
+    {
+        if (goods.Type == GoodsTypeFashion &&
+            FashionConfigLoader.FashionShopIdMap.TryGetValue(goods.ItemId, out int shopId))
+            return goods with { ShopId = shopId };
+        return goods;
     }
 
     /// <summary>文件日志（game-login.log）供各模块记录帧级诊断。</summary>

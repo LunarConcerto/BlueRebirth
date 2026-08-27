@@ -60,6 +60,67 @@ internal static class GmGoodsConfigLoader
     }
 }
 
+/// <summary>
+/// 从客户端配置补齐时装商店商品。gm-goods.json 未覆盖全部限时时装，
+/// 其中大破时装全部带 period_buy，因此历史生成结果会让 shop 29 始终为空。
+/// 每个 FashionTid 选一个可见商品，避免同一时装的历史复刻商品重复出现。
+/// </summary>
+internal static class FashionShopGoodsLoader
+{
+    public static IReadOnlyList<GmGoodConfig> Load(
+        string dataRoot, IReadOnlyList<GmGoodConfig> existingGoods)
+    {
+        try
+        {
+            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            Dictionary<int, ConfigShopGoods> configs =
+                ConfigDbLoader.LoadAll<ConfigShopGoods>(configDir, "config_shop_goods.db");
+            var existingFashionIds = existingGoods
+                .Where(g => g.Type == GameServices.GoodsTypeFashion)
+                .Select(g => g.ItemId)
+                .ToHashSet();
+            var usedGoodIds = existingGoods.Select(g => g.GoodId).ToHashSet();
+
+            var result = configs
+                .Where(kv => !usedGoodIds.Contains(kv.Key))
+                .Where(kv => kv.Value.GoodsVisible == 1 &&
+                             kv.Value.Goods is { Count: >= 2 } goods &&
+                             goods[0] == GameServices.GoodsTypeFashion &&
+                             FashionConfigLoader.FashionShopIdMap.ContainsKey(checked((int)goods[1])))
+                .Select(kv => new
+                {
+                    GoodId = kv.Key,
+                    Config = kv.Value,
+                    FashionId = checked((int)kv.Value.Goods![1]),
+                    Num = kv.Value.Goods!.Count >= 3 ? checked((int)kv.Value.Goods[2]) : 1,
+                })
+                .Where(x => !existingFashionIds.Contains(x.FashionId))
+                .GroupBy(x => x.FashionId)
+                // 无期限商品优先；只有限时复刻时选最新的一条。
+                .Select(group => group
+                    .OrderByDescending(x => x.Config.PeriodBuy is not { Count: > 0 })
+                    .ThenByDescending(x => x.GoodId)
+                    .First())
+                .Select(x => new GmGoodConfig(
+                    x.GoodId,
+                    FashionConfigLoader.FashionShopIdMap[x.FashionId],
+                    GameServices.GoodsTypeFashion,
+                    x.FashionId,
+                    Math.Max(1, x.Num)))
+                .OrderBy(x => x.ShopId)
+                .ThenBy(x => x.GoodId)
+                .ToList();
+            Console.Error.WriteLine($"[fashion-shop] supplemented {result.Count} catalog goods");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[fashion-shop] failed to load goods: {ex.Message}");
+            return [];
+        }
+    }
+}
+
 internal static class GmMailsConfigLoader
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -830,6 +891,7 @@ internal static class FashionConfigLoader
 {
     private static readonly List<FashionEntry> _allFashion = [];
     private static readonly Dictionary<int, int> _fashionSfIdMap = new();
+    private static readonly Dictionary<int, int> _fashionShopIdMap = new();
     private static bool _loaded;
 
     /// <summary>已按 SfId 分组的全部时装条目（登录/login-push 用）。</summary>
@@ -837,6 +899,9 @@ internal static class FashionConfigLoader
 
     /// <summary>FashionTid → SfId（belong_to_ship）全量映射。</summary>
     public static IReadOnlyDictionary<int, int> FashionSfIdMap => _fashionSfIdMap;
+
+    /// <summary>FashionTid → 实际售卖商店（config_fashion.shop_id）映射。</summary>
+    public static IReadOnlyDictionary<int, int> FashionShopIdMap => _fashionShopIdMap;
 
     public static void Load(string dataRoot)
     {
@@ -853,6 +918,8 @@ internal static class FashionConfigLoader
                         entries[sfId] = list = [];
                     if (!list.Contains(id)) list.Add(id);
                     _fashionSfIdMap[id] = sfId;
+                    if (cfg.ShopId > 0)
+                        _fashionShopIdMap[id] = checked((int)cfg.ShopId);
                 });
             foreach (var (sfId, tids) in entries.OrderBy(kv => kv.Key))
                 _allFashion.Add(new FashionEntry(sfId, tids.OrderBy(x => x).ToList()));
