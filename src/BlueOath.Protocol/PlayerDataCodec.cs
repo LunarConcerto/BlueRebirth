@@ -25,11 +25,11 @@ public sealed class PSkillEntry
     }
 }
 
-/// <summary>
-/// Resources consumed by a single build formula. Currently empty; extend with the
-/// TBuildProject fields (Items/Gold) when real build data is needed.
-/// </summary>
-public sealed record BuildProject();
+/// <summary>Resources consumed by a single traditional build formula.</summary>
+public sealed record BuildItem(int ResId = 0, int Count = 0);
+
+/// <summary>A traditional build formula containing item materials and gold.</summary>
+public sealed record BuildProject(IReadOnlyList<BuildItem>? Items = null, int Gold = 0);
 
 /// <summary>A single ship-building formula (building / builded / waiting).</summary>
 public sealed record BuildFormula(long EndTime = 0, BuildProject? Project = null, int HeroId = 0);
@@ -189,7 +189,23 @@ public static class PlayerDataCodec
         return output.ToArray();
     }
 
-    public static byte[] Encode(BuildProject _) => [];
+    public static byte[] Encode(BuildProject value)
+    {
+        using var output = new MemoryStream();
+        if (value.Items is not null)
+            foreach (BuildItem item in value.Items) WriteMessage(output, 1, Encode(item));
+        // 客户端会直接读取 Project.Gold，即使为 0 也必须显式编码。
+        WriteVarintField(output, 2, unchecked((ulong)value.Gold));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(BuildItem value)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)value.ResId));
+        WriteVarintField(output, 2, unchecked((ulong)value.Count));
+        return output.ToArray();
+    }
 
     public static byte[] Encode(BathroomInfo value)
     {

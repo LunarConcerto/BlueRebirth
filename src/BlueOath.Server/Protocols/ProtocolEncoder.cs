@@ -85,6 +85,15 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 build.BuildReceive 的 TBuildReceiveRet.reward。</summary>
+    internal static byte[] EncodeBuildReceiveRet(IReadOnlyList<CommonReward> rewards)
+    {
+        ProtocolPackage output = new();
+        foreach (CommonReward reward in rewards)
+            output.Write(0x0A, PlayerDataCodec.Encode(reward));
+        return output.ToArray();
+    }
+
     /// <summary>编码 TRetireHeroRet: Reward(1, repeated TCommonReward)。</summary>
     internal static byte[] EncodeRetireHeroRet(IReadOnlyList<CommonReward> rewards)
     {

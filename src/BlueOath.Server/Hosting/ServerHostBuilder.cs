@@ -60,6 +60,7 @@ internal static class ServerHostBuilder
         // 领域服务（共享服务之上的按域拆分）。
         builder.Services.AddSingleton<UserService>();
         builder.Services.AddSingleton<BuildShipService>();
+        builder.Services.AddSingleton<ConstructionService>();
         builder.Services.AddSingleton<ShopService>();
         builder.Services.AddSingleton<BattleService>();
         builder.Services.AddSingleton<HeroService>();
@@ -76,6 +77,7 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<IGameModule, EquipModule>();
         builder.Services.AddSingleton<IGameModule, UserModule>();
         builder.Services.AddSingleton<IGameModule, BuildShipModule>();
+        builder.Services.AddSingleton<IGameModule, BuildModule>();
         builder.Services.AddSingleton<IGameModule, CopyModule>();
         builder.Services.AddSingleton<IGameModule, EquipModule>();
         builder.Services.AddSingleton<MessageRouter>();

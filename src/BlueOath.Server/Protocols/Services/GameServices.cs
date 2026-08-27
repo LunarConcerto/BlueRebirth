@@ -20,6 +20,7 @@ internal sealed class GameServices
     private const int DefaultAffectionGiftCount = 999;
     private const int OathShopCurrencyId = 17553;
     private const int DefaultOathShopCurrencyCount = 99_999_999;
+    private const int DefaultConstructionItemCount = 99_999;
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
@@ -48,6 +49,7 @@ internal sealed class GameServices
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(options.DataRoot);
+        ConstructionConfigLoader.Load(options.DataRoot);
         _itemInfos = ItemInfoLoader.Load(options.DataRoot);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
         _copyRandomFactors = RandomFactorLoader.Load(options.DataRoot);
@@ -178,11 +180,17 @@ internal sealed class GameServices
     /// <summary>
     /// 客户端主界面在主动请求前就要读到的玩家域数据（建造/浴室队列原本只在打开主界面后才
     /// 请求，但 PushAllNotice 会在 MainStage.StageEnter 阶段遍历它们，遇到 nil 会报错）。
-    /// 其中船坞（hero.UpdateHeroBagData）来自存档实体，其余仍为最小/空占位。
+    /// 其中船坞和传统建造队列来自存档实体，其余仍为最小/空占位。
     /// </summary>
     public async Task<IReadOnlyList<byte[]>> BuildSyncPushesAsync(string profileId, uint now, CancellationToken ct)
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
+        PlayerAccount refreshed = ConstructionService.RefreshQueue(account, now);
+        if (!ReferenceEquals(refreshed, account))
+        {
+            account = refreshed;
+            await SaveAccountAsync(account, ct);
+        }
         var heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
 
         return
@@ -211,8 +219,7 @@ internal sealed class GameServices
 
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "build.BuildsInfo",
-                Ret: PlayerDataCodec.Encode(new BuildsInfoRet(
-                    BuildingList: [new BuildFormula(EndTime: 0)])),
+                Ret: ConstructionService.EncodeInfo(account.Construction),
                 Time: now)),
 
             TMessageCodec.EncodeResponse(new TResponse(
@@ -331,10 +338,13 @@ internal sealed class GameServices
             account = normalized;
             account = EnsureAffectionGifts(account);
             account = EnsureOathShopCurrency(account);
+            PlayerAccount constructionReady = EnsureConstructionItems(account);
+            bool constructionMigrated = !ReferenceEquals(constructionReady, account);
+            account = constructionReady;
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
-            if (affectionMigrated)
+            if (affectionMigrated || constructionMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
@@ -344,6 +354,7 @@ internal sealed class GameServices
         created = NormalizeAffection(created);
         created = EnsureAffectionGifts(created);
         created = EnsureOathShopCurrency(created);
+        created = EnsureConstructionItems(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -363,7 +374,8 @@ internal sealed class GameServices
             account = EnsureAllFashion(account);
             account = NormalizeAffection(account);
             account = EnsureAffectionGifts(account);
-            return EnsureOathShopCurrency(account);
+            account = EnsureOathShopCurrency(account);
+            return EnsureConstructionItems(account);
         }
         account = EnsureHeroPSkills(account);
         account = EnsureAllFashion(account);
@@ -372,6 +384,7 @@ internal sealed class GameServices
         account = normalized;
         account = EnsureAffectionGifts(account);
         account = EnsureOathShopCurrency(account);
+        account = EnsureConstructionItems(account);
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
@@ -832,6 +845,33 @@ internal sealed class GameServices
             _ => int.MinValue,
         };
         return value != int.MinValue;
+    }
+
+    /// <summary>首次启用传统建造时，为本地 GM 档案补齐物资并写入迁移标记。</summary>
+    private static PlayerAccount EnsureConstructionItems(PlayerAccount account)
+    {
+        // Construction 非空也作为迁移标记；即使某项物资日后恰好消耗至零，重启也不能再次赠送。
+        if (account.Construction is not null) return account;
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> items = bag.Items.ToList();
+        foreach (int templateId in new[]
+                 {
+                     ConstructionService.MaterialSteel,
+                     ConstructionService.MaterialAluminium,
+                     ConstructionService.QuickFinishItem,
+                 })
+        {
+            int index = items.FindIndex(item => item.TemplateId == templateId);
+            if (index < 0)
+            {
+                items.Add(new BagItem(templateId, DefaultConstructionItemCount));
+            }
+        }
+        return account with
+        {
+            Bag = bag with { Items = items },
+            Construction = new PlayerConstruction([]),
+        };
     }
 
     internal static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)

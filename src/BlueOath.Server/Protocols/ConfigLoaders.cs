@@ -130,6 +130,44 @@ internal static class BuildShipExtractLoader
     }
 }
 
+/// <summary>传统舰船建造所需的配方、品质与舰船包配置。</summary>
+internal static class ConstructionConfigLoader
+{
+    private static readonly Dictionary<int, ConfigBuildFormula> _formulas = new();
+    private static readonly Dictionary<int, ConfigBuildQuality> _qualities = new();
+    private static readonly Dictionary<int, ConfigBuildShip> _ships = new();
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildFormula>(
+                         configDir, "config_build_formula.db"))
+                _formulas[id] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildQuality>(
+                         configDir, "config_build_quality.db"))
+                _qualities[id] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildShip>(
+                         configDir, "config_build_ship.db"))
+                _ships[id] = cfg;
+            Console.Error.WriteLine(
+                $"[Construction] loaded {_formulas.Count} formulas / {_qualities.Count} quality rows / {_ships.Count} ship packages");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Construction] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    internal static IReadOnlyDictionary<int, ConfigBuildFormula> Formulas => _formulas;
+    internal static IReadOnlyDictionary<int, ConfigBuildQuality> Qualities => _qualities;
+    internal static IReadOnlyDictionary<int, ConfigBuildShip> Ships => _ships;
+}
+
 /// <summary>加载可使用道具配置（宝箱 id → 掉落池 id）。</summary>
 internal static class ItemInfoLoader
 {

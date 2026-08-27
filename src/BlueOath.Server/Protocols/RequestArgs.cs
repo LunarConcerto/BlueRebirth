@@ -17,6 +17,20 @@ internal sealed record StartBaseArg(
 /// <summary>TBuildShipArg（buildship.BuildShip）: Id(1, int32) / Num(2, int32) / CacheId(3, string)。</summary>
 internal sealed record BuildShipArg(int Id = 0, int Num = 1, string CacheId = "");
 
+/// <summary>TBuildItem：ResId(1) / Count(2)。</summary>
+internal sealed record ConstructionItemArg(int ResId = 0, int Count = 0);
+
+/// <summary>TBuildProject：Items(1, repeated) / Gold(2)。</summary>
+internal sealed record ConstructionProjectArg(
+    IReadOnlyList<ConstructionItemArg> Items,
+    int Gold = 0);
+
+/// <summary>TBuildProjectsArg：Project(1, repeated)。</summary>
+internal sealed record ConstructionProjectsArg(IReadOnlyList<ConstructionProjectArg> Projects);
+
+/// <summary>TBuildIndexArg：index(1, repeated int32)，客户端使用 1-based 列表索引。</summary>
+internal sealed record ConstructionIndexArg(IReadOnlyList<int> Indexes);
+
 /// <summary>道具 + 数量（用于 THeroAddExpArg.Items 与 hero.AddExp 响应，字段 ItemId(2)/Num(3)）。</summary>
 internal sealed record ItemCount(int Id = 0, int Num = 0);
 

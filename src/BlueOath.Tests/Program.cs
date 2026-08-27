@@ -21,6 +21,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("zero-count bag entries encode an explicit deletion marker", BagDeletionMarkerCodecTest),
     ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
     ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
+    ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
     ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
     ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
     ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
@@ -37,6 +38,7 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
     ("all fashions unlocked on account creation", FashionUnlockIntegrationTest),
     ("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest),
+    ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest),
     ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
@@ -68,6 +70,11 @@ if (args.Contains("--remould-integration", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
         ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest)
+    ];
+if (args.Contains("--construction-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
+        ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest)
     ];
 var failed = 0;
 foreach (var (name, run) in tests)
@@ -149,6 +156,51 @@ static Task RemouldConfigAndCodecTest()
     Assert(ContainsSequence(hero, new byte[] { 0xC0, 0x01, 0x02 }) &&
         ContainsSequence(hero, new byte[] { 0xC8, 0x01, 0x03 }),
         "THeroGrid did not encode RemouldLV/AdvLv fields 24/25");
+    return Task.CompletedTask;
+}
+
+static Task ConstructionConfigAndCodecTest()
+{
+    ConstructionConfigLoader.Load(FindRepositoryRoot());
+    Assert(ConstructionConfigLoader.Formulas.Count == 4,
+        "traditional construction formulas were not loaded");
+    Assert(ConstructionConfigLoader.Qualities.Count == 2020,
+        "traditional construction quality curve was not loaded");
+    Assert(ConstructionConfigLoader.Ships.Count == 30,
+        "traditional construction ship packages were not loaded");
+
+    var steel = new ProtocolPackage().Write(0x08, 10029UL).Write(0x10, 30UL);
+    var aluminium = new ProtocolPackage().Write(0x08, 10030UL).Write(0x10, 40UL);
+    var project = new ProtocolPackage()
+        .Write(0x0A, steel.ToArray())
+        .Write(0x0A, aluminium.ToArray())
+        .Write(0x10, 50UL);
+    var request = new ProtocolPackage().Write(0x0A, project.ToArray());
+    ConstructionProjectsArg decoded = ProtocolDecoder.DecodeConstructionProjectsArg(request.ToArray());
+    Assert(decoded.Projects.Count == 1 && decoded.Projects[0].Gold == 50 &&
+        decoded.Projects[0].Items.SequenceEqual([
+            new ConstructionItemArg(10029, 30), new ConstructionItemArg(10030, 40)]),
+        "traditional construction project protobuf mismatch");
+    Assert(ProtocolDecoder.DecodeConstructionIndexArg(new byte[] { 0x08, 0x01, 0x08, 0x02 })
+        .Indexes.SequenceEqual([1, 2]), "unpacked construction indexes did not decode");
+    Assert(ProtocolDecoder.DecodeConstructionIndexArg(new byte[] { 0x0A, 0x02, 0x01, 0x02 })
+        .Indexes.SequenceEqual([1, 2]), "packed construction indexes did not decode");
+
+    ConstructionProject persistedProject = new(
+        [new ConstructionItem(10029, 30), new ConstructionItem(10030, 40)], 50);
+    PlayerAccount account = PlayerAccountFactory.CreateDefault("queue-test", 1) with
+    {
+        Construction = new PlayerConstruction([
+            new ConstructionJob(1, 40110211, 100, 100, false, persistedProject),
+            new ConstructionJob(2, 40110211, 200, 200, false, persistedProject),
+            new ConstructionJob(3, 40110211, 50, 0, false, persistedProject)], persistedProject, 4),
+    };
+    PlayerAccount refreshed = ConstructionService.RefreshQueue(account, 500);
+    Assert(refreshed.Construction?.Jobs.All(job => job.Completed) == true,
+        "offline construction queue did not cascade through waiting work");
+    byte[] info = ConstructionService.EncodeInfo(refreshed.Construction);
+    Assert(info.Count(value => value == 0x0A) >= 3,
+        "completed traditional construction jobs were not encoded");
     return Task.CompletedTask;
 }
 
@@ -868,6 +920,140 @@ static async Task EquipEnhanceIntegrationTest()
             "equipped UR bound enhancement did not consume configured currencies");
         Assert(!boundEnhanced.Bag!.Items.Any(i => i.TemplateId is 60003 or 10000),
             "equipped UR bound enhancement did not consume configured bag materials");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+static async Task ConstructionIntegrationTest()
+{
+    string root = FindRepositoryRoot();
+    string serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0",
+        "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the server first");
+    string data = Path.Combine(root, ".test-data", "blueoath-construction-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "construction-test";
+    var repo = new SqliteGameRepository(data);
+    await repo.CreateAsync(profileId, profileId);
+
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "construction test server did not start");
+        string readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20))
+            ?? throw new InvalidDataException("server did not report ready");
+        using var ready = JsonDocument.Parse(readyLine);
+        int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        NetworkStream stream = client.GetStream();
+
+        async Task<(TResponse Response, List<TResponse> Pushes)> RoundTrip(string method, byte[]? requestArgs)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, requestArgs, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            List<TResponse> pushes = [];
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return (response, pushes);
+                pushes.Add(response);
+            }
+        }
+
+        static byte[] Project(int gold, int steelCount, int aluminiumCount)
+        {
+            var steel = new ProtocolPackage().Write(0x08, 10029UL)
+                .Write(0x10, checked((ulong)steelCount));
+            var aluminium = new ProtocolPackage().Write(0x08, 10030UL)
+                .Write(0x10, checked((ulong)aluminiumCount));
+            return new ProtocolPackage()
+                .Write(0x0A, steel.ToArray())
+                .Write(0x0A, aluminium.ToArray())
+                .Write(0x10, checked((ulong)gold))
+                .ToArray();
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("hero.GetHeroInfo", null); // drain login synchronization pushes
+        PlayerAccount baseline = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("construction account was not initialized");
+        int steelBefore = baseline.Bag?.Items.Single(item => item.TemplateId == 10029).Num ?? 0;
+        int aluminiumBefore = baseline.Bag?.Items.Single(item => item.TemplateId == 10030).Num ?? 0;
+        int quickBefore = baseline.Bag?.Items.Single(item => item.TemplateId == 10031).Num ?? 0;
+
+        var invalidArgs = new ProtocolPackage().Write(0x0A, Project(29, 30, 30));
+        var (invalid, invalidPushes) = await RoundTrip("build.BuildingByFormula", invalidArgs.ToArray());
+        Assert(invalid.Err != 0 && invalidPushes.Count == 0,
+            "an out-of-range construction project was not rejected atomically");
+
+        var projects = new ProtocolPackage();
+        for (int i = 0; i < 3; i++) projects.Write(0x0A, Project(30, 30, 30));
+        var (started, startPushes) = await RoundTrip("build.BuildingByFormula", projects.ToArray());
+        Assert(started.Err == 0, $"valid construction request was rejected: {started.ErrMsg}");
+        Assert(startPushes.Any(push => push.Method == "build.BuildsInfo") &&
+            startPushes.Any(push => push.Method == "bag.UpdateBagData") &&
+            startPushes.Any(push => push.Method == "user.UpdateUserInfo"),
+            "construction start did not synchronize queue, materials, and currency");
+
+        PlayerAccount queued = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("construction queue was not persisted");
+        IReadOnlyList<ConstructionJob> queuedJobs = queued.Construction?.Jobs ?? [];
+        Assert(queuedJobs.Count == 3 && queuedJobs.Count(job => job.EndTime > 0) == 2 &&
+            queuedJobs.Count(job => job.EndTime == 0) == 1,
+            "construction did not use two active slots and one waiting slot");
+        Assert(queued.Character.Gold == baseline.Character.Gold - 90 &&
+            queued.Bag!.Items.Single(item => item.TemplateId == 10029).Num == steelBefore - 90 &&
+            queued.Bag.Items.Single(item => item.TemplateId == 10030).Num == aluminiumBefore - 90,
+            "construction resources were not deducted exactly once");
+        Assert(queued.Construction?.LastProject?.Gold == 30,
+            "last construction formula was not persisted for client reuse");
+
+        byte[] firstIndex = new ProtocolPackage().Write(0x08, 1UL).ToArray();
+        var (finished, finishPushes) = await RoundTrip("build.BuildQuicklyFinish", firstIndex);
+        Assert(finished.Err == 0 && finishPushes.Any(push => push.Method == "build.BuildsInfo") &&
+            finishPushes.Any(push => push.Method == "bag.UpdateBagData"),
+            "quick construction did not synchronize its queue and item cost");
+        PlayerAccount quickFinished = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("quick-finished construction was not persisted");
+        Assert(quickFinished.Construction?.Jobs.Count(job => job.Completed) == 1 &&
+            quickFinished.Construction.Jobs.Count(job => !job.Completed && job.EndTime > 0) == 2 &&
+            quickFinished.Construction.Jobs.All(job => job.Completed || job.EndTime > 0),
+            "quick construction did not promote the waiting job into the free slot");
+        Assert(quickFinished.Bag!.Items.Single(item => item.TemplateId == 10031).Num == quickBefore - 1,
+            "quick construction item was not consumed");
+
+        var (received, receivePushes) = await RoundTrip("build.BuildReceive", firstIndex);
+        Assert(received.Err == 0 && received.Ret is { Length: > 0 } && received.Ret[0] == 0x0A,
+            "construction receive did not return a ship reward");
+        Assert(receivePushes.Any(push => push.Method == "build.BuildsInfo") &&
+            receivePushes.Any(push => push.Method == "hero.UpdateHeroBagData") &&
+            receivePushes.Any(push => push.Method == "illustrate.IllustrateInfo"),
+            "construction receive did not synchronize queue, dock, and illustration data");
+        PlayerAccount receivedAccount = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("received construction was not persisted");
+        Assert(receivedAccount.Construction?.Jobs.Count == 2 &&
+            receivedAccount.Dock.Heroes.Count == baseline.Dock.Heroes.Count + 1,
+            "receiving a construction result did not remove one job and add one ship");
     }
     finally
     {

@@ -83,6 +83,29 @@ public sealed record HeroDock(
     IReadOnlyList<Hero> Heroes,
     int BagSize = 200);
 
+/// <summary>传统舰船建造配方中的单项物资。</summary>
+public sealed record ConstructionItem(int ResId, int Count);
+
+/// <summary>传统舰船建造配方：金币 + 钢材/铝材等物资。</summary>
+public sealed record ConstructionProject(
+    IReadOnlyList<ConstructionItem> Items,
+    int Gold);
+
+/// <summary>建造队列中的单个任务。EndTime=0 表示仍在等待空闲建造位。</summary>
+public sealed record ConstructionJob(
+    long Sequence,
+    int TemplateId,
+    int DurationSeconds,
+    long EndTime,
+    bool Completed,
+    ConstructionProject Project);
+
+/// <summary>传统建造系统存档：最多十个任务、两个并行建造位及最近一次配方。</summary>
+public sealed record PlayerConstruction(
+    IReadOnlyList<ConstructionJob> Jobs,
+    ConstructionProject? LastProject = null,
+    long NextSequence = 1);
+
 /// <summary>仓库中的单个道具堆叠（TGridInfo）。</summary>
 public sealed record BagItem(int TemplateId, int Num);
 
@@ -142,7 +165,8 @@ public sealed record PlayerAccount(
     PlayerCopyProgress? CopyProgress = null,
     PlayerSeaCopyProgress? SeaProgress = null,
     IReadOnlyList<int>? PlotRewardIds = null,
-    PlayerBath? Bath = null);
+    PlayerBath? Bath = null,
+    PlayerConstruction? Construction = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
