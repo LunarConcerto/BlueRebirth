@@ -29,10 +29,54 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 result = await UpdateHero(ctx, ret);
                 break;
             case "hero.LockHero":
-                result = ModuleResult.Ok(await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
+                byte[] lockRet = await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct);
+                LockHeroArg lockArg = ProtocolDecoder.DecodeLockHeroArg(request.Args ?? []);
+                PlayerAccount lockAccount = await ctx.GetAccountAsync();
+                Hero? lockedHero = lockAccount.Dock.Heroes.FirstOrDefault(h => h.HeroId == lockArg.HeroId);
+                result = new ModuleResult
+                {
+                    Ret = lockRet,
+                    // _HeroSetLock 回调会立刻读取 Data.heroData；必须在应答前更新客户端缓存。
+                    PrePushes = lockedHero is null
+                        ? []
+                        :
+                        [
+                            TMessageCodec.EncodeResponse(new TResponse(
+                                Method: "hero.UpdateHeroBagData",
+                                Ret: PlayerDataCodec.Encode(new HeroBag(
+                                    [GameServices.ToHeroGrid(lockedHero)], lockAccount.Dock.BagSize)),
+                                Time: (uint)ctx.Now)),
+                        ],
+                };
                 break;
             case "hero.RetireHero":
-                result = ModuleResult.Ok(await hero.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
+                HeroService.RetireResult retire =
+                    await hero.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (!retire.Changed)
+                {
+                    result = ModuleResult.Ok(retire.Ret);
+                    break;
+                }
+                PlayerAccount retireAccount = await ctx.GetAccountAsync();
+                uint retireNow = (uint)ctx.Now;
+                // HeroData.SetData 只按增量合并；TemplateId=0 才是删除标记，不能仅推送剩余全量。
+                List<HeroGrid> deletedHeroes = retire.RetiredHeroIds
+                    .Select(id => new HeroGrid(HeroId: id, TemplateId: 0))
+                    .ToList();
+                result = new ModuleResult
+                {
+                    Ret = retire.Ret,
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(deletedHeroes, retireAccount.Dock.BagSize)),
+                            Time: retireNow)),
+                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, retireNow, ctx.Ct),
+                        services.BuildBagPush(retireAccount, retireNow),
+                        services.BuildEquipPush(retireAccount, retireNow, retire.RemovedEquipIds),
+                    ],
+                };
                 break;
             case "hero.ChangeName":
                 result = ModuleResult.Ok(await hero.BuildChangeNameRetAsync(request, ctx.ProfileId, ctx.Ct));

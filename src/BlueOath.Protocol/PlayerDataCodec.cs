@@ -373,7 +373,8 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         // Advance (field 6, int32)：突破等级，必须编码，nil 会导致 break_page 星级计算崩溃。
         WriteVarintField(output, 6, unchecked((ulong)value.Advance));
         WriteStringField(output, 15, value.Name);
-        if (value.Lock) WriteVarintField(output, 12, 1);
+        // Lock 必须无条件编码。解锁时若省略 false，客户端增量合并后可能继续保留旧的 true。
+        WriteVarintField(output, 12, value.Lock ? 1UL : 0UL);
         return output.ToArray();
     }
 

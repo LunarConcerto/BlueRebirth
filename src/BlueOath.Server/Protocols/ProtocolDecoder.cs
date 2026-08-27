@@ -491,15 +491,37 @@ internal static class ProtocolDecoder
         return new LockHeroArg(heroId, isLock);
     }
 
-    /// <summary>解码 hero.RetireHero 参数：HeroId(1, repeated uint32)。</summary>
-    internal static List<uint> DecodeRetireHeroArg(ReadOnlySpan<byte> data)
+    /// <summary>
+    /// 解码 hero.RetireHero 参数：HeroIds(1, repeated uint32), IsDisEquip(2, bool)。
+    /// repeated uint32 同时兼容 proto2 常见的 unpacked 与 packed 编码。
+    /// </summary>
+    internal static RetireHeroArg DecodeRetireHeroArg(ReadOnlySpan<byte> data)
     {
         ProtoReader reader = new(data);
         List<uint> heroIds = new();
+        bool isDisEquip = false;
         while (reader.TryReadField(out int field, out int wire))
-            if (field == 1 && wire == 0) heroIds.Add(checked((uint)reader.ReadVarint()));
-            else reader.Skip(wire);
-        return heroIds;
+        {
+            if (field == 1 && wire == 0)
+            {
+                heroIds.Add(checked((uint)reader.ReadVarint()));
+            }
+            else if (field == 1 && wire == 2)
+            {
+                ProtoReader packed = new(reader.ReadBytes());
+                while (packed.HasRemaining)
+                    heroIds.Add(checked((uint)packed.ReadVarint()));
+            }
+            else if (field == 2 && wire == 0)
+            {
+                isDisEquip = reader.ReadVarint() != 0;
+            }
+            else
+            {
+                reader.Skip(wire);
+            }
+        }
+        return new RetireHeroArg(heroIds, isDisEquip);
     }
 
     /// <summary>解码 hero.ChangeName 参数：HeroId(1, uint32), Name(2, string)。</summary>
@@ -549,6 +571,8 @@ internal static class ProtocolDecoder
             _data = data;
             _offset = 0;
         }
+
+        public bool HasRemaining => _offset < _data.Length;
 
         public bool TryReadField(out int field, out int wire)
         {

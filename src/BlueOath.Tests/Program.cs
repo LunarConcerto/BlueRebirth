@@ -26,7 +26,12 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
     ("protobuf login server creates a local profile", GameLoginIntegrationTest),
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
-    ("all fashions unlocked on account creation", FashionUnlockIntegrationTest)];
+    ("all fashions unlocked on account creation", FashionUnlockIntegrationTest),
+    ("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--retire-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--hero-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -467,6 +472,134 @@ static bool ContainsSequence(byte[] haystack, byte[] needle)
         if (match) return true;
     }
     return false;
+}
+
+static async Task HeroMutationIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
+    var data = Path.Combine(root, "test-retire-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "retire-player";
+
+    // Seed a second ship with one equipped item. The normal client flow asks whether that item
+    // should be dismantled after retirement, so retirement must leave it in the bag and unbind it.
+    var repo = new SqliteGameRepository(data);
+    await repo.CreateAsync(profileId, profileId);
+    PlayerAccount seeded = await repo.LoadAccountAsync(profileId)
+        ?? throw new InvalidDataException("failed to seed retirement account");
+    Hero second = seeded.Dock.Heroes[0] with
+    {
+        HeroId = 2,
+        EquipSlots = new uint[] { 77, 0, 0, 0, 0, 0 },
+    };
+    seeded = seeded with
+    {
+        Dock = seeded.Dock with { Heroes = [seeded.Dock.Heroes[0], second] },
+        Equip = new PlayerEquip([new EquipItem(77, 30421, HeroId: 2)], 2000),
+    };
+    await repo.SaveAccountAsync(seeded);
+
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "retirement test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        var port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        var stream = client.GetStream();
+
+        async Task<(TResponse Response, List<TResponse> Pushes)> RoundTrip(string method, byte[]? requestArgs)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, requestArgs, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            List<TResponse> pushes = [];
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return (response, pushes);
+                pushes.Add(response);
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+
+        var lockArgs = new ProtocolPackage();
+        lockArgs.Write(0x08, 2UL);
+        lockArgs.Write(0x10, 1UL);
+        var (lockResponse, lockPushes) = await RoundTrip("hero.LockHero", lockArgs.ToArray());
+        Assert(lockResponse.Err == 0 && lockResponse.Ret is not null &&
+            ContainsSequence(lockResponse.Ret, new byte[] { 0x08, 0x02 }),
+            "lock response did not identify HeroId=2");
+        TResponse lockHeroPush = lockPushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("lock did not refresh hero data before its response");
+        Assert(lockHeroPush.Ret is { Length: > 0 } &&
+            ContainsSequence(lockHeroPush.Ret, new byte[] { 0x60, 0x01 }),
+            "lock update did not set Lock=true");
+        PlayerAccount locked = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("lock account disappeared");
+        Assert(locked.Dock.Heroes.Single(h => h.HeroId == 2).Lock, "lock state was not persisted");
+
+        var unlockArgs = new ProtocolPackage();
+        unlockArgs.Write(0x08, 2UL);
+        unlockArgs.Write(0x10, 0UL);
+        var (unlockResponse, unlockPushes) = await RoundTrip("hero.LockHero", unlockArgs.ToArray());
+        Assert(unlockResponse.Err == 0 && unlockResponse.Ret is not null &&
+            ContainsSequence(unlockResponse.Ret, new byte[] { 0x08, 0x02 }),
+            "unlock response did not identify HeroId=2");
+        TResponse unlockHeroPush = unlockPushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("unlock did not refresh hero data before its response");
+        Assert(unlockHeroPush.Ret is { Length: > 0 } &&
+            ContainsSequence(unlockHeroPush.Ret, new byte[] { 0x60, 0x00 }),
+            "unlock update did not explicitly set Lock=false");
+        PlayerAccount unlocked = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("unlock account disappeared");
+        Assert(!unlocked.Dock.Heroes.Single(h => h.HeroId == 2).Lock, "unlock state was not persisted");
+
+        // The shipped Lua protobuf runtime uses the proto2 unpacked representation for HeroIds.
+        var retireArgs = new ProtocolPackage();
+        retireArgs.Write(0x08, 2UL);
+        retireArgs.Write(0x10, 0UL);
+        var (retire, pushes) = await RoundTrip("hero.RetireHero", retireArgs.ToArray());
+
+        Assert(retire.Err == 0 && retire.Ret is { Length: > 0 }, "retirement response did not contain rewards");
+        TResponse heroPush = pushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("retirement did not push a hero deletion marker");
+        Assert(heroPush.Ret is { Length: > 0 } && ContainsSequence(heroPush.Ret, new byte[] { 0x08, 0x02 }),
+            "hero deletion marker did not include HeroId=2");
+        Assert(pushes.Any(p => p.Method == "user.UpdateUserInfo"), "retirement did not refresh currencies");
+        Assert(pushes.Any(p => p.Method == "equip.UpdateEquipBagData"), "retirement did not refresh equipment");
+
+        PlayerAccount saved = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("retirement account disappeared");
+        Assert(saved.Dock.Heroes.All(h => h.HeroId != 2), "retired hero remained in persistent dock");
+        EquipItem returnedEquip = saved.Equip?.Items.SingleOrDefault(e => e.EquipId == 77)
+            ?? throw new InvalidDataException("retired hero equipment was deleted");
+        Assert(returnedEquip.HeroId == 0, "retired hero equipment was not unbound");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
 }
 
 static async Task TlsCaptureIntegrationTest()

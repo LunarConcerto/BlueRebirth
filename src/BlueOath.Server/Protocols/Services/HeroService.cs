@@ -6,6 +6,12 @@ namespace BlueOath.Server.Protocols;
 /// <summary>舰娘服务：hero.* / tactic.* 的领域逻辑（换装/升星/结婚/经验/锁定/退役/改名/好感度）。</summary>
 internal sealed class HeroService(GameServices services)
 {
+    internal sealed record RetireResult(
+        byte[] Ret,
+        IReadOnlyList<uint> RetiredHeroIds,
+        IReadOnlyList<uint> RemovedEquipIds,
+        bool Changed);
+
     internal async Task<byte[]> BuildChangeEquipRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null)
@@ -142,6 +148,8 @@ internal sealed class HeroService(GameServices services)
     {
         if (request.Args is null) return [];
         LockHeroArg arg = ProtocolDecoder.DecodeLockHeroArg(request.Args);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
@@ -150,21 +158,97 @@ internal sealed class HeroService(GameServices services)
         heroList[heroIdx] = heroList[heroIdx] with { Lock = arg.Lock };
         account = account with { Dock = dock with { Heroes = heroList } };
         await services.SaveAccountAsync(account, ct);
-        return [];
+        return ProtocolEncoder.EncodeLockHeroRet(arg.HeroId);
     }
 
-    internal async Task<byte[]> BuildRetireHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<RetireResult> BuildRetireHeroRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
-        if (request.Args is null) return [];
-        List<uint> heroIds = ProtocolDecoder.DecodeRetireHeroArg(request.Args);
-        if (heroIds.Count == 0) return [];
+        if (request.Args is null) return new([], [], [], false);
+        RetireHeroArg arg = ProtocolDecoder.DecodeRetireHeroArg(request.Args);
+        HashSet<uint> requestedIds = arg.HeroIds.Where(id => id != 0).ToHashSet();
+        if (requestedIds.Count == 0) return new([], [], [], false);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
-        List<Hero> heroList = dock.Heroes.ToList();
-        heroList.RemoveAll(h => heroIds.Contains(h.HeroId));
-        account = account with { Dock = dock with { Heroes = heroList } };
+        List<Hero> retiredHeroes = dock.Heroes.Where(h => requestedIds.Contains(h.HeroId)).ToList();
+        if (retiredHeroes.Count == 0) return new([], [], [], false);
+
+        HashSet<uint> retiredIds = retiredHeroes.Select(h => h.HeroId).ToHashSet();
+        List<Hero> remainingHeroes = dock.Heroes.Where(h => !retiredIds.Contains(h.HeroId)).ToList();
+
+        // 退役奖励来自 config_ship_main.break_down_get：每项为 [GoodsType, ConfigId, Num]。
+        Dictionary<(int Type, int ConfigId), int> rewardMap = new();
+        foreach (Hero retired in retiredHeroes)
+        {
+            Configs.ConfigShipMain? config = ShipMainLoader.Get(retired.TemplateId);
+            if (config?.BreakDownGet is not { Count: > 0 } entries) continue;
+            foreach (List<long> entry in entries)
+            {
+                if (entry.Count < 3 || entry[0] <= 0 || entry[2] <= 0) continue;
+                var key = (checked((int)entry[0]), checked((int)entry[1]));
+                rewardMap[key] = checked(rewardMap.GetValueOrDefault(key) + (int)entry[2]);
+            }
+        }
+
+        List<CommonReward> rewards = new();
+        foreach (var ((type, configId), num) in rewardMap)
+        {
+            if (type == GameServices.GoodsTypeCurrency)
+                account = GameServices.AddCurrency(account, configId, num);
+            else
+                account = GameServices.AddBagItem(account, configId, num);
+            rewards.Add(new CommonReward(type, configId, num));
+        }
+
+        // 客户端退役成功后会询问是否继续分解舰娘原装备。普通退役需先卸下装备；
+        // IsDisEquip=true 时才直接删除，并通过删除标记同步装备缓存。
+        PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
+        List<EquipItem> equipItems = equip.Items.ToList();
+        List<uint> removedEquipIds = equipItems
+            .Where(e => retiredIds.Contains(e.HeroId))
+            .Select(e => e.EquipId)
+            .ToList();
+        if (arg.IsDisEquip)
+            equipItems.RemoveAll(e => retiredIds.Contains(e.HeroId));
+        else
+            for (int i = 0; i < equipItems.Count; i++)
+                if (retiredIds.Contains(equipItems[i].HeroId))
+                    equipItems[i] = equipItems[i] with { HeroId = 0 };
+
+        PlayerFleet? fleet = account.Fleet;
+        if (fleet is not null)
+        {
+            List<FleetEntry> tactics = fleet.Tactics.Select(entry => entry with
+            {
+                HeroInfo = entry.HeroInfo?.Where(id => id <= 0 || !retiredIds.Contains((uint)id)).ToList(),
+                ExHeroInfo = entry.ExHeroInfo?.Where(id => id <= 0 || !retiredIds.Contains((uint)id)).ToList(),
+            }).ToList();
+            fleet = fleet with { Tactics = tactics };
+        }
+
+        PlayerBath? bath = account.Bath;
+        if (bath is not null)
+            bath = bath with { HeroList = bath.HeroList.Where(h => !retiredIds.Contains(h.HeroId)).ToList() };
+
+        PlayerCharacter character = account.Character;
+        if (retiredIds.Contains(character.SecretaryId))
+            character = character with { SecretaryId = remainingHeroes.FirstOrDefault()?.HeroId ?? 0 };
+
+        account = account with
+        {
+            Character = character,
+            Dock = dock with { Heroes = remainingHeroes },
+            Equip = equip with { Items = equipItems },
+            Fleet = fleet,
+            Bath = bath,
+        };
         await services.SaveAccountAsync(account, ct);
-        return [];
+        return new(
+            ProtocolEncoder.EncodeRetireHeroRet(rewards),
+            retiredHeroes.Select(h => h.HeroId).ToList(),
+            arg.IsDisEquip ? removedEquipIds : [],
+            true);
     }
 
     internal async Task<byte[]> BuildChangeNameRetAsync(TRequest request, string profileId, CancellationToken ct)

@@ -86,6 +86,23 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 TRetireHeroRet: Reward(1, repeated TCommonReward)。</summary>
+    internal static byte[] EncodeRetireHeroRet(IReadOnlyList<CommonReward> rewards)
+    {
+        ProtocolPackage output = new();
+        foreach (CommonReward reward in rewards)
+            output.Write(0x0A, PlayerDataCodec.Encode(reward));
+        return output.ToArray();
+    }
+
+    /// <summary>编码 TLockHeroRet: Ret(1, uint32)，返回被更新的舰娘实例 ID。</summary>
+    internal static byte[] EncodeLockHeroRet(uint heroId)
+    {
+        ProtocolPackage output = new();
+        output.Write(0x08, heroId);
+        return output.ToArray();
+    }
+
     internal static byte[] EncodeHeroAddExpRet(uint heroId, List<ItemCount> items)
     {
         ProtocolPackage output = new();
