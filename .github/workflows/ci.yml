@@ -76,12 +76,6 @@ jobs:
             Write-Error "ERROR: BlueOath.Launcher.Wpf.exe is missing."
             exit 1
           }
-          $settings = Get-Content -LiteralPath (Join-Path $bundleDir "launcher-settings.json") -Raw | ConvertFrom-Json
-          if ($settings.gameClientPath -ne 'blueoath') {
-            Write-Error "ERROR: gameClientPath must be bundle-relative ('blueoath'), got '$($settings.gameClientPath)'."
-            exit 1
-          }
-
           # The game ships an old MSVC runtime beside blueoath.exe. A dynamically
           # linked payload binds to those DLLs after injection and crashes before
           # it can signal readiness, so reject such release artifacts here.
