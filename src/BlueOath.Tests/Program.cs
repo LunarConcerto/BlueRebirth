@@ -31,6 +31,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
     ("mod manager filters target and orders mods", ModTest),
+    ("equipment mod adds a client/server template and GM shop good", EquipmentModTest),
     ("kcp fragments reassemble across sticky and split buffers", KcpReassemblyTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
 };
@@ -46,6 +47,10 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest)];
+if (args.Contains("--equipment-mod", StringComparer.OrdinalIgnoreCase))
+    tests = [("equipment mod adds a client/server template and GM shop good", EquipmentModTest)];
+if (args.Contains("--equipment-mod-config", StringComparer.OrdinalIgnoreCase))
+    tests = [("equipment mod overlays the real client equipment database", EquipmentModConfigIntegrationTest)];
 if (args.Contains("--retire-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--hero-integration", StringComparer.OrdinalIgnoreCase))
@@ -485,6 +490,65 @@ static Task ModTest()
     File.WriteAllText(Path.Combine(dir, "main.lua"), "function on_login() end");
     var manager = new ModManager(root, "jp-1.4.0"); manager.LoadAll(); Assert(manager.LoadedIds.SequenceEqual(["sample"]), "targeted mod was not loaded");
     Directory.Delete(root, true); return Task.CompletedTask;
+}
+
+static Task EquipmentModTest()
+{
+    string modsRoot = Path.Combine(FindRepositoryRoot(), "Mods");
+    EquipmentModCatalog catalog = EquipmentModLoader.Load(modsRoot, "jp-1.4.0");
+    EquipmentModDefinition definition = catalog.Equipment.Single(x => x.Id == 900001);
+    Assert(definition.SourceTemplateId == 30023,
+        "custom equipment does not clone the expected built-in template");
+    Assert(catalog.Goods.Single(x => x.GoodId == 990001) is
+        { ShopId: 5, Type: GameServices.GoodsTypeEquip, ItemId: 900001, Num: 1 },
+        "custom equipment GM shop good is invalid");
+
+    var source = new ConfigEquip
+    {
+        EId = 30023,
+        Name = "source",
+        Quality = 3,
+        EnhanceLevelMax = 30,
+        StarMax = 5,
+        EquipProp = [[8, 67], [3200, 225]],
+        EnhanceProp = [[8, 4], [3200, 15]],
+    };
+    ConfigEquip custom = EquipmentModLoader.BuildConfig(source, definition);
+    Assert(custom.EId == 900001 && custom.Name == "未来試作砲" && custom.NoResolve == 1,
+        "custom equipment overrides were not applied");
+    Assert(custom.EquipProp is [[8, 90], [3200, 300]] &&
+           custom.EnhanceProp is [[8, 6], [3200, 20]],
+        "custom equipment attributes were not applied");
+    Assert(source.EId == 30023 && source.Name == "source",
+        "building custom equipment mutated its source template");
+
+    var merged = EquipmentModLoader.MergeGoods(
+        new GmGoodsConfig([], new Dictionary<int, int>()), catalog);
+    Assert(merged.Goods.Any(x => x.GoodId == 990001),
+        "custom equipment was not merged into the GM shop catalog");
+    Assert(EquipmentModLoader.Load(modsRoot, "cn-1.5.20").Equipment.Count == 0,
+        "JP custom equipment loaded for the CN client");
+    return Task.CompletedTask;
+}
+
+static Task EquipmentModConfigIntegrationTest()
+{
+    string root = FindRepositoryRoot();
+    string clientPath = Environment.GetEnvironmentVariable("BLUEOATH_TEST_CLIENT_PATH")
+        ?? Path.Combine(root, "blueoath", "blueoath");
+    string configDir = ConfigDbLoader.BuildConfigDir(clientPath);
+    Assert(File.Exists(Path.Combine(configDir, "config_equip.db")),
+        "real config_equip.db is missing");
+    EquipmentModCatalog catalog = EquipmentModLoader.Load(Path.Combine(root, "Mods"), "jp-1.4.0");
+    EquipLoader.Load(configDir, catalog.Equipment);
+    ConfigEquip? custom = EquipLoader.Get(900001);
+    Assert(custom is { EId: 900001, Name: "未来試作砲", NoResolve: 1 },
+        "custom equipment was not added to the real server catalog");
+    Assert(custom!.EquipProp is [[8, 90], [3200, 300]],
+        "real server catalog contains incorrect custom equipment attributes");
+    Assert(EquipLoader.Get(30023) is { EId: 30023 },
+        "source equipment disappeared after applying the mod overlay");
+    return Task.CompletedTask;
 }
 
 static async Task TcpIntegrationTest()

@@ -46,6 +46,11 @@ internal sealed class GameServices
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
+        string clientId = options.Profile.Region == ClientRegion.Japan
+            ? $"jp-{options.Profile.ClientVersion}"
+            : $"cn-{options.Profile.ClientVersion}";
+        EquipmentModCatalog equipmentMods = EquipmentModLoader.Load(
+            EquipmentModLoader.ResolveModsRoot(options.ClientPath), clientId);
         FashionConfigLoader.Load(configDir);
         var gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         IReadOnlyList<GmGoodConfig> supplementalFashionGoods =
@@ -60,6 +65,8 @@ internal sealed class GameServices
                 .Select(RouteFashionGoodsToConfiguredShop)
                 .ToList(),
         };
+        _gmGoods = EquipmentModLoader.MergeGoods(
+            _gmGoods, equipmentMods, message => _logger.LogWarning("{Message}", message));
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
@@ -74,7 +81,7 @@ internal sealed class GameServices
         MissionChainLoader.Load(configDir);
         ShipMainLoader.Load(configDir);
         AssistShipLoader.Load(configDir);
-        EquipLoader.Load(configDir);
+        EquipLoader.Load(configDir, equipmentMods.Equipment);
         AffectionItemLoader.Load(configDir);
         ShipHandbookLoader.Load(configDir);
         PlotTriggerLoader.Load(configDir);

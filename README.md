@@ -109,7 +109,7 @@ dotnet run --project .\src\BlueOath.Launcher\BlueOath.Launcher.csproj -- --regio
 
 ## 基线与 Mod
 
-`tools/baseline.ps1` 生成 `baseline.json`，记录两服版本、架构和关键文件 SHA-256。示例 Mod 位于 `Mods/example.mod`；`Mods/future-chapter.mod` 会在 JP 1.4.0 主线新增第三个大章节“未来編”，其中包含一个不可进入的 `0/0` 占位篇章。`BlueOath.Mods` 负责清单、目标版本、依赖和加载顺序发现，并将事件排队给后续 xLua runtime handoff。
+`tools/baseline.ps1` 生成 `baseline.json`，记录两服版本、架构和关键文件 SHA-256。示例 Mod 位于 `Mods/example.mod`；`Mods/future-chapter.mod` 会在 JP 1.4.0 主线新增第三个大章节“未来編”，其中包含一个不可进入的 `0/0` 占位篇章；`Mods/custom-equipment.mod` 会克隆现有装备资源，加入试验装备“未来試作砲”，并同步扩展客户端配置、服务端装备目录和 GM 装备商店。`BlueOath.Mods` 负责清单、目标版本、依赖和加载顺序发现，并将事件排队给后续 xLua runtime handoff。
 
 ### xLua Mod Loader（JP 1.4.0 实验版）
 

@@ -39,6 +39,7 @@ end
 -- later step will generate it from mod.json dependency/loadOrder metadata.
 local entries = {
   "future-chapter.mod/main.lua",
+  "custom-equipment.mod/main.lua",
   "example.mod/main.lua"
 }
 

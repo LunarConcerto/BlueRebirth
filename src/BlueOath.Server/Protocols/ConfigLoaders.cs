@@ -627,7 +627,9 @@ internal static class EquipLoader
     private static readonly Dictionary<int, ConfigEquipEnhanceRenovate> _renovateLevels = new();
     private static bool _loaded;
 
-    public static void Load(string configDir)
+    public static void Load(
+        string configDir,
+        IReadOnlyList<EquipmentModDefinition>? modEquipment = null)
     {
         if (_loaded) return;
         try
@@ -645,6 +647,22 @@ internal static class EquipLoader
                 _levelbreakItems[id] = cfg;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceRenovate>(configDir, "config_equip_enhance_renovate.db"))
                 _renovateLevels[id] = cfg;
+            foreach (EquipmentModDefinition definition in modEquipment ?? [])
+            {
+                if (_equips.ContainsKey(definition.Id))
+                {
+                    Console.Error.WriteLine(
+                        $"[equipment-mod] {definition.ModId} id {definition.Id} conflicts with config_equip.db and was skipped");
+                    continue;
+                }
+                if (!_equips.TryGetValue(definition.SourceTemplateId, out ConfigEquip? source))
+                {
+                    Console.Error.WriteLine(
+                        $"[equipment-mod] {definition.ModId} source id {definition.SourceTemplateId} is missing");
+                    continue;
+                }
+                _equips[definition.Id] = EquipmentModLoader.BuildConfig(source, definition);
+            }
         }
         catch { }
         _loaded = true;
