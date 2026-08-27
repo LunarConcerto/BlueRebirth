@@ -20,6 +20,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("zero-count bag entries encode an explicit deletion marker", BagDeletionMarkerCodecTest),
     ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
     ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
+    ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
+    ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
@@ -54,6 +56,11 @@ if (args.Contains("--buildship-codec", StringComparer.OrdinalIgnoreCase))
     tests = [("build ship response omits empty special rewards", BuildShipRewardCodecTest)];
 if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
+if (args.Contains("--story-unlock", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
+        ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest)
+    ];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -95,6 +102,48 @@ static async Task GameLoginFrameTest()
     var decoded = await GameLoginFrameCodec.ReadAsync(input);
     Assert(decoded?.Operation == GameOperationCodes.Login &&
         GameLoginCodec.DecodeLogin(decoded.Payload).Pid == "frame-player", "game login frame mismatch");
+}
+
+static Task StoryUnlockConfigTest()
+{
+    var root = FindRepositoryRoot();
+    ChapterCopyLoader.Load(root);
+    CharacterStoryLoader.Load(root);
+
+    Assert(ChapterCopyLoader.GetCopyIds(1).Count > 0, "main story chapter was not loaded");
+    Assert(ChapterCopyLoader.GetCopyIds(14005).Contains(953001), "event story chapter was not loaded");
+    Assert(ChapterCopyLoader.GetCopyIds(14006).Contains(955001), "side story chapter was not loaded");
+    Assert(ChapterCopyLoader.GetCopyIds(10001).Contains(40001), "archived activity story was not loaded");
+    Assert(ChapterCopyLoader.GetCopyType(953001) == 1, "event story was not exposed as PlotCopy");
+    Assert(ChapterCopyLoader.AllChapterMemories.Contains(new ChapterMemory(10001, 15)),
+        "archived activity story was not marked fully unlocked");
+    Assert(CharacterStoryLoader.AllMemories.Count > 0, "personal stories were not loaded");
+    Assert(CharacterStoryLoader.AllMemories.Contains(new HeroMemory(2064011, 1001)),
+        "known personal story was not exposed through HeroMemoryList");
+    return Task.CompletedTask;
+}
+
+static Task HeroMemoryCodecTest()
+{
+    var memory = new HeroMemory(2064011, 1001);
+    var nested = PlayerDataCodec.Encode(memory);
+    var payload = PlayerDataCodec.Encode(new IllustrateInfoRet(
+        IllustrateEquipList: [new IllustrateEquipInfo()],
+        HeroMemoryList: [memory]));
+
+    Assert(payload.Length >= nested.Length + 4, "personal story payload is incomplete");
+    Assert(payload[0] == 0x42, "HeroMemoryList must use illustrate field 8");
+    Assert(payload[1] == nested.Length, "HeroMemory message length mismatch");
+    Assert(payload.AsSpan(2, nested.Length).SequenceEqual(nested), "HeroMemory message body mismatch");
+    Assert(payload[2 + nested.Length] == 0x4A, "IllustrateEquipList must remain field 9");
+
+    var chapter = new ChapterMemory(10001, 15);
+    var chapterNested = PlayerDataCodec.Encode(chapter);
+    var chapterPayload = PlayerDataCodec.Encode(new StoryMemoryList([chapter]));
+    Assert(chapterPayload[0] == 0x0A, "MemoryList must use field 1");
+    Assert(chapterPayload[1] == chapterNested.Length, "MemoryInfo message length mismatch");
+    Assert(chapterPayload.AsSpan(2).SequenceEqual(chapterNested), "MemoryInfo message body mismatch");
+    return Task.CompletedTask;
 }
 
 static Task EquipEnhanceRetCodecTest()

@@ -636,8 +636,8 @@ internal static class ProtocolEncoder
         return ms.ToArray();
     }
 
-    /// <summary>编码剧情章节初始数据为 TUserCopyInfo protobuf（CopyType=1 PlotCopy）。
-    /// 从账户的 CopyProgress 读取实际通关数据，未通关的关卡 FirstPassTime=0/StarLevel=0。</summary>
+    /// <summary>编码全部剧情回顾章节为 TUserCopyInfo protobuf（CopyType=1 PlotCopy）。
+    /// 包含主线、活动、番外和日常等全部剧情章节，并标记为已通关。</summary>
     public static byte[] EncodePlotCopyInfo(int chapterId = 1, PlayerCopyProgress? progress = null)
     {
         Dictionary<int, CopyRecord> recordMap = progress?.Records

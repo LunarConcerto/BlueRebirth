@@ -60,6 +60,7 @@ internal sealed class GameServices
         AffectionItemLoader.Load(options.DataRoot);
         ShipHandbookLoader.Load(options.DataRoot);
         PlotTriggerLoader.Load(options.DataRoot);
+        CharacterStoryLoader.Load(options.DataRoot);
     }
 
     /// <summary>文件日志（game-login.log）供各模块记录帧级诊断。</summary>
@@ -268,7 +269,14 @@ internal sealed class GameServices
                     IllustrateList: account.Dock.Heroes
                         .Select(h => new IllustrateInfo(ToIllustrateId(h.TemplateId), now, 0, false, null, 0))
                         .ToList(),
-                    IllustrateEquipList: [new IllustrateEquipInfo()])),
+                    IllustrateEquipList: [new IllustrateEquipInfo()],
+                    HeroMemoryList: CharacterStoryLoader.AllMemories)),
+                Time: now)),
+
+            // 活动剧情回顾进度。Index 设为章节节点总数，使所有往期活动剧情均可重播。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "illustrate.Memory",
+                Ret: PlayerDataCodec.Encode(new StoryMemoryList(ChapterCopyLoader.AllChapterMemories)),
                 Time: now)),
 
             // 商店数据推送，让 Data.shopData.m_shopInfo 非空。

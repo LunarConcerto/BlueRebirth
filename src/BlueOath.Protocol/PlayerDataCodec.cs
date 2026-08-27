@@ -66,10 +66,20 @@ public sealed record IllustrateInfo(int IllustrateId = 0, long GetTime = 0, long
 /// <summary>图鉴装备条目（TIllustrateEquipInfo）。</summary>
 public sealed record IllustrateEquipInfo(int EquipTemplateId = 0, long GetEquipTime = 0, bool NewEquip = false);
 
+/// <summary>已解锁的个人剧情（THeroMemory）。HeroId 对应 config_building_character_story.ship_fleet_id。</summary>
+public sealed record HeroMemory(uint HeroId = 0, int PlotId = 0);
+
+/// <summary>活动剧情回顾进度（TMemoryInfo）。Index 为该章节已解锁的剧情节点数。</summary>
+public sealed record ChapterMemory(int ChapterId = 0, int Index = 0);
+
+/// <summary>活动剧情回顾列表（TMemoryList）。</summary>
+public sealed record StoryMemoryList(IReadOnlyList<ChapterMemory>? MemoryList = null);
+
 /// <summary>图鉴信息推送（TIllustrateInfoRet）。</summary>
 public sealed record IllustrateInfoRet(
     IReadOnlyList<IllustrateInfo>? IllustrateList = null,
-    IReadOnlyList<IllustrateEquipInfo>? IllustrateEquipList = null);
+    IReadOnlyList<IllustrateEquipInfo>? IllustrateEquipList = null,
+    IReadOnlyList<HeroMemory>? HeroMemoryList = null);
 
 /// <summary>引导设置项（TGuideSetting，Key/Value 均为 string）。</summary>
 public sealed record GuideSetting(string Key, string Value);
@@ -397,8 +407,34 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         using var output = new MemoryStream();
         if (value.IllustrateList is not null)
             foreach (var item in value.IllustrateList) WriteMessage(output, 1, Encode(item));
+        if (value.HeroMemoryList is not null)
+            foreach (var item in value.HeroMemoryList) WriteMessage(output, 8, Encode(item));
         if (value.IllustrateEquipList is not null)
             foreach (var item in value.IllustrateEquipList) WriteMessage(output, 9, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(HeroMemory value)
+    {
+        using var output = new MemoryStream();
+        if (value.HeroId != 0) WriteVarintField(output, 1, value.HeroId);
+        if (value.PlotId != 0) WriteVarintField(output, 2, unchecked((ulong)value.PlotId));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(StoryMemoryList value)
+    {
+        using var output = new MemoryStream();
+        if (value.MemoryList is not null)
+            foreach (var item in value.MemoryList) WriteMessage(output, 1, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(ChapterMemory value)
+    {
+        using var output = new MemoryStream();
+        if (value.ChapterId != 0) WriteVarintField(output, 1, unchecked((ulong)value.ChapterId));
+        if (value.Index != 0) WriteVarintField(output, 2, unchecked((ulong)value.Index));
         return output.ToArray();
     }
 

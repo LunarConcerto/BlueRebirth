@@ -586,6 +586,7 @@ internal static class ChapterCopyLoader
 {
     private static readonly Dictionary<int, List<int>> _chapterCopies = new();
     private static readonly Dictionary<int, int> _firstCopyMap = new();
+    private static readonly List<ChapterMemory> _allChapterMemories = [];
     private static readonly Dictionary<int, List<int>> _seaChapterCopies = new();
     private static int _seaFirstChapterId = 0;
     private static readonly Dictionary<int, int> _copyTypeMap = new();
@@ -608,7 +609,17 @@ internal static class ChapterCopyLoader
                     copies.Add(item.GetInt32());
                 if (copies.Count == 0) return;
                 var ct = classType.GetInt32();
-                if (ct == 1)
+                var plotType = doc.RootElement.TryGetProperty("chapter_plot_type", out var chapterPlotType)
+                    ? chapterPlotType.GetInt32()
+                    : 0;
+                var memoryId = doc.RootElement.TryGetProperty("memory_id", out var memory)
+                    ? memory.GetInt32()
+                    : 0;
+                if (memoryId > 0)
+                    _allChapterMemories.Add(new ChapterMemory(id, copies.Count));
+                // 番外/日常剧情由 chapter_plot_type 标记；限时活动剧情由 memory_id
+                // 收录进图鉴回顾。两者都可能使用 11/27/35/37 等非 1 class_type。
+                if (plotType > 0 || memoryId > 0)
                 {
                     _chapterCopies[id] = copies;
                     _firstCopyMap[id] = copies[0];
@@ -625,6 +636,10 @@ internal static class ChapterCopyLoader
                     }
                 }
             });
+            _allChapterMemories.Sort(static (left, right) => left.ChapterId.CompareTo(right.ChapterId));
+            Console.Error.WriteLine(
+                $"[ChapterCopy] loaded {_chapterCopies.Count} story chapters, " +
+                $"{_allChapterMemories.Count} archived activity chapters and {_seaChapterCopies.Count} sea chapters");
         }
         catch { }
         _loaded = true;
@@ -638,6 +653,9 @@ internal static class ChapterCopyLoader
 
     public static List<int> GetAllChapterIds()
         => [.. _chapterCopies.Keys.OrderBy(x => x)];
+
+    public static IReadOnlyList<ChapterMemory> AllChapterMemories
+        => _allChapterMemories;
 
     public static List<int> GetSeaLevels()
     {
@@ -657,6 +675,43 @@ internal static class ChapterCopyLoader
 
     public static int GetCopyType(int copyId)
         => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;
+}
+
+/// <summary>从个人剧情配置生成图鉴协议所需的完整 THeroMemory 列表。</summary>
+internal static class CharacterStoryLoader
+{
+    private static readonly List<HeroMemory> _allMemories = [];
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _allMemories.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildingCharacterStory>(
+                         configDir, "config_building_character_story.db"))
+            {
+                if (cfg.ShipFleetId <= 0 || id <= 0) continue;
+                // 客户端以 ship_fleet_id 分组，再用配置行 id 读取剧情封面和标题。
+                _allMemories.Add(new HeroMemory(checked((uint)cfg.ShipFleetId), id));
+            }
+            _allMemories.Sort(static (left, right) =>
+            {
+                var heroOrder = left.HeroId.CompareTo(right.HeroId);
+                return heroOrder != 0 ? heroOrder : left.PlotId.CompareTo(right.PlotId);
+            });
+            Console.Error.WriteLine($"[CharacterStory] loaded {_allMemories.Count} personal stories from {configDir}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[CharacterStory] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    public static IReadOnlyList<HeroMemory> AllMemories => _allMemories;
 }
 
 internal static class ShipHandbookLoader
