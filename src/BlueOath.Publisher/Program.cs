@@ -191,19 +191,20 @@ Console.WriteLine("  Python bundled.");
 // Step 6: Generate launcher settings
 Console.WriteLine("[6/6] Generating launcher settings...");
 
-// Move launcher exe to root and clean up
+// Flatten the launcher publish directory into the package root. Always overwrite
+// existing files: release output is commonly reused, and preserving the old root
+// executable leaves a stale launcher beside the newly published nested copy.
 var launcherDir = Path.Combine(outputDir, "launcher");
 var launcherExe = Path.Combine(launcherDir, "BlueOath.Launcher.Wpf.exe");
 var rootExe = Path.Combine(outputDir, "BlueOath.Launcher.Wpf.exe");
-if (File.Exists(launcherExe) && !File.Exists(rootExe))
+if (File.Exists(launcherExe))
 {
-    File.Move(launcherExe, rootExe);
+    File.Move(launcherExe, rootExe, true);
     // Move all other files from launcher dir to root
     foreach (var file in Directory.GetFiles(launcherDir))
     {
         var dest = Path.Combine(outputDir, Path.GetFileName(file));
-        if (!File.Exists(dest))
-            File.Move(file, dest);
+        File.Move(file, dest, true);
     }
     foreach (var dir in Directory.GetDirectories(launcherDir))
     {

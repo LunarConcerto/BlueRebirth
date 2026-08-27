@@ -100,6 +100,7 @@ internal sealed class GameServices
     internal IReadOnlyDictionary<int, int> ExpNeeded => _expNeeded;
     internal ConfigEquipEnhanceItem? GetEquipEnhanceItem(int id) => EquipLoader.GetEnhanceItem(id);
     internal ConfigEquipEnhanceLevel? GetEquipEnhanceLevel(int level) => EquipLoader.GetEnhanceLevel(level);
+    internal ConfigEquipEnhanceRenovate? GetEquipRenovateLevel(int level) => EquipLoader.GetRenovateLevel(level);
     internal ConfigEquip? GetEquipConfig(int id) => EquipLoader.Get(id);
 
     /// <summary>
@@ -781,9 +782,20 @@ internal sealed class GameServices
         ];
     }
 
-    public async Task<IReadOnlyList<byte[]>> BuildPostEnhancePushesAsync(string profileId, uint now, CancellationToken ct)
+    public async Task<IReadOnlyList<byte[]>> BuildEnhancePushesAsync(string profileId, uint now, CancellationToken ct)
     {
         PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
         return [BuildBagPush(account, now), BuildEquipPush(account, now)];
+    }
+
+    public async Task<IReadOnlyList<byte[]>> BuildRiseStarPushesAsync(string profileId, uint now, CancellationToken ct)
+    {
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        return
+        [
+            await BuildUpdateUserInfoPushAsync(profileId, now, ct),
+            BuildBagPush(account, now),
+            BuildEquipPush(account, now),
+        ];
     }
 }

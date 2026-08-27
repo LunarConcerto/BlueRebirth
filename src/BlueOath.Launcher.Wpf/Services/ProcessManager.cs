@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Management;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -183,37 +184,52 @@ public class ProcessManager
         if (!File.Exists(clientExePath))
             return $"游戏客户端未找到: {clientExePath}";
 
-        var versionError = ValidateClientVersion(config.Region, clientExePath);
-        if (versionError is not null)
-            return versionError;
+        var clientError = ValidateClientBuild(config.Region, clientExePath, baseline);
+        if (clientError is not null)
+            return clientError;
 
         return null;
     }
 
-    private string? ValidateClientVersion(string region, string exePath)
+    private static string? ValidateClientBuild(string region, string exePath, string baselinePath)
     {
-        if (!File.Exists(_settings.BaselinePath))
-            return $"基线文件未找到: {_settings.BaselinePath}";
+        if (!File.Exists(baselinePath))
+            return $"基线文件未找到: {baselinePath}";
 
         string expectedVersion;
+        string expectedHash;
         try
         {
-            var json = File.ReadAllText(_settings.BaselinePath);
+            var json = File.ReadAllText(baselinePath);
             using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.ValueKind != JsonValueKind.Array)
-                return $"基线文件格式不正确: {_settings.BaselinePath}";
+                return $"基线文件格式不正确: {baselinePath}";
 
             var expected = doc.RootElement.EnumerateArray()
                 .FirstOrDefault(entry =>
                     entry.TryGetProperty("region", out var regionElement) &&
                     regionElement.GetString()?.Equals(region, StringComparison.OrdinalIgnoreCase) == true);
             if (expected.ValueKind == JsonValueKind.Undefined)
-                return $"未在基线中找到 {region} 服的版本信息: {_settings.BaselinePath}";
+                return $"未在基线中找到 {region} 服的版本信息: {baselinePath}";
 
             if (!expected.TryGetProperty("version", out var versionElement))
-                return $"基线条目缺少 version 字段: {_settings.BaselinePath}";
+                return $"基线条目缺少 version 字段: {baselinePath}";
 
             expectedVersion = versionElement.GetString() ?? "";
+            if (!expected.TryGetProperty("files", out var filesElement) ||
+                filesElement.ValueKind != JsonValueKind.Object)
+                return $"基线条目缺少 files 字段: {baselinePath}";
+
+            expectedHash = "";
+            var executableName = Path.GetFileName(exePath);
+            foreach (var file in filesElement.EnumerateObject())
+            {
+                if (!Path.GetFileName(file.Name).Equals(executableName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                expectedHash = file.Value.GetString() ?? "";
+                break;
+            }
         }
         catch (Exception ex)
         {
@@ -221,39 +237,25 @@ public class ProcessManager
         }
 
         if (string.IsNullOrWhiteSpace(expectedVersion))
-            return $"基线中的 {region} 服版本为空: {_settings.BaselinePath}";
+            return $"基线中的 {region} 服版本为空: {baselinePath}";
+        if (string.IsNullOrWhiteSpace(expectedHash))
+            return $"基线中缺少 {Path.GetFileName(exePath)} 的文件指纹: {baselinePath}";
 
-        var fileVersionInfo = FileVersionInfo.GetVersionInfo(exePath);
-        var actualVersionRaw = string.IsNullOrWhiteSpace(fileVersionInfo.FileVersion)
-            ? fileVersionInfo.ProductVersion
-            : fileVersionInfo.FileVersion;
-        var actualVersion = NormalizeVersion(actualVersionRaw);
-        if (string.IsNullOrWhiteSpace(actualVersion))
-            return "未能读取客户端可识别的版本号，启动中止。";
+        string actualHash;
+        try
+        {
+            using var stream = File.OpenRead(exePath);
+            actualHash = Convert.ToHexString(SHA256.HashData(stream));
+        }
+        catch (Exception ex)
+        {
+            return $"读取客户端文件失败: {ex.Message}";
+        }
 
-        if (!string.Equals(NormalizeVersion(actualVersion), NormalizeVersion(expectedVersion), StringComparison.Ordinal))
-            return $"客户端版本不匹配：当前 {actualVersion}，基线要求 {NormalizeVersion(expectedVersion)}（请确认使用 {region.ToUpperInvariant()} 服对应客户端）";
+        if (!actualHash.Equals(expectedHash.Trim(), StringComparison.OrdinalIgnoreCase))
+            return $"客户端构建不匹配：{Path.GetFileName(exePath)} 文件指纹与 {region.ToUpperInvariant()} 服 v{expectedVersion} 基线不一致。";
 
         return null;
-    }
-
-    private static string NormalizeVersion(string? version)
-    {
-        if (string.IsNullOrWhiteSpace(version))
-            return string.Empty;
-
-        var match = System.Text.RegularExpressions.Regex.Match(version, @"\d+(?:\.\d+){0,3}");
-        if (!match.Success)
-            return version.Trim();
-
-        var parts = match.Value.Split('.');
-        var normalized = new List<string>(parts);
-        while (normalized.Count < 3)
-            normalized.Add("0");
-        if (normalized.Count > 3)
-            normalized = normalized.Take(3).ToList();
-
-        return string.Join(".", normalized);
     }
 
     public async Task LaunchAsync(LaunchConfig config, bool startServer)

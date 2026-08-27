@@ -2,6 +2,6 @@ namespace BlueOath.Launcher.Wpf
 {
 internal static class VersionInfo
 {
-public const string Version = "1.0.25";
+public const string Version = "1.0.71";
 }
 }

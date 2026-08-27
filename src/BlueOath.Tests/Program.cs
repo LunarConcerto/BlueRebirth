@@ -13,6 +13,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("real login protobuf payload round-trips", LoginProtobufTest),
     ("client login wire envelope round-trips", ClientLoginWireTest),
     ("temporary game login frame round-trips", GameLoginFrameTest),
+    ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
+    ("equipment renovation request decodes consumed equipment ids", EquipRiseStarArgsCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
@@ -66,6 +68,22 @@ static async Task GameLoginFrameTest()
     var decoded = await GameLoginFrameCodec.ReadAsync(input);
     Assert(decoded?.Operation == GameOperationCodes.Login &&
         GameLoginCodec.DecodeLogin(decoded.Payload).Pid == "frame-player", "game login frame mismatch");
+}
+
+static Task EquipEnhanceRetCodecTest()
+{
+    var payload = TMessageCodec.EncodeEquipEnhanceRet(42, 3, 200);
+    Assert(payload.AsSpan().SequenceEqual(new byte[] { 0x08, 0x2A, 0x10, 0x03, 0x18, 0xC8, 0x01 }),
+        "equipment enhancement response protobuf mismatch");
+    return Task.CompletedTask;
+}
+
+static Task EquipRiseStarArgsCodecTest()
+{
+    var args = TMessageCodec.DecodeEquipRiseStarArgs(new byte[] { 0x08, 0x08, 0x10, 0x0E, 0x10, 0x0F });
+    Assert(args.EquipId == 8 && args.ConsumeIds!.SequenceEqual(new uint[] { 14, 15 }),
+        "equipment renovation request protobuf mismatch");
+    return Task.CompletedTask;
 }
 
 static Task ClientLoginWireTest()

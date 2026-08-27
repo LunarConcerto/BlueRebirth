@@ -11,3 +11,4 @@ public sealed record HeroChangeEquipArgs(uint HeroId = 0, int Index = 0, uint Eq
 
 public sealed record EquipEnhanceArgs(uint EquipId = 0, IReadOnlyList<EquipEnhanceItem>? ItemArr = null);
 public sealed record EquipEnhanceItem(uint TemplateId = 0, uint ItemNum = 0);
+public sealed record EquipRiseStarArgs(uint EquipId = 0, IReadOnlyList<uint>? ConsumeIds = null);

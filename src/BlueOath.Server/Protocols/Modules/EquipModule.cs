@@ -30,7 +30,19 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
                 return new ModuleResult
                 {
                     Ret = await equip.BuildEnhanceRetAsync(request, ctx.ProfileId, ctx.Ct),
-                    PostPushes = await services.BuildPostEnhancePushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
+                    // The client handles EquipIntenstitySuccess as soon as the response arrives
+                    // and reads Data.equipData to render the new level. Refresh that cache first.
+                    PrePushes = await services.BuildEnhancePushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
+                };
+            case "equip.RiseStar":
+                var (riseRet, changed) = await equip.BuildRiseStarRetAsync(request, ctx.ProfileId, ctx.Ct);
+                return new ModuleResult
+                {
+                    Ret = riseRet,
+                    // RiseStarSuccess immediately reads currency, bag, and equip caches.
+                    PrePushes = changed
+                        ? await services.BuildRiseStarPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)
+                        : [],
                 };
             default:
                 return ModuleResult.Empty;
