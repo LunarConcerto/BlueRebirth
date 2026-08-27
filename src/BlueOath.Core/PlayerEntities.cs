@@ -147,6 +147,18 @@ public sealed record PlayerAccount(
 /// </summary>
 public static class PlayerAccountFactory
 {
+    /// <summary>好感度协议值的缩放倍率：客户端显示值 1 对应协议值 10000。</summary>
+    public const int AffectionScale = 10000;
+
+    /// <summary>config_parameter[157] affection_initial：新舰娘初始好感度 50。</summary>
+    public const int DefaultAffection = 50 * AffectionScale;
+
+    /// <summary>config_parameter[155] affection_normal_bound：未誓约好感度上限 100。</summary>
+    public const int UnmarriedMaxAffection = 100 * AffectionScale;
+
+    /// <summary>config_parameter[156] affection_marry_bound：誓约后好感度上限 200。</summary>
+    public const int MarriedMaxAffection = 200 * AffectionScale;
+
     /// <summary>默认玩家 ID（未携带 Pid 时使用）。</summary>
     public const string DefaultProfileId = "local-player";
 
@@ -182,7 +194,7 @@ public static class PlayerAccountFactory
             Exp: 0,
             CreateTime: nowSeconds,
             UpdateTime: nowSeconds,
-            Affection: 1000,
+            Affection: DefaultAffection,
             MarryTime: 0,
             CurHp: HpCoefficient,
             Mood: 100,

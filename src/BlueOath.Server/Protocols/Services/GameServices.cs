@@ -310,16 +310,22 @@ internal sealed class GameServices
             EnsureEquipIdFromAccount(account);
             account = EnsureHeroPSkills(account);
             account = EnsureAllFashion(account);
+            PlayerAccount normalized = NormalizeAffection(account);
+            bool affectionMigrated = !ReferenceEquals(normalized, account);
+            account = normalized;
             account = EnsureAffectionGifts(account);
             account = EnsureOathShopCurrency(account);
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
+            if (affectionMigrated)
+                await _repo.SaveAccountAsync(account, ct);
             return account;
         }
         var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         created = EnsureHeroPSkills(created);
         created = EnsureAllFashion(created);
+        created = NormalizeAffection(created);
         created = EnsureAffectionGifts(created);
         created = EnsureOathShopCurrency(created);
         _accountCache[profileId] = created;
@@ -339,16 +345,22 @@ internal sealed class GameServices
             account = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
             account = EnsureHeroPSkills(account);
             account = EnsureAllFashion(account);
+            account = NormalizeAffection(account);
             account = EnsureAffectionGifts(account);
             return EnsureOathShopCurrency(account);
         }
         account = EnsureHeroPSkills(account);
         account = EnsureAllFashion(account);
+        PlayerAccount normalized = NormalizeAffection(account);
+        bool affectionMigrated = !ReferenceEquals(normalized, account);
+        account = normalized;
         account = EnsureAffectionGifts(account);
         account = EnsureOathShopCurrency(account);
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
+        if (affectionMigrated)
+            await _repo.SaveAccountAsync(account, ct);
         return account;
     }
 
@@ -468,7 +480,7 @@ internal sealed class GameServices
 
     /// <summary>舰娘加入船坞：创建 Hero 实例，并按 config_ship_info（键 = ship_info_id = (templateId-1)/10）
     /// 的 equip1..equip6 发放默认装备（分配实例 ID 入装备仓库 + 填入 EquipSlots）。
-    /// Affection 高值避免 GetLoveInfo 返回 nil。</summary>
+    /// Affection 使用客户端配置的初始好感度 50。</summary>
     internal PlayerAccount AddShip(PlayerAccount account, uint heroId, int templateId, int now)
     {
         HeroDock dock = account.Dock;
@@ -497,7 +509,8 @@ internal sealed class GameServices
         List<PSkillEntry> pskills = CreateDefaultPSkills(templateId);
 
         heroes.Add(new Hero(heroId, templateId, 1,
-            fashioning, CreateTime: now, UpdateTime: now, Affection: 10000, CurHp: PlayerAccountFactory.HpCoefficient,
+            fashioning, CreateTime: now, UpdateTime: now,
+            Affection: PlayerAccountFactory.DefaultAffection, CurHp: PlayerAccountFactory.HpCoefficient,
             Mood: 10000, MarryType: 0, EquipSlots: slots, PSkills: pskills));
         return account with { Dock = dock with { Heroes = heroes }, Equip = equip with { Items = equipItems } };
     }
@@ -580,6 +593,32 @@ internal sealed class GameServices
     }
 
     /// <summary>
+    /// 修复旧版本创建的错误初始好感度（1000/10000），并把历史赠礼产生的越界值
+    /// 截断到客户端配置的未誓约 100、誓约后 200 上限。
+    /// </summary>
+    private static PlayerAccount NormalizeAffection(PlayerAccount account)
+    {
+        HeroDock dock = account.Dock;
+        List<Hero> heroes = dock.Heroes.ToList();
+        bool changed = false;
+        for (int i = 0; i < heroes.Count; i++)
+        {
+            Hero hero = heroes[i];
+            int affection = hero.Affection is 1000 or 10000
+                ? PlayerAccountFactory.DefaultAffection
+                : hero.Affection;
+            int maxAffection = hero.MarryTime == 0
+                ? PlayerAccountFactory.UnmarriedMaxAffection
+                : PlayerAccountFactory.MarriedMaxAffection;
+            affection = Math.Clamp(affection, 0, maxAffection);
+            if (affection == hero.Affection) continue;
+            heroes[i] = hero with { Affection = affection };
+            changed = true;
+        }
+        return changed ? account with { Dock = dock with { Heroes = heroes } } : account;
+    }
+
+    /// <summary>
     /// 为新档案和旧档案补齐配置表中的好感度礼物。只添加从未存在过的种类；
     /// 已经消耗到 0 的条目会保留原值，避免每次登录自动恢复库存。
     /// </summary>
@@ -641,7 +680,11 @@ internal sealed class GameServices
         List<Hero> heroes = dock.Heroes.ToList();
         int idx = heroes.FindIndex(h => h.HeroId == heroId);
         if (idx < 0) return account;
-        int affection = amount * 10000;
+        int maxAffection = heroes[idx].MarryTime == 0
+            ? PlayerAccountFactory.UnmarriedMaxAffection
+            : PlayerAccountFactory.MarriedMaxAffection;
+        int affection = Math.Clamp(
+            checked(amount * PlayerAccountFactory.AffectionScale), 0, maxAffection);
         heroes[idx] = heroes[idx] with { Affection = affection };
         return account with { Dock = dock with { Heroes = heroes } };
     }

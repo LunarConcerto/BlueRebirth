@@ -513,12 +513,14 @@ static async Task HeroMutationIntegrationTest()
     await repo.CreateAsync(profileId, profileId);
     PlayerAccount seeded = await repo.LoadAccountAsync(profileId)
         ?? throw new InvalidDataException("failed to seed retirement account");
+    Assert(seeded.Dock.Heroes[0].Affection == PlayerAccountFactory.DefaultAffection,
+        "new profiles did not initialize affection at 50");
     Hero second = seeded.Dock.Heroes[0] with
     {
         HeroId = 2,
         TemplateId = 40320111,
         Fashioning = 4032011,
-        Affection = 1_060_000,
+        Affection = 990_000,
         EquipSlots = new uint[] { 77, 0, 0, 0, 0, 0 },
     };
     Hero third = seeded.Dock.Heroes[0] with
@@ -526,9 +528,14 @@ static async Task HeroMutationIntegrationTest()
         HeroId = 3,
         Affection = 1_000_000,
     };
+    Hero legacyLowAffection = seeded.Dock.Heroes[0] with
+    {
+        HeroId = 4,
+        Affection = 10_000,
+    };
     seeded = seeded with
     {
-        Dock = seeded.Dock with { Heroes = [seeded.Dock.Heroes[0], second, third] },
+        Dock = seeded.Dock with { Heroes = [seeded.Dock.Heroes[0], second, third, legacyLowAffection] },
         Equip = new PlayerEquip([new EquipItem(77, 30421, HeroId: 2)], 2000),
         // Existing profiles may predate affection gifts and therefore have an empty bag.
         Bag = new PlayerBag([], 100),
@@ -584,12 +591,17 @@ static async Task HeroMutationIntegrationTest()
         Assert(ContainsSequence(initialHeroResponse.Ret!, new byte[] { 0x98, 0x01, 0x00 }) &&
             ContainsSequence(initialHeroResponse.Ret!, new byte[] { 0xA8, 0x01, 0x00 }),
             "unmarried hero data did not explicitly initialize MarryTime/MarryType=0");
+        PlayerAccount migrated = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("migrated account disappeared");
+        Assert(migrated.Dock.Heroes.Single(h => h.HeroId == 4).Affection ==
+                PlayerAccountFactory.DefaultAffection,
+            "legacy affection migration was not persisted during account load");
 
         int initialAffection = second.Affection;
         var giftArgs = new ProtocolPackage();
         giftArgs.Write(0x08, 2UL);
         giftArgs.Write(0x10, 280002UL);
-        giftArgs.Write(0x18, 2UL);
+        giftArgs.Write(0x18, 1UL);
         var (giftResponse, giftPushes) = await RoundTrip("hero.AddAffection", giftArgs.ToArray());
         Assert(giftResponse.Err == 0 && giftResponse.Ret is { Length: > 0 } &&
             ContainsSequence(giftResponse.Ret, new byte[] { 0x10, 0x02 }),
@@ -601,11 +613,24 @@ static async Task HeroMutationIntegrationTest()
         PlayerAccount gifted = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("gift account disappeared");
         int giftedAffection = gifted.Dock.Heroes.Single(h => h.HeroId == 2).Affection;
-        Assert(giftedAffection > initialAffection, "gift did not increase persisted affection");
-        Assert(gifted.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 997,
+        Assert(giftedAffection == PlayerAccountFactory.UnmarriedMaxAffection &&
+            giftedAffection > initialAffection,
+            "gift did not cap persisted unmarried affection at 100");
+        Assert(gifted.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 998,
             "starter gift inventory was not provisioned and deducted atomically");
         Assert(gifted.Bag?.Items.Count(i => i.Num == 999) == 7,
             "not all configured affection gift types were provisioned for the existing profile");
+
+        var (cappedGiftResponse, cappedGiftPushes) =
+            await RoundTrip("hero.AddAffection", giftArgs.ToArray());
+        Assert(cappedGiftResponse.Err != 0 && cappedGiftPushes.Count == 0,
+            "gift at the unmarried affection limit was accepted");
+        PlayerAccount cappedGiftRejected = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("capped gift account disappeared");
+        Assert(cappedGiftRejected.Dock.Heroes.Single(h => h.HeroId == 2).Affection ==
+                PlayerAccountFactory.UnmarriedMaxAffection &&
+            cappedGiftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 998,
+            "gift at the affection limit changed affection or inventory");
 
         // A failed request must not grant affection or consume the final gift.
         var excessiveGiftArgs = new ProtocolPackage();
@@ -619,7 +644,7 @@ static async Task HeroMutationIntegrationTest()
         PlayerAccount giftRejected = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("gift rejection account disappeared");
         Assert(giftRejected.Dock.Heroes.Single(h => h.HeroId == 2).Affection == giftedAffection &&
-            giftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 997,
+            giftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 998,
             "failed gift request changed persisted data");
 
         const string customName = "马克西姆";

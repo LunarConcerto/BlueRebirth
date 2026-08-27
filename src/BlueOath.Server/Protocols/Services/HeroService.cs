@@ -344,11 +344,15 @@ internal sealed class HeroService(GameServices services)
             return new([], null, false, "not enough gifts");
 
         Hero hero = heroList[heroIdx];
-        long affection = checked((long)hero.Affection + gift.AffectionExp * arg.Num);
-        if (affection > int.MaxValue)
-            return new([], null, false, "affection value is too large");
+        int maxAffection = hero.MarryTime == 0
+            ? PlayerAccountFactory.UnmarriedMaxAffection
+            : PlayerAccountFactory.MarriedMaxAffection;
+        long requestedAffection = checked((long)hero.Affection + gift.AffectionExp * arg.Num);
+        int affection = checked((int)Math.Min(requestedAffection, maxAffection));
+        if (affection <= hero.Affection)
+            return new([], null, false, "affection is already at its current limit");
 
-        Hero updatedHero = hero with { Affection = checked((int)affection) };
+        Hero updatedHero = hero with { Affection = affection };
         heroList[heroIdx] = updatedHero;
         bagItems[bagIdx] = bagItems[bagIdx] with { Num = bagItems[bagIdx].Num - arg.Num };
         account = account with

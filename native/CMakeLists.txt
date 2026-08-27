@@ -1,5 +1,16 @@
 cmake_minimum_required(VERSION 3.15)
+if(POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
 project(BlueOathNative LANGUAGES CXX)
+
+# The JP client ships its own 2018-era MSVC runtime DLLs. A payload linked with
+# the current dynamic runtime resolves MSVCP/VCRUNTIME imports to those older
+# copies after injection and can crash before signalling the ready event.
+# Keep the native tools self-contained so their C++ runtime always matches the
+# compiler that produced them.
+set(BLUEOATH_MSVC_RUNTIME "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(CMAKE_MSVC_RUNTIME_LIBRARY "${BLUEOATH_MSVC_RUNTIME}")
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
   message(FATAL_ERROR "BlueOath native components must be built for x86")
@@ -23,3 +34,8 @@ target_compile_features(BlueOath.Payload PRIVATE cxx_std_17)
 target_compile_definitions(BlueOath.Payload PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(BlueOath.Payload PRIVATE ws2_32 psapi crypt32 bcrypt)
 set_target_properties(BlueOath.Payload PROPERTIES OUTPUT_NAME "BlueOath.Payload")
+
+# Keep this invariant target-local as well, so a parent build or command-line
+# cache value cannot turn either distributable back into an /MD binary.
+set_target_properties(BlueOath.Injector BlueOath.Payload PROPERTIES
+  MSVC_RUNTIME_LIBRARY "${BLUEOATH_MSVC_RUNTIME}")
