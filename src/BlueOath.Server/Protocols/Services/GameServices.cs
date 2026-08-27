@@ -17,6 +17,7 @@ namespace BlueOath.Server.Protocols;
 /// </summary>
 internal sealed class GameServices
 {
+    private const int DefaultAffectionGiftCount = 999;
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
@@ -307,6 +308,7 @@ internal sealed class GameServices
             EnsureEquipIdFromAccount(account);
             account = EnsureHeroPSkills(account);
             account = EnsureAllFashion(account);
+            account = EnsureAffectionGifts(account);
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
@@ -315,6 +317,7 @@ internal sealed class GameServices
         var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         created = EnsureHeroPSkills(created);
         created = EnsureAllFashion(created);
+        created = EnsureAffectionGifts(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -328,9 +331,15 @@ internal sealed class GameServices
 
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is null)
-            return EnsureHeroPSkills(PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
+        {
+            account = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            account = EnsureHeroPSkills(account);
+            account = EnsureAllFashion(account);
+            return EnsureAffectionGifts(account);
+        }
         account = EnsureHeroPSkills(account);
         account = EnsureAllFashion(account);
+        account = EnsureAffectionGifts(account);
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
@@ -562,6 +571,26 @@ internal sealed class GameServices
             return new FashionEntry(e.SfId, tids.Distinct().OrderBy(x => x).ToList());
         }).ToList();
         return account with { Fashion = new PlayerFashion(merged) };
+    }
+
+    /// <summary>
+    /// 为新档案和旧档案补齐配置表中的好感度礼物。只添加从未存在过的种类；
+    /// 已经消耗到 0 的条目会保留原值，避免每次登录自动恢复库存。
+    /// </summary>
+    private static PlayerAccount EnsureAffectionGifts(PlayerAccount account)
+    {
+        if (AffectionItemLoader.All.Count == 0) return account;
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> items = bag.Items.ToList();
+        HashSet<int> existingIds = items.Select(i => i.TemplateId).ToHashSet();
+        bool changed = false;
+        foreach (var (id, gift) in AffectionItemLoader.All.OrderBy(x => x.Key))
+        {
+            if (gift.AffectionExp <= 0 || existingIds.Contains(id)) continue;
+            items.Add(new BagItem(id, DefaultAffectionGiftCount));
+            changed = true;
+        }
+        return changed ? account with { Bag = bag with { Items = items } } : account;
     }
 
     /// <summary>

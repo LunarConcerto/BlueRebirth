@@ -558,6 +558,8 @@ internal static class AffectionItemLoader
 
     public static ConfigAffectionItem? Get(int id)
         => _items.TryGetValue(id, out var cfg) ? cfg : null;
+
+    public static IReadOnlyDictionary<int, ConfigAffectionItem> All => _items;
 }
 
 internal static class ChapterCopyLoader

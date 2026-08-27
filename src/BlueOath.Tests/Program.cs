@@ -516,7 +516,8 @@ static async Task HeroMutationIntegrationTest()
     {
         Dock = seeded.Dock with { Heroes = [seeded.Dock.Heroes[0], second] },
         Equip = new PlayerEquip([new EquipItem(77, 30421, HeroId: 2)], 2000),
-        Bag = new PlayerBag([new BagItem(280002, 3)], 100),
+        // Existing profiles may predate affection gifts and therefore have an empty bag.
+        Bag = new PlayerBag([], 100),
     };
     await repo.SaveAccountAsync(seeded);
 
@@ -578,14 +579,16 @@ static async Task HeroMutationIntegrationTest()
             ?? throw new InvalidDataException("gift account disappeared");
         int giftedAffection = gifted.Dock.Heroes.Single(h => h.HeroId == 2).Affection;
         Assert(giftedAffection > initialAffection, "gift did not increase persisted affection");
-        Assert(gifted.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 1,
-            "gift inventory was not deducted atomically");
+        Assert(gifted.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 997,
+            "starter gift inventory was not provisioned and deducted atomically");
+        Assert(gifted.Bag?.Items.Count(i => i.Num == 999) == 7,
+            "not all configured affection gift types were provisioned for the existing profile");
 
         // A failed request must not grant affection or consume the final gift.
         var excessiveGiftArgs = new ProtocolPackage();
         excessiveGiftArgs.Write(0x08, 2UL);
         excessiveGiftArgs.Write(0x10, 280002UL);
-        excessiveGiftArgs.Write(0x18, 2UL);
+        excessiveGiftArgs.Write(0x18, 1000UL);
         var (excessiveGiftResponse, excessiveGiftPushes) =
             await RoundTrip("hero.AddAffection", excessiveGiftArgs.ToArray());
         Assert(excessiveGiftResponse.Err != 0, "insufficient gift inventory was accepted");
@@ -593,7 +596,7 @@ static async Task HeroMutationIntegrationTest()
         PlayerAccount giftRejected = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("gift rejection account disappeared");
         Assert(giftRejected.Dock.Heroes.Single(h => h.HeroId == 2).Affection == giftedAffection &&
-            giftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 1,
+            giftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 997,
             "failed gift request changed persisted data");
 
         var lockArgs = new ProtocolPackage();
