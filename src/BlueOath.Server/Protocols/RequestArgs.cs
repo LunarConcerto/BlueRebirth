@@ -29,6 +29,9 @@ internal sealed record MarryArg(uint HeroId = 0, int MarryType = 1);
 /// <summary>TLockHeroArg（hero.LockHero）: HeroId(1, uint32) / Lock(2, bool)。</summary>
 internal sealed record LockHeroArg(uint HeroId = 0, bool Lock = false);
 
+/// <summary>TRetireHeroArg（hero.RetireHero）: HeroIds(1, repeated uint32) / IsDisEquip(2, bool)。</summary>
+internal sealed record RetireHeroArg(List<uint> HeroIds, bool IsDisEquip = false);
+
 /// <summary>TChangeHeroNameArg（hero.ChangeName）: HeroId(1, uint32) / Name(2, string)。</summary>
 internal sealed record ChangeHeroNameArg(uint HeroId = 0, string Name = "");
 

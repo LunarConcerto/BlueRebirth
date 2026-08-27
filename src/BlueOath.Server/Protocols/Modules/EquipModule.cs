@@ -10,14 +10,13 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {
-        ModuleResult result;
         switch (request.Method)
         {
             case "equip.Dismantle":
                 var (ret, removedIds) = await equip.BuildDismantleRetAsync(request, ctx.ProfileId, ctx.Ct);
                 var account = await ctx.GetAccountAsync();
                 var now = (uint)ctx.Now;
-                result = new ModuleResult
+                return new ModuleResult
                 {
                     Ret = ret,
                     PrePushes = new[]
@@ -27,11 +26,32 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
                         services.BuildBagPush(account, now),
                     },
                 };
-                break;
+            case "equip.Enhance":
+                var (enhanceRet, enhanced, enhanceError) =
+                    await equip.BuildEnhanceRetAsync(request, ctx.ProfileId, ctx.Ct);
+                return new ModuleResult
+                {
+                    Ret = enhanceRet,
+                    Err = enhanced ? 0 : 1,
+                    ErrMsg = enhanceError,
+                    // The client handles EquipIntenstitySuccess as soon as the response arrives
+                    // and reads Data.equipData to render the new level. Refresh that cache first.
+                    PrePushes = await services.BuildEnhancePushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
+                };
+            case "equip.RiseStar":
+                var (riseRet, changed) = await equip.BuildRiseStarRetAsync(request, ctx.ProfileId, ctx.Ct);
+                return new ModuleResult
+                {
+                    Ret = riseRet,
+                    Err = changed ? 0 : 1,
+                    ErrMsg = changed ? "" : "equipment renovation requirements are not met",
+                    // RiseStarSuccess immediately reads currency, bag, and equip caches.
+                    PrePushes = changed
+                        ? await services.BuildRiseStarPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)
+                        : [],
+                };
             default:
-                result = ModuleResult.Empty;
-                break;
+                return ModuleResult.Empty;
         }
-        return result;
     }
 }

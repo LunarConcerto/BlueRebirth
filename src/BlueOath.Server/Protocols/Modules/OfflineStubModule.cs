@@ -17,6 +17,8 @@ internal sealed class OfflineStubModule : IGameModule
         {
             "GetSvrTime" => TMessageCodec.EncodeRetGetSvrTime(ctx.Now, ctx.Now),
             "cachedata.CacheData" => ProtocolEncoder.EncodeCacheDataRet(),
+            // TStudyInfo: PosNum=2; ArrProgress is an empty repeated field.
+            "study.GetStudyInfo" => new byte[] { 0x08, 0x02 },
             _ => []
         };
         return Task.FromResult(ModuleResult.Ok(ret));

@@ -265,6 +265,61 @@ public static class TMessageCodec
         return new HeroChangeEquipArgs(heroId, index, equipId, type);
     }
 
+    public static EquipEnhanceArgs DecodeEquipEnhanceArgs(ReadOnlySpan<byte> payload)
+    {
+        var reader = new PbReader(payload);
+        uint equipId = 0;
+        var items = new List<EquipEnhanceItem>();
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            if (field == 1 && wire == 0) { equipId = checked((uint)reader.ReadVarint()); continue; }
+            if (field == 2 && wire == 2)
+            {
+                var itemReader = new PbReader(reader.ReadBytes());
+                uint templateId = 0, itemNum = 0;
+                while (itemReader.TryReadField(out var itemField, out var itemWire))
+                {
+                    switch (itemField)
+                    {
+                        case 1 when itemWire == 0: templateId = checked((uint)itemReader.ReadVarint()); break;
+                        case 2 when itemWire == 0: itemNum = checked((uint)itemReader.ReadVarint()); break;
+                        default: itemReader.Skip(itemWire); break;
+                    }
+                }
+                items.Add(new EquipEnhanceItem(templateId, itemNum));
+                continue;
+            }
+            reader.Skip(wire);
+        }
+        return new EquipEnhanceArgs(equipId, items);
+    }
+
+    // TEquipEnhanceRet: EquipId(1) / EquipEnhanceLevel(2) / EquipEnhanceExp(3)。
+    // 三个字段均无条件编码；客户端把零长度 Ret 当作 nil，不会触发强化成功回调。
+    public static byte[] EncodeEquipEnhanceRet(uint equipId, int enhanceLevel, int enhanceExp)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, equipId);
+        WriteVarintField(output, 2, unchecked((uint)enhanceLevel));
+        WriteVarintField(output, 3, unchecked((uint)enhanceExp));
+        return output.ToArray();
+    }
+
+    // TEquipRiseStarArgs: EquipId(1) / ConsumeIds(2, repeated uint32)。
+    public static EquipRiseStarArgs DecodeEquipRiseStarArgs(ReadOnlySpan<byte> payload)
+    {
+        var reader = new PbReader(payload);
+        uint equipId = 0;
+        var consumeIds = new List<uint>();
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            if (field == 1 && wire == 0) equipId = checked((uint)reader.ReadVarint());
+            else if (field == 2 && wire == 0) consumeIds.Add(checked((uint)reader.ReadVarint()));
+            else reader.Skip(wire);
+        }
+        return new EquipRiseStarArgs(equipId, consumeIds);
+    }
+
     // TBuyGoodsRet: Reward(1, repeated TCommonReward)/GoodId(2)/BuyNum(3)。
     public static byte[] EncodeBuyGoodsRet(CommonReward reward, int goodId, int buyNum)
     {

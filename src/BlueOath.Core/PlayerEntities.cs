@@ -194,13 +194,13 @@ public static class PlayerAccountFactory
         return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet);
     }
 
-    /// <summary>创建默认5个空编队（Normal type=1, modeId 1-5）。</summary>
+    /// <summary>创建默认5个空编队（Normal type=1, modeId 1-5）。名称留空，由客户端按当前语言本地化。</summary>
     public static PlayerFleet DefaultFleet()
     {
         var tactics = new List<FleetEntry>(5);
         for (int i = 1; i <= 5; i++)
         {
-            tactics.Add(new FleetEntry(ModeId: i, Type: 1, TacticName: i == 1 ? "第一舰队" : ""));
+            tactics.Add(new FleetEntry(ModeId: i, Type: 1, TacticName: ""));
         }
         return new PlayerFleet(tactics);
     }

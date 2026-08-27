@@ -86,6 +86,33 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 TRetireHeroRet: Reward(1, repeated TCommonReward)。</summary>
+    internal static byte[] EncodeRetireHeroRet(IReadOnlyList<CommonReward> rewards)
+    {
+        ProtocolPackage output = new();
+        foreach (CommonReward reward in rewards)
+            output.Write(0x0A, PlayerDataCodec.Encode(reward));
+        return output.ToArray();
+    }
+
+    /// <summary>编码 TLockHeroRet: Ret(1, uint32)，返回被更新的舰娘实例 ID。</summary>
+    internal static byte[] EncodeLockHeroRet(uint heroId)
+    {
+        ProtocolPackage output = new();
+        output.Write(0x08, heroId);
+        return output.ToArray();
+    }
+
+    /// <summary>编码 THeroAddAffectionRet: Ret(1), HeroId(2), Affection(3)。</summary>
+    internal static byte[] EncodeHeroAddAffectionRet(uint heroId, int affection)
+    {
+        ProtocolPackage output = new();
+        output.Write(0x08, 0UL);
+        output.Write(0x10, heroId);
+        output.Write(0x18, unchecked((ulong)affection));
+        return output.ToArray();
+    }
+
     internal static byte[] EncodeHeroAddExpRet(uint heroId, List<ItemCount> items)
     {
         ProtocolPackage output = new();
@@ -571,8 +598,10 @@ internal static class ProtocolEncoder
         {
             ProtocolPackage entry = new();
             // tacticName (1)
-            if (!string.IsNullOrEmpty(t.TacticName))
-                entry.Write(0x0A, t.TacticName);
+            // Empty means "use the localized default fleet name". The Lua protobuf runtime
+            // represents an omitted optional string as nil, while FleetLogic only applies its
+            // localized fallback when tacticName == "", so the zero-length field is required.
+            entry.Write(0x0A, t.TacticName ?? "");
             // heroInfo (2, repeated int32)
             if (t.HeroInfo is { Count: > 0 })
                 foreach (int h in t.HeroInfo)

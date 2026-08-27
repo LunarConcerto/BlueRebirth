@@ -191,19 +191,20 @@ Console.WriteLine("  Python bundled.");
 // Step 6: Generate launcher settings
 Console.WriteLine("[6/6] Generating launcher settings...");
 
-// Move launcher exe to root and clean up
+// Flatten the launcher publish directory into the package root. Always overwrite
+// existing files: release output is commonly reused, and preserving the old root
+// executable leaves a stale launcher beside the newly published nested copy.
 var launcherDir = Path.Combine(outputDir, "launcher");
 var launcherExe = Path.Combine(launcherDir, "BlueOath.Launcher.Wpf.exe");
 var rootExe = Path.Combine(outputDir, "BlueOath.Launcher.Wpf.exe");
-if (File.Exists(launcherExe) && !File.Exists(rootExe))
+if (File.Exists(launcherExe))
 {
-    File.Move(launcherExe, rootExe);
+    File.Move(launcherExe, rootExe, true);
     // Move all other files from launcher dir to root
     foreach (var file in Directory.GetFiles(launcherDir))
     {
         var dest = Path.Combine(outputDir, Path.GetFileName(file));
-        if (!File.Exists(dest))
-            File.Move(file, dest);
+        File.Move(file, dest, true);
     }
     foreach (var dir in Directory.GetDirectories(launcherDir))
     {
@@ -247,7 +248,60 @@ Console.WriteLine("  Verified: launcher-settings.json exists.");
 
 // Create start batch
 var batchPath = Path.Combine(outputDir, "启动游戏.bat");
-File.WriteAllText(batchPath, "@echo off\r\ncd /d \"%~dp0\"\r\nstart \"\" \"BlueOath.Launcher.Wpf.exe\"\r\n");
+var startBatch = """
+@echo off
+setlocal EnableExtensions
+set "ROOT=%~dp0"
+set "LOGDIR=%ROOT%logs"
+if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
+>"%LOGDIR%\.__blueoath_write_test" echo write-test 2>nul
+if errorlevel 1 (
+  set "LOGDIR=%TEMP%\BlueOath-Launcher"
+  if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
+)
+del /q "%LOGDIR%\.__blueoath_write_test" >nul 2>&1
+set "LOG=%LOGDIR%\launcher-startup.log"
+
+call :log "============================================================"
+call :log "launcher script started"
+call :log "ROOT=%ROOT%"
+call :log "USER=%USERNAME%"
+call :log "TEMP=%TEMP%"
+
+if not exist "%ROOT%BlueOath.Launcher.Wpf.exe" (
+  call :log "ERROR: launcher executable not found"
+  echo [ERROR] launcher executable not found. See: %LOG%
+  exit /b 2
+)
+if not exist "%ROOT%launcher-settings.json" (
+  call :log "ERROR: launcher-settings.json not found"
+  echo [ERROR] launcher-settings.json not found. See: %LOG%
+  exit /b 3
+)
+
+cd /d "%ROOT%"
+if errorlevel 1 (
+  call :log "ERROR: cannot change working directory, errorlevel=%ERRORLEVEL%"
+  echo [ERROR] cannot access package directory; possible permission issue. See: %LOG%
+  exit /b 4
+)
+
+call :log "Starting BlueOath.Launcher.Wpf.exe"
+start "BlueOath Launcher" "%ROOT%BlueOath.Launcher.Wpf.exe"
+if errorlevel 1 (
+  call :log "ERROR: start command failed, errorlevel=%ERRORLEVEL%"
+  echo [ERROR] launcher start failed; possible permission or runtime issue. See: %LOG%
+  exit /b 5
+)
+call :log "Launcher start command completed"
+echo Launcher started. Diagnostic log: %LOG%
+exit /b 0
+
+:log
+echo [%date% %time%] %~1>>"%LOG%"
+exit /b 0
+""";
+File.WriteAllText(batchPath, startBatch);
 Console.WriteLine($"  Start script: {batchPath}");
 
 Console.WriteLine();

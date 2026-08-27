@@ -19,7 +19,6 @@ internal sealed class EquipService(GameServices services)
 
         using var _ = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
-
         var equip = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
         List<EquipItem> items = equip.Items.ToList();
         List<uint> removedIds = new();
@@ -68,6 +67,151 @@ internal sealed class EquipService(GameServices services)
             await services.SaveAccountAsync(account, ct);
 
         return (ProtocolEncoder.EncodeEquipDismantleRet(rewards), removedIds);
+    }
+
+    internal async Task<(byte[] Ret, bool Changed, string Error)> BuildEnhanceRetAsync(
+        TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return ([], false, "missing enhancement arguments");
+        EquipEnhanceArgs arg = TMessageCodec.DecodeEquipEnhanceArgs(request.Args);
+        if (arg.EquipId == 0 || arg.ItemArr is not { Count: > 0 })
+            return ([], false, "no enhancement material was selected");
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+        PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
+        List<EquipItem> equipItems = equip.Items.ToList();
+        int equipIndex = equipItems.FindIndex(e => e.EquipId == arg.EquipId);
+        if (equipIndex < 0) return ([], false, "equipment was not found");
+        EquipItem current = equipItems[equipIndex];
+        ConfigEquip? config = services.GetEquipConfig(current.TemplateId);
+        if (config is null) return ([], false, "equipment configuration was not found");
+        Dictionary<uint, ulong> materialTotals = new();
+        foreach (EquipEnhanceItem material in arg.ItemArr)
+            materialTotals[material.TemplateId] = checked(materialTotals.GetValueOrDefault(material.TemplateId) + material.ItemNum);
+        List<EquipEnhanceItem> materials = materialTotals
+            .Select(entry => new EquipEnhanceItem(entry.Key, checked((uint)entry.Value)))
+            .ToList();
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> bagItems = bag.Items.ToList();
+        long addedExp = 0;
+        foreach (EquipEnhanceItem material in materials)
+        {
+            if (material.ItemNum == 0 || services.GetEquipEnhanceItem(checked((int)material.TemplateId)) is not { } item)
+                return ([], false, "invalid enhancement material");
+            int bagIndex = bagItems.FindIndex(i => i.TemplateId == checked((int)material.TemplateId));
+            if (bagIndex < 0 || bagItems[bagIndex].Num < material.ItemNum)
+                return ([], false, "enhancement materials are insufficient");
+            if (item.EnhanceLevelLimit is { Count: >= 2 } limit &&
+                (current.EnhanceLv < limit[0] || current.EnhanceLv > limit[1]))
+                return ([], false, "enhancement material cannot be used at this level");
+            addedExp += item.Exp * material.ItemNum;
+        }
+        int level = current.EnhanceLv;
+        long exp = current.EnhanceExp + addedExp;
+        int maxLevel = checked((int)config.EnhanceLevelMax);
+        while (level < maxLevel && services.GetEquipEnhanceLevel(level + 1) is { } next && exp >= next.Exp)
+        {
+            exp -= next.Exp;
+            level++;
+        }
+        foreach (EquipEnhanceItem material in materials)
+        {
+            int index = bagItems.FindIndex(i => i.TemplateId == checked((int)material.TemplateId));
+            int remaining = bagItems[index].Num - checked((int)material.ItemNum);
+            if (remaining == 0) bagItems.RemoveAt(index);
+            else bagItems[index] = bagItems[index] with { Num = remaining };
+        }
+        equipItems[equipIndex] = current with { EnhanceLv = level, EnhanceExp = checked((int)exp) };
+        account = account with { Equip = equip with { Items = equipItems }, Bag = bag with { Items = bagItems } };
+        await services.SaveAccountAsync(account, ct);
+        return (TMessageCodec.EncodeEquipEnhanceRet(arg.EquipId, level, checked((int)exp)), true, "");
+    }
+
+    internal async Task<(byte[] Ret, bool Changed)> BuildRiseStarRetAsync(
+        TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return ([], false);
+        EquipRiseStarArgs arg = TMessageCodec.DecodeEquipRiseStarArgs(request.Args);
+        if (arg.EquipId == 0) return ([], false);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+        PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
+        List<EquipItem> equipItems = equip.Items.ToList();
+        int equipIndex = equipItems.FindIndex(e => e.EquipId == arg.EquipId);
+        if (equipIndex < 0) return ([], false);
+
+        EquipItem current = equipItems[equipIndex];
+        ConfigEquip? config = services.GetEquipConfig(current.TemplateId);
+        int nextStar = current.Star + 1;
+        ConfigEquipEnhanceRenovate? renovate = services.GetEquipRenovateLevel(nextStar);
+        if (config is null || renovate is null || nextStar > config.StarMax ||
+            current.EnhanceLv < renovate.NeedEnhanceLevel)
+            return ([], false);
+
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> bagItems = bag.Items.ToList();
+
+        // Validate all configured currency/item costs before mutating the account.
+        foreach (List<long> cost in renovate.ItemArray ?? [])
+        {
+            if (cost.Count < 3 || cost[2] < 0 || cost[2] > int.MaxValue) return ([], false);
+            int goodsType = checked((int)cost[0]);
+            int configId = checked((int)cost[1]);
+            int count = checked((int)cost[2]);
+            if (goodsType == GameServices.GoodsTypeCurrency)
+            {
+                if (configId != 1 || account.Character.Gold < count) return ([], false);
+            }
+            else if (goodsType is 1 or 6)
+            {
+                int bagIndex = bagItems.FindIndex(i => i.TemplateId == configId);
+                if (bagIndex < 0 || bagItems[bagIndex].Num < count) return ([], false);
+            }
+            else return ([], false);
+        }
+
+        List<uint> consumeIds = (arg.ConsumeIds ?? []).Distinct().ToList();
+        int selfCount = checked((int)renovate.EquipSelfCount);
+        if (consumeIds.Count != selfCount) return ([], false);
+        foreach (uint consumeId in consumeIds)
+        {
+            EquipItem? consumed = equipItems.FirstOrDefault(e => e.EquipId == consumeId);
+            if (consumed is null || consumed.EquipId == current.EquipId || consumed.HeroId != 0 ||
+                consumed.TemplateId != current.TemplateId)
+                return ([], false);
+        }
+
+        foreach (List<long> cost in renovate.ItemArray ?? [])
+        {
+            int goodsType = checked((int)cost[0]);
+            int configId = checked((int)cost[1]);
+            int count = checked((int)cost[2]);
+            if (goodsType == GameServices.GoodsTypeCurrency)
+            {
+                account = GameServices.AddCurrency(account, configId, -count);
+            }
+            else
+            {
+                int bagIndex = bagItems.FindIndex(i => i.TemplateId == configId);
+                int remaining = bagItems[bagIndex].Num - count;
+                if (remaining == 0) bagItems.RemoveAt(bagIndex);
+                else bagItems[bagIndex] = bagItems[bagIndex] with { Num = remaining };
+            }
+        }
+
+        if (consumeIds.Count > 0)
+            equipItems.RemoveAll(e => consumeIds.Contains(e.EquipId));
+        equipIndex = equipItems.FindIndex(e => e.EquipId == current.EquipId);
+        EquipItem updated = current with { Star = nextStar };
+        equipItems[equipIndex] = updated;
+        account = account with { Equip = equip with { Items = equipItems }, Bag = bag with { Items = bagItems } };
+        await services.SaveAccountAsync(account, ct);
+
+        // The client does not declare a dedicated RiseStar ret message. Returning updated
+        // TEquipInfo keeps the payload non-empty while the pre-push refreshes its cache.
+        return (PlayerDataCodec.Encode(new EquipInfo(updated.EquipId, updated.TemplateId,
+            updated.EnhanceLv, updated.Star, updated.HeroId, updated.EnhanceExp)), true);
     }
 
     private void ApplyReward(ref PlayerAccount account, int type, int configId, int num)

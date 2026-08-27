@@ -5,6 +5,7 @@ using BlueOath.Storage;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 
 var tests = new (string Name, Func<Task> Run)[]
@@ -13,6 +14,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("real login protobuf payload round-trips", LoginProtobufTest),
     ("client login wire envelope round-trips", ClientLoginWireTest),
     ("temporary game login frame round-trips", GameLoginFrameTest),
+    ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
+    ("equipment renovation request decodes consumed equipment ids", EquipRiseStarArgsCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
@@ -24,7 +27,16 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
     ("protobuf login server creates a local profile", GameLoginIntegrationTest),
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
-    ("all fashions unlocked on account creation", FashionUnlockIntegrationTest)];
+    ("all fashions unlocked on account creation", FashionUnlockIntegrationTest),
+    ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--retire-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--hero-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--affection-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -66,6 +78,22 @@ static async Task GameLoginFrameTest()
     var decoded = await GameLoginFrameCodec.ReadAsync(input);
     Assert(decoded?.Operation == GameOperationCodes.Login &&
         GameLoginCodec.DecodeLogin(decoded.Payload).Pid == "frame-player", "game login frame mismatch");
+}
+
+static Task EquipEnhanceRetCodecTest()
+{
+    var payload = TMessageCodec.EncodeEquipEnhanceRet(42, 3, 200);
+    Assert(payload.AsSpan().SequenceEqual(new byte[] { 0x08, 0x2A, 0x10, 0x03, 0x18, 0xC8, 0x01 }),
+        "equipment enhancement response protobuf mismatch");
+    return Task.CompletedTask;
+}
+
+static Task EquipRiseStarArgsCodecTest()
+{
+    var args = TMessageCodec.DecodeEquipRiseStarArgs(new byte[] { 0x08, 0x08, 0x10, 0x0E, 0x10, 0x0F });
+    Assert(args.EquipId == 8 && args.ConsumeIds!.SequenceEqual(new uint[] { 14, 15 }),
+        "equipment renovation request protobuf mismatch");
+    return Task.CompletedTask;
 }
 
 static Task ClientLoginWireTest()
@@ -335,6 +363,14 @@ static async Task TacticIntegrationTest()
             new byte[] { 0x0A, 0x04, (byte)'t', (byte)'a', (byte)'c', (byte)'1', 0x10, 0x01 });
         await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
 
+        // An explicitly encoded empty tacticName lets the Lua client distinguish the default
+        // name from nil and replace it with the localized First..Fifth Fleet text.
+        var defaults = await RoundTrip("tactic.GetHerosTactic", null);
+        for (byte fleetId = 1; fleetId <= 5; fleetId++)
+            Assert(defaults.Ret is { Length: > 0 } &&
+                ContainsSequence(defaults.Ret, new byte[] { 0x0A, 0x00, 0x18, fleetId }),
+                $"default fleet {fleetId} did not contain an explicit empty localized-name marker");
+
         // tactic.SetHerosTactic: tactics[0] { heroInfo=[1], modeId=1, strategyId=0, formationId=2, type=1 }
         var entry = new ProtocolPackage();
         entry.Write(0x10, 1UL); // heroInfo (2)
@@ -417,18 +453,23 @@ static async Task FashionUnlockIntegrationTest()
         var userInfo = await RoundTrip("user.GetUserInfo", null);
         Assert(userInfo.Method == "user.GetUserInfo", "get user info response method mismatch");
 
-        // user.GetUserInfo 应答后，服务器会通过 PostPushes 推送 fashion.updateData。
-        // 持续读帧直到捕获该推送；空无人时装列表 Ret 为空数组（0 字节），
-        // 而全量解锁时应包含 1000+ 条时装（编码远大于 100 字节）。
+        // user.GetUserInfo 应答后，服务器会通过 PostPushes 初始化技能训练数据并推送
+        // fashion.updateData。若缺少 study.GetStudyInfo，退役页会对 nil ArrProgress
+        // 执行 ipairs，从而显示空白候选列表。
         byte[]? fashionRet = null;
-        for (var attempts = 0; attempts < 20 && fashionRet is null; attempts++)
+        byte[]? studyRet = null;
+        for (var attempts = 0; attempts < 24 && (fashionRet is null || studyRet is null); attempts++)
         {
             var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
-            Assert(frame is not null, "missing expected fashion.updateData push");
+            Assert(frame is not null, "missing expected login synchronization push");
             var push = TMessageCodec.DecodeResponse(frame!.Value.Payload);
             if (push.Method == "fashion.updateData")
                 fashionRet = push.Ret;
+            else if (push.Method == "study.GetStudyInfo")
+                studyRet = push.Ret;
         }
+        Assert(studyRet is { Length: > 0 } && ContainsSequence(studyRet, new byte[] { 0x08, 0x02 }),
+            "login synchronization did not initialize an empty study progress list");
         Assert(fashionRet is { Length: > 100 },
             $"fashion.updateData push did not contain unlocked fashions (ret length: {fashionRet?.Length ?? 0})");
     }
@@ -449,6 +490,187 @@ static bool ContainsSequence(byte[] haystack, byte[] needle)
         if (match) return true;
     }
     return false;
+}
+
+static async Task HeroMutationIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
+    var data = Path.Combine(root, "test-retire-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "retire-player";
+
+    // Seed a second ship with one equipped item. The normal client flow asks whether that item
+    // should be dismantled after retirement, so retirement must leave it in the bag and unbind it.
+    var repo = new SqliteGameRepository(data);
+    await repo.CreateAsync(profileId, profileId);
+    PlayerAccount seeded = await repo.LoadAccountAsync(profileId)
+        ?? throw new InvalidDataException("failed to seed retirement account");
+    Hero second = seeded.Dock.Heroes[0] with
+    {
+        HeroId = 2,
+        EquipSlots = new uint[] { 77, 0, 0, 0, 0, 0 },
+    };
+    seeded = seeded with
+    {
+        Dock = seeded.Dock with { Heroes = [seeded.Dock.Heroes[0], second] },
+        Equip = new PlayerEquip([new EquipItem(77, 30421, HeroId: 2)], 2000),
+        // Existing profiles may predate affection gifts and therefore have an empty bag.
+        Bag = new PlayerBag([], 100),
+    };
+    await repo.SaveAccountAsync(seeded);
+
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "retirement test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        var port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        var stream = client.GetStream();
+
+        async Task<(TResponse Response, List<TResponse> Pushes)> RoundTrip(string method, byte[]? requestArgs)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, requestArgs, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            List<TResponse> pushes = [];
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return (response, pushes);
+                pushes.Add(response);
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+
+        int initialAffection = second.Affection;
+        var giftArgs = new ProtocolPackage();
+        giftArgs.Write(0x08, 2UL);
+        giftArgs.Write(0x10, 280002UL);
+        giftArgs.Write(0x18, 2UL);
+        var (giftResponse, giftPushes) = await RoundTrip("hero.AddAffection", giftArgs.ToArray());
+        Assert(giftResponse.Err == 0 && giftResponse.Ret is { Length: > 0 } &&
+            ContainsSequence(giftResponse.Ret, new byte[] { 0x10, 0x02 }),
+            "gift response did not identify HeroId=2");
+        Assert(giftPushes.Any(p => p.Method == "hero.UpdateHeroBagData"),
+            "gift did not refresh hero data before its response");
+        Assert(giftPushes.Any(p => p.Method == "bag.UpdateBagData"),
+            "gift did not refresh bag data before its response");
+        PlayerAccount gifted = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("gift account disappeared");
+        int giftedAffection = gifted.Dock.Heroes.Single(h => h.HeroId == 2).Affection;
+        Assert(giftedAffection > initialAffection, "gift did not increase persisted affection");
+        Assert(gifted.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 997,
+            "starter gift inventory was not provisioned and deducted atomically");
+        Assert(gifted.Bag?.Items.Count(i => i.Num == 999) == 7,
+            "not all configured affection gift types were provisioned for the existing profile");
+
+        // A failed request must not grant affection or consume the final gift.
+        var excessiveGiftArgs = new ProtocolPackage();
+        excessiveGiftArgs.Write(0x08, 2UL);
+        excessiveGiftArgs.Write(0x10, 280002UL);
+        excessiveGiftArgs.Write(0x18, 1000UL);
+        var (excessiveGiftResponse, excessiveGiftPushes) =
+            await RoundTrip("hero.AddAffection", excessiveGiftArgs.ToArray());
+        Assert(excessiveGiftResponse.Err != 0, "insufficient gift inventory was accepted");
+        Assert(excessiveGiftPushes.Count == 0, "failed gift request unexpectedly pushed changed data");
+        PlayerAccount giftRejected = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("gift rejection account disappeared");
+        Assert(giftRejected.Dock.Heroes.Single(h => h.HeroId == 2).Affection == giftedAffection &&
+            giftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 997,
+            "failed gift request changed persisted data");
+
+        var lockArgs = new ProtocolPackage();
+        lockArgs.Write(0x08, 2UL);
+        lockArgs.Write(0x10, 1UL);
+        var (lockResponse, lockPushes) = await RoundTrip("hero.LockHero", lockArgs.ToArray());
+        Assert(lockResponse.Err == 0 && lockResponse.Ret is not null &&
+            ContainsSequence(lockResponse.Ret, new byte[] { 0x08, 0x02 }),
+            "lock response did not identify HeroId=2");
+        TResponse lockHeroPush = lockPushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("lock did not refresh hero data before its response");
+        Assert(lockHeroPush.Ret is { Length: > 0 } &&
+            ContainsSequence(lockHeroPush.Ret, new byte[] { 0x60, 0x01 }),
+            "lock update did not set Lock=true");
+        PlayerAccount locked = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("lock account disappeared");
+        Assert(locked.Dock.Heroes.Single(h => h.HeroId == 2).Lock, "lock state was not persisted");
+
+        var unlockArgs = new ProtocolPackage();
+        unlockArgs.Write(0x08, 2UL);
+        unlockArgs.Write(0x10, 0UL);
+        var (unlockResponse, unlockPushes) = await RoundTrip("hero.LockHero", unlockArgs.ToArray());
+        Assert(unlockResponse.Err == 0 && unlockResponse.Ret is not null &&
+            ContainsSequence(unlockResponse.Ret, new byte[] { 0x08, 0x02 }),
+            "unlock response did not identify HeroId=2");
+        TResponse unlockHeroPush = unlockPushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("unlock did not refresh hero data before its response");
+        Assert(unlockHeroPush.Ret is { Length: > 0 } &&
+            ContainsSequence(unlockHeroPush.Ret, new byte[] { 0x60, 0x00 }),
+            "unlock update did not explicitly set Lock=false");
+        PlayerAccount unlocked = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("unlock account disappeared");
+        Assert(!unlocked.Dock.Heroes.Single(h => h.HeroId == 2).Lock, "unlock state was not persisted");
+
+        // A hero mutation refreshes the full dock. HeroGrid.Name is a custom nickname, not the
+        // handbook's Chinese display name; otherwise the JP client mixes Chinese and Japanese
+        // names after a ship is built or updated.
+        var marryArgs = new ProtocolPackage();
+        marryArgs.Write(0x08, 2UL);
+        marryArgs.Write(0x10, 1UL);
+        var (_, marryPushes) = await RoundTrip("hero.Marry", marryArgs.ToArray());
+        TResponse marryHeroPush = marryPushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("marriage did not refresh hero data");
+        Assert(marryHeroPush.Ret is { Length: > 0 } &&
+            !ContainsSequence(marryHeroPush.Ret, Encoding.UTF8.GetBytes("奥克兰")),
+            "hero update incorrectly sent the Chinese handbook name as a custom nickname");
+
+        // The shipped Lua protobuf runtime uses the proto2 unpacked representation for HeroIds.
+        var retireArgs = new ProtocolPackage();
+        retireArgs.Write(0x08, 2UL);
+        retireArgs.Write(0x10, 0UL);
+        var (retire, pushes) = await RoundTrip("hero.RetireHero", retireArgs.ToArray());
+
+        Assert(retire.Err == 0 && retire.Ret is { Length: > 0 }, "retirement response did not contain rewards");
+        TResponse heroPush = pushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("retirement did not push a hero deletion marker");
+        Assert(heroPush.Ret is { Length: > 0 } &&
+            ContainsSequence(heroPush.Ret, new byte[] { 0x08, 0x02, 0x10, 0x00 }),
+            "hero deletion marker did not explicitly include HeroId=2 and TemplateId=0");
+        Assert(pushes.Any(p => p.Method == "user.UpdateUserInfo"), "retirement did not refresh currencies");
+        Assert(pushes.Any(p => p.Method == "equip.UpdateEquipBagData"), "retirement did not refresh equipment");
+
+        PlayerAccount saved = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("retirement account disappeared");
+        Assert(saved.Dock.Heroes.All(h => h.HeroId != 2), "retired hero remained in persistent dock");
+        EquipItem returnedEquip = saved.Equip?.Items.SingleOrDefault(e => e.EquipId == 77)
+            ?? throw new InvalidDataException("retired hero equipment was deleted");
+        Assert(returnedEquip.HeroId == 0, "retired hero equipment was not unbound");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
 }
 
 static async Task TlsCaptureIntegrationTest()

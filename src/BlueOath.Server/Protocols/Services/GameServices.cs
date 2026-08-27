@@ -17,6 +17,7 @@ namespace BlueOath.Server.Protocols;
 /// </summary>
 internal sealed class GameServices
 {
+    private const int DefaultAffectionGiftCount = 999;
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
@@ -52,6 +53,7 @@ internal sealed class GameServices
         ShipMainLoader.Load(options.DataRoot);
         AssistShipLoader.Load(options.DataRoot);
         EquipLoader.Load(options.DataRoot);
+        AffectionItemLoader.Load(options.DataRoot);
         ShipHandbookLoader.Load(options.DataRoot);
         PlotTriggerLoader.Load(options.DataRoot);
     }
@@ -98,6 +100,11 @@ internal sealed class GameServices
 
     /// <summary>升级所需经验表（供 HeroService）。</summary>
     internal IReadOnlyDictionary<int, int> ExpNeeded => _expNeeded;
+    internal ConfigEquipEnhanceItem? GetEquipEnhanceItem(int id) => EquipLoader.GetEnhanceItem(id);
+    internal ConfigEquipEnhanceLevel? GetEquipEnhanceLevel(int level) => EquipLoader.GetEnhanceLevel(level);
+    internal ConfigEquipEnhanceRenovate? GetEquipRenovateLevel(int level) => EquipLoader.GetRenovateLevel(level);
+    internal ConfigEquip? GetEquipConfig(int id) => EquipLoader.Get(id);
+    internal ConfigAffectionItem? GetAffectionItem(int id) => AffectionItemLoader.Get(id);
 
     /// <summary>
     /// 处理登录操作码：解码 <c>TArgLogin</c>，按 <c>Pid</c> 创建/加载本地档案，
@@ -202,6 +209,14 @@ internal sealed class GameServices
                 Ret: PlayerDataCodec.Encode(ToBathroomInfo(account.Bath)),
                 Time: now)),
 
+            // 退役/强化候选筛选会直接遍历 StudyData.ArrProgress，且不会处理尚未
+            // 初始化的 nil。字段 1 是可用训练位数量；空的 repeated ArrProgress
+            // 会由客户端 protobuf 默认成空表。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "study.GetStudyInfo",
+                Ret: new byte[] { 0x08, 0x02 },
+                Time: now)),
+
             // 船坞数据来自存档实体。秘书舰 HeroId 必须与 Character.SecretaryId 一致。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "hero.UpdateHeroBagData",
@@ -293,6 +308,7 @@ internal sealed class GameServices
             EnsureEquipIdFromAccount(account);
             account = EnsureHeroPSkills(account);
             account = EnsureAllFashion(account);
+            account = EnsureAffectionGifts(account);
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
@@ -301,6 +317,7 @@ internal sealed class GameServices
         var created = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         created = EnsureHeroPSkills(created);
         created = EnsureAllFashion(created);
+        created = EnsureAffectionGifts(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -314,9 +331,15 @@ internal sealed class GameServices
 
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is null)
-            return EnsureHeroPSkills(PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
+        {
+            account = PlayerAccountFactory.CreateDefault(profileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            account = EnsureHeroPSkills(account);
+            account = EnsureAllFashion(account);
+            return EnsureAffectionGifts(account);
+        }
         account = EnsureHeroPSkills(account);
         account = EnsureAllFashion(account);
+        account = EnsureAffectionGifts(account);
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
@@ -551,6 +574,26 @@ internal sealed class GameServices
     }
 
     /// <summary>
+    /// 为新档案和旧档案补齐配置表中的好感度礼物。只添加从未存在过的种类；
+    /// 已经消耗到 0 的条目会保留原值，避免每次登录自动恢复库存。
+    /// </summary>
+    private static PlayerAccount EnsureAffectionGifts(PlayerAccount account)
+    {
+        if (AffectionItemLoader.All.Count == 0) return account;
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> items = bag.Items.ToList();
+        HashSet<int> existingIds = items.Select(i => i.TemplateId).ToHashSet();
+        bool changed = false;
+        foreach (var (id, gift) in AffectionItemLoader.All.OrderBy(x => x.Key))
+        {
+            if (gift.AffectionExp <= 0 || existingIds.Contains(id)) continue;
+            items.Add(new BagItem(id, DefaultAffectionGiftCount));
+            changed = true;
+        }
+        return changed ? account with { Bag = bag with { Items = items } } : account;
+    }
+
+    /// <summary>
     /// 构建 FashionTid → SfId 完整映射：优先 config_fashion.belong_to_ship（全量），
     /// 再补 gm-goods.json 手写白名单中配置表缺失的项。
     /// </summary>
@@ -775,6 +818,23 @@ internal sealed class GameServices
                 Ret: PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize)),
                 Time: now)),
             BuildEquipPush(account, now)
+        ];
+    }
+
+    public async Task<IReadOnlyList<byte[]>> BuildEnhancePushesAsync(string profileId, uint now, CancellationToken ct)
+    {
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        return [BuildBagPush(account, now), BuildEquipPush(account, now)];
+    }
+
+    public async Task<IReadOnlyList<byte[]>> BuildRiseStarPushesAsync(string profileId, uint now, CancellationToken ct)
+    {
+        PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
+        return
+        [
+            await BuildUpdateUserInfoPushAsync(profileId, now, ct),
+            BuildBagPush(account, now),
+            BuildEquipPush(account, now),
         ];
     }
 }

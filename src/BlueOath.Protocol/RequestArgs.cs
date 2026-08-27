@@ -8,3 +8,7 @@ public sealed record QualityBuyGoodsArg(int ShopId = 0, IReadOnlyList<int> GoodI
 
 /// <summary>THeroChangeEquipArgs: HeroId(1, uint32) / Index(2, int32) / EquipId(3, uint32) / Type(4, int32)。</summary>
 public sealed record HeroChangeEquipArgs(uint HeroId = 0, int Index = 0, uint EquipId = 0, int Type = 0);
+
+public sealed record EquipEnhanceArgs(uint EquipId = 0, IReadOnlyList<EquipEnhanceItem>? ItemArr = null);
+public sealed record EquipEnhanceItem(uint TemplateId = 0, uint ItemNum = 0);
+public sealed record EquipRiseStarArgs(uint EquipId = 0, IReadOnlyList<uint>? ConsumeIds = null);

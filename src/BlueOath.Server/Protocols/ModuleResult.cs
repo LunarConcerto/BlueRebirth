@@ -12,6 +12,12 @@ internal sealed class ModuleResult
     /// <summary>应答 payload（TResponse.Ret）；为空表示不发送应答。</summary>
     public byte[] Ret { get; init; } = [];
 
+    /// <summary>业务错误码；0 表示成功，非 0 时客户端进入失败回调。</summary>
+    public int Err { get; init; }
+
+    /// <summary>业务错误说明。</summary>
+    public string ErrMsg { get; init; } = "";
+
     /// <summary>应答前需发送的推送（如 guide.GuideInfo / user.UpdateUserInfo）。</summary>
     public IReadOnlyList<byte[]> PrePushes { get; init; } = [];
 

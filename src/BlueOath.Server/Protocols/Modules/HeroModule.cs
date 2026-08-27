@@ -1,6 +1,5 @@
 ﻿using BlueOath.Core;
 using BlueOath.Protocol;
-using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
@@ -29,16 +28,87 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 result = await UpdateHero(ctx, ret);
                 break;
             case "hero.LockHero":
-                result = ModuleResult.Ok(await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
+                byte[] lockRet = await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct);
+                LockHeroArg lockArg = ProtocolDecoder.DecodeLockHeroArg(request.Args ?? []);
+                PlayerAccount lockAccount = await ctx.GetAccountAsync();
+                Hero? lockedHero = lockAccount.Dock.Heroes.FirstOrDefault(h => h.HeroId == lockArg.HeroId);
+                result = new ModuleResult
+                {
+                    Ret = lockRet,
+                    // _HeroSetLock 回调会立刻读取 Data.heroData；必须在应答前更新客户端缓存。
+                    PrePushes = lockedHero is null
+                        ? []
+                        :
+                        [
+                            TMessageCodec.EncodeResponse(new TResponse(
+                                Method: "hero.UpdateHeroBagData",
+                                Ret: PlayerDataCodec.Encode(new HeroBag(
+                                    [GameServices.ToHeroGrid(lockedHero)], lockAccount.Dock.BagSize)),
+                                Time: (uint)ctx.Now)),
+                        ],
+                };
                 break;
             case "hero.RetireHero":
-                result = ModuleResult.Ok(await hero.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Ct));
+                HeroService.RetireResult retire =
+                    await hero.BuildRetireHeroRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (!retire.Changed)
+                {
+                    result = ModuleResult.Ok(retire.Ret);
+                    break;
+                }
+                PlayerAccount retireAccount = await ctx.GetAccountAsync();
+                uint retireNow = (uint)ctx.Now;
+                // HeroData.SetData 只按增量合并；TemplateId=0 才是删除标记，不能仅推送剩余全量。
+                List<HeroGrid> deletedHeroes = retire.RetiredHeroIds
+                    .Select(id => new HeroGrid(HeroId: id, TemplateId: 0))
+                    .ToList();
+                result = new ModuleResult
+                {
+                    Ret = retire.Ret,
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(deletedHeroes, retireAccount.Dock.BagSize)),
+                            Time: retireNow)),
+                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, retireNow, ctx.Ct),
+                        services.BuildBagPush(retireAccount, retireNow),
+                        services.BuildEquipPush(retireAccount, retireNow, retire.RemovedEquipIds),
+                    ],
+                };
                 break;
             case "hero.ChangeName":
                 result = ModuleResult.Ok(await hero.BuildChangeNameRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.AddAffection":
-                result = ModuleResult.Ok(await hero.BuildAddAffectionRetAsync(request, ctx.ProfileId, ctx.Ct));
+                HeroService.AddAffectionResult affection =
+                    await hero.BuildAddAffectionRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (!affection.Changed || affection.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = affection.Ret,
+                        Err = 1,
+                        ErrMsg = affection.Error,
+                    };
+                    break;
+                }
+                PlayerAccount affectionAccount = await ctx.GetAccountAsync();
+                uint affectionNow = (uint)ctx.Now;
+                result = new ModuleResult
+                {
+                    Ret = affection.Ret,
+                    // Lua 成功回调会立刻读取 HeroData 和 BagData，必须先刷新两份缓存。
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(
+                                [GameServices.ToHeroGrid(affection.UpdatedHero)], affectionAccount.Dock.BagSize)),
+                            Time: affectionNow)),
+                        services.BuildBagPush(affectionAccount, affectionNow),
+                    ],
+                };
                 break;
             case "hero.GetHeroInfo":
                 result = ModuleResult.Ok(await hero.BuildGetHeroInfoRetAsync(ctx.ProfileId, ctx.Ct));
@@ -58,7 +128,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     Ret = await hero.BuildAdvanceRetAsync(request, ctx.ProfileId, ctx.Ct),
                 };
                 var advAccount = await ctx.GetAccountAsync();
-                var advHeroes = advAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+                var advHeroes = advAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
                 result = new ModuleResult
                 {
                     Ret = result.Ret,
@@ -71,7 +141,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     Ret = await hero.BuildStudySkillRetAsync(request, ctx.ProfileId, ctx.Ct),
                 };
                 var skillAccount = await ctx.GetAccountAsync();
-                var skillHeroes = skillAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+                var skillHeroes = skillAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
                 result = new ModuleResult
                 {
                     Ret = result.Ret,
@@ -103,7 +173,9 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
 
     private static async Task<ModuleResult> UpdateHero(GameContext ctx, byte[] ret) {
         PlayerAccount updatedAccount = await ctx.GetAccountAsync();
-        List<HeroGrid> updatedHeroes = updatedAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+        // Name carries only a player-defined nickname. For an unrenamed ship it must remain
+        // empty so JP/CN clients can display the name from their own localized config.
+        List<HeroGrid> updatedHeroes = updatedAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
         ModuleResult result = new()
         {
             Ret = ret,
@@ -128,9 +200,4 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
         return [heroPush, bagPush];
     }
 
-    private static HeroGrid ToHeroGridWithName(Hero h)
-    {
-        var grid = GameServices.ToHeroGrid(h);
-        return grid with { Name = ShipHandbookLoader.GetShipName(h.TemplateId) };
-    }
 }
