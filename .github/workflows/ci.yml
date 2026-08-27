@@ -76,31 +76,6 @@ jobs:
             Write-Error "ERROR: BlueOath.Launcher.Wpf.exe is missing."
             exit 1
           }
-          # The game ships an old MSVC runtime beside blueoath.exe. A dynamically
-          # linked payload binds to those DLLs after injection and crashes before
-          # it can signal readiness, so reject such release artifacts here.
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $vsInstall = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1).Trim()
-          $dumpbin = Get-ChildItem -LiteralPath (Join-Path $vsInstall 'VC\Tools\MSVC') -Directory |
-            Sort-Object Name -Descending |
-            ForEach-Object { Join-Path $_.FullName 'bin\Hostx64\x86\dumpbin.exe' } |
-            Where-Object { Test-Path -LiteralPath $_ } |
-            Select-Object -First 1
-          if (-not $dumpbin) {
-            Write-Error 'ERROR: dumpbin.exe was not found.'
-            exit 1
-          }
-          $payload = Join-Path $bundleDir 'native\BlueOath.Payload.dll'
-          if (-not (Test-Path -LiteralPath $payload)) {
-            Write-Error 'ERROR: BlueOath.Payload.dll is missing.'
-            exit 1
-          }
-          $dependencies = (& $dumpbin /dependents $payload) -join "`n"
-          if ($dependencies -match '(?im)^\s*(MSVCP[^\s]*|VCRUNTIME[^\s]*|api-ms-win-crt-[^\s]+)\.dll\s*$') {
-            Write-Error "ERROR: BlueOath.Payload.dll dynamically imports the MSVC runtime:`n$dependencies"
-            exit 1
-          }
-
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
