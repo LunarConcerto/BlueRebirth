@@ -6,7 +6,9 @@
 #
 # The server is NOT started by this script. Start it in Rider with:
 #   Program arguments:
-#     --port=7080 --game-login-port=7201 --region=jp --data=E:\逆向工程\苍蓝誓约项目\runtime\jp
+#     --port=7080 --game-login-port=7201 --region=jp --data=E:\逆向工程\苍蓝誓约项目\runtime\jp --client-path=E:\逆向工程\苍蓝誓约项目\blueoath\blueoath
+#
+#   --client-path 指向包含 blueoath_Data 的客户端目录（服务端据此定位 config_*.db）。
 #
 #   --port must match this script's -ServerPort (default 7080).
 #   --game-login-port is configured only in the server (default 7201, returned by /phone/serverlist/).

@@ -132,8 +132,7 @@ static async Task GameLoginFrameTest()
 
 static Task RemouldConfigAndCodecTest()
 {
-    string root = FindRepositoryRoot();
-    RemouldConfigLoader.Load(root);
+    RemouldConfigLoader.Load(FindClientConfigDir());
     Assert(RemouldConfigLoader.AllEffects.Count >= 800,
         "ship remould effect config was not loaded");
     ConfigShipRemouldTemplate stage = RemouldConfigLoader.GetTemplate(525)
@@ -172,7 +171,7 @@ static Task RemouldConfigAndCodecTest()
 
 static Task ConstructionConfigAndCodecTest()
 {
-    ConstructionConfigLoader.Load(FindRepositoryRoot());
+    ConstructionConfigLoader.Load(FindClientConfigDir());
     Assert(ConstructionConfigLoader.Formulas.Count == 4,
         "traditional construction formulas were not loaded");
     Assert(ConstructionConfigLoader.Qualities.Count == 2020,
@@ -217,7 +216,7 @@ static Task ConstructionConfigAndCodecTest()
 
 static Task BuildingCodecTest()
 {
-    BuildingConfigLoader.Load(FindRepositoryRoot());
+    BuildingConfigLoader.Load(FindClientConfigDir());
     Assert(BuildingConfigLoader.Infos.Count == 35 && BuildingConfigLoader.Lands.Count == 10,
         "building or land configs were not loaded");
     Assert(BuildingConfigLoader.GetInfo(11) is { Type: 2, Level: 1 } &&
@@ -270,9 +269,9 @@ static Task BuildingCodecTest()
 
 static Task StoryUnlockConfigTest()
 {
-    var root = FindRepositoryRoot();
-    ChapterCopyLoader.Load(root);
-    CharacterStoryLoader.Load(root);
+    string configDir = FindClientConfigDir();
+    ChapterCopyLoader.Load(configDir);
+    CharacterStoryLoader.Load(configDir);
 
     Assert(ChapterCopyLoader.GetCopyIds(1).Count > 0, "main story chapter was not loaded");
     Assert(ChapterCopyLoader.GetCopyIds(14005).Contains(953001), "event story chapter was not loaded");
@@ -493,6 +492,7 @@ static async Task TcpIntegrationTest()
     var data = Path.Combine(Path.GetTempPath(), "blueoath-tcp-" + Guid.NewGuid().ToString("N"));
     var startInfo = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
     startInfo.ArgumentList.Add(serverDll); startInfo.ArgumentList.Add("--port=0"); startInfo.ArgumentList.Add("--region=jp"); startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -698,6 +698,7 @@ static async Task TacticIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -904,8 +905,7 @@ static async Task FashionUnlockIntegrationTest()
     var root = FindRepositoryRoot();
     var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
-    // 数据目录必须位于项目根之下，ConfigDbLoader.FindConfigDir 向上最多 8 级才能命中
-    // blueoath/.../StreamingAssets/config（临时目录在系统盘，永远找不到）。
+    // 游戏客户端配置目录由 --client-path 直接指定（不再依赖数据目录位置向上逐级查找）。
     var data = Path.Combine(root, "test-fashion-tmp");
     Directory.CreateDirectory(data);
     var startInfo = new ProcessStartInfo("dotnet")
@@ -920,6 +920,7 @@ static async Task FashionUnlockIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -1423,7 +1424,7 @@ static async Task HeroRemouldIntegrationTest()
         "BlueOath.Server.dll");
     Assert(File.Exists(serverDll), "server assembly is missing; build the server first");
 
-    RemouldConfigLoader.Load(root);
+    RemouldConfigLoader.Load(FindClientConfigDir());
     ConfigShipRemouldTemplate stage = RemouldConfigLoader.GetTemplate(525)
         ?? throw new InvalidDataException("Oakland remould stage was not loaded");
     ConfigShipRemouldTemplate nextStage = RemouldConfigLoader.GetTemplate(526)
@@ -1683,6 +1684,7 @@ static async Task HeroMutationIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -1999,6 +2001,14 @@ static string FindRepositoryRoot()
         current = current.Parent;
     }
     throw new DirectoryNotFoundException("Repository root not found");
+}
+
+static string FindClientConfigDir()
+{
+    string root = FindRepositoryRoot();
+    string clientPath = Environment.GetEnvironmentVariable("BLUEOATH_CLIENT_PATH")
+        ?? Path.Combine(root, "blueoath", "blueoath");
+    return ConfigDbLoader.BuildConfigDir(clientPath);
 }
 
 static void Assert(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }

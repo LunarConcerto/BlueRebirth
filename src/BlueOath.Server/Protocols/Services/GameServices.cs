@@ -44,10 +44,12 @@ internal sealed class GameServices
         _repo = repo;
         _logger = loggerFactory.CreateLogger<GameServices>();
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
-        FashionConfigLoader.Load(options.DataRoot);
+        // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
+        string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
+        FashionConfigLoader.Load(configDir);
         var gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         IReadOnlyList<GmGoodConfig> supplementalFashionGoods =
-            FashionShopGoodsLoader.Load(options.DataRoot, gmGoods.Goods);
+            FashionShopGoodsLoader.Load(configDir, gmGoods.Goods);
         // gm-goods.json 由 config_shop_goods 生成，而该表不记录时装所属商店。
         // 历史生成器因此把时装默认放到了 shop 1，导致客户端的精选时装
         // (23) 和大破时装 (29) 分类收到空列表。以 config_fashion.shop_id 为准
@@ -61,23 +63,23 @@ internal sealed class GameServices
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
-        (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(options.DataRoot);
-        ConstructionConfigLoader.Load(options.DataRoot);
-        BuildingConfigLoader.Load(options.DataRoot);
-        _itemInfos = ItemInfoLoader.Load(options.DataRoot);
-        (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(options.DataRoot);
-        _copyRandomFactors = RandomFactorLoader.Load(options.DataRoot);
-        ChapterCopyLoader.Load(options.DataRoot);
-        CopyBattleLoader.Load(options.DataRoot);
-        MissionChainLoader.Load(options.DataRoot);
-        ShipMainLoader.Load(options.DataRoot);
-        AssistShipLoader.Load(options.DataRoot);
-        EquipLoader.Load(options.DataRoot);
-        AffectionItemLoader.Load(options.DataRoot);
-        ShipHandbookLoader.Load(options.DataRoot);
-        PlotTriggerLoader.Load(options.DataRoot);
-        CharacterStoryLoader.Load(options.DataRoot);
-        RemouldConfigLoader.Load(options.DataRoot);
+        (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
+        ConstructionConfigLoader.Load(configDir);
+        BuildingConfigLoader.Load(configDir);
+        _itemInfos = ItemInfoLoader.Load(configDir);
+        (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
+        _copyRandomFactors = RandomFactorLoader.Load(configDir);
+        ChapterCopyLoader.Load(configDir);
+        CopyBattleLoader.Load(configDir);
+        MissionChainLoader.Load(configDir);
+        ShipMainLoader.Load(configDir);
+        AssistShipLoader.Load(configDir);
+        EquipLoader.Load(configDir);
+        AffectionItemLoader.Load(configDir);
+        ShipHandbookLoader.Load(configDir);
+        PlotTriggerLoader.Load(configDir);
+        CharacterStoryLoader.Load(configDir);
+        RemouldConfigLoader.Load(configDir);
     }
 
     private static GmGoodConfig RouteFashionGoodsToConfiguredShop(GmGoodConfig goods)

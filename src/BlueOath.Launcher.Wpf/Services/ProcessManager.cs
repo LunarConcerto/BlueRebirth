@@ -137,6 +137,9 @@ public class ProcessManager
         return Path.GetFullPath(Path.Combine(_rootDir, path));
     }
 
+    /// <summary>游戏客户端目录（含 blueoath_Data），作为服务端 --client-path 参数。</summary>
+    public string ResolveClientPath() => ResolvePath(_settings.GameClientPath);
+
     public string MakeRelativePath(string absolutePath)
     {
         if (string.IsNullOrEmpty(absolutePath)) return absolutePath;
@@ -519,7 +522,7 @@ public class ProcessManager
     private async Task<int> StartServer(string serverDll, string dataRoot, string traffic,
         int gameLoginPort, int gmPort, CancellationToken token)
     {
-        var args = $"\"{serverDll}\" --port=0 --region=jp \"--data={dataRoot}\" \"--capture={traffic}\" --game-login-port={gameLoginPort} --gm-port={gmPort}";
+        var args = $"\"{serverDll}\" --port=0 --region=jp \"--data={dataRoot}\" \"--client-path={ResolveClientPath()}\" \"--capture={traffic}\" --game-login-port={gameLoginPort} --gm-port={gmPort}";
         var psi = new ProcessStartInfo("dotnet")
         {
             Arguments = args,
