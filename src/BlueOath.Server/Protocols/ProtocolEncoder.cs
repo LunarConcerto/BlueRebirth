@@ -446,14 +446,37 @@ internal static class ProtocolEncoder
             ms.Write(0x28, unchecked((ulong)fid));
         }
 
-        // SkipVcr (17) — TCopySkipVcr[]，补发使 ctor 的 skipVcrs(+0x88) 段有数据
+        // SkipVcr (17) — TCopySkipVcr[]。客户端 skipDatas 以 shipinfoId（config_ship_info.si_id）
+        // 为 key，ShipDataComponent.SetData 对每艘船（含敌舰/NPC）用自身 DictShipInfo.si_id
+        // 查询是否跳过进场 VCR(skipEnterBattleAnim)/沉没 VCR(skipDeadAnim)，未命中返回 false →
+        // 播放/等待 VCR 演出。因此要让敌舰跳过 VCR，必须下发**敌舰的 ship_info_id**
+        // （config_ship_enemy.ship_info_id），仅发玩家船 si_id 对敌舰落空。海域索敌副本
+        // StartVcr/EndVcr=true 全跳，避免状态机卡在演出等待导致"无法操作"。
+        // 注意按 si_id 去重：重复 key 会使客户端 skipDatas Dictionary.Add 抛异常。
+        HashSet<int> vcrSent = new();
+        void EmitVcr(int shipInfoId)
         {
+            if (shipInfoId <= 0 || !vcrSent.Add(shipInfoId)) return;
             ProtocolPackage sv = new();
-            sv.Write(0x08, 1021051UL); // ShipInfoId=1（玩家一号舰的 ship_info_id）
-            // StartVcr(2)=false, EndVcr(3)=false 默认不编码（bool 默认 false）
+            sv.Write(0x08, unchecked((ulong)shipInfoId)); // ShipInfoId(1)
+            if (isSeaCopy)
+            {
+                sv.Write(0x10, 1UL); // StartVcr(2)=true（海域跳进场演出）
+                sv.Write(0x18, 1UL); // EndVcr(3)=true（海域跳沉没演出）
+            }
+
             byte[] svb = sv.ToArray();
             ms.Write(0x8A, svb);
         }
+
+        // 玩家战船（非 NPC 类型本就默认跳过；下发无妨）
+        foreach (Hero dh in deploy)
+            EmitVcr(checked((int)((dh.TemplateId - 1) / 10)));
+        // 敌舰（关键）：必须在其 si_id 才能匹配跳过
+        foreach (int fid in fleetIdList)
+            foreach (int enemyId in CopyBattleLoader.GetEnemyIds(fid))
+                if (CopyBattleLoader.GetEnemyStat(enemyId) is { } est && est.ShipInfoId > 0)
+                    EmitVcr(est.ShipInfoId);
 
         // EnemyFleets (24) — TBattleEnemyFleet[]，客户端 ctor 与战斗帧都需要。
         // 每个敌舰队（fleet_id 数组元素）各发一条，含该舰队 config_fleet.copy_enemys 的敌舰属性。
