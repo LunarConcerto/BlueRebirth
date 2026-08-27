@@ -54,7 +54,7 @@ public class SettingsService
         var rootDir = FindRoot();
         return new SettingsConfig
         {
-            GameClientPath = Path.Combine(rootDir, "blueoath", "blueoath"),
+            GameClientPath = FindDefaultGameClientPath(rootDir),
             ServerDllPath = Path.Combine(rootDir, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll"),
             PythonPath = "python",
             InjectorPath = Path.Combine(rootDir, "native", "bin-x86", "BlueOath.Injector.exe"),
@@ -72,6 +72,22 @@ public class SettingsService
             KeepLog = false
         };
     }
+
+    private static string FindDefaultGameClientPath(string rootDir)
+    {
+        // Release bundles use <bundle>\blueoath\blueoath.exe. The source tree
+        // keeps the JP client one level deeper at blueoath\blueoath.
+        var bundledClient = Path.Combine(rootDir, "blueoath");
+        if (ContainsGameExecutable(bundledClient))
+            return bundledClient;
+
+        var sourceTreeClient = Path.Combine(bundledClient, "blueoath");
+        return ContainsGameExecutable(sourceTreeClient) ? sourceTreeClient : bundledClient;
+    }
+
+    private static bool ContainsGameExecutable(string directory) =>
+        File.Exists(Path.Combine(directory, "blueoath.exe")) ||
+        File.Exists(Path.Combine(directory, "clsy.exe"));
 
     private static string FindRoot()
     {

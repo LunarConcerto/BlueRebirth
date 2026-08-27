@@ -8,6 +8,7 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
 {
     /// <summary>发放结果：更新后的账号 + 生成的奖励（无效商品 Type=0）。</summary>
     private sealed record GoodsGrant(PlayerAccount Account, CommonReward Reward);
+    private sealed record PurchaseResult(byte[] Ret, bool Changed, string Error);
 
     public IReadOnlyList<string> Prefixes => ["shop", "bag"];
 
@@ -18,12 +19,18 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
         {
             case "shop.BuyGoods":
             case "shop.QualityBuyGoods":
+                PurchaseResult purchase = request.Method == "shop.BuyGoods"
+                    ? await BuildBuyGoodsRetAsync(ctx, request)
+                    : await BuildQualityBuyGoodsRetAsync(ctx, request);
                 result = new ModuleResult
                 {
-                    Ret = request.Method == "shop.BuyGoods"
-                        ? await BuildBuyGoodsRetAsync(ctx, request)
-                        : await BuildQualityBuyGoodsRetAsync(ctx, request),
-                    PostPushes = await services.BuildPostBuyPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
+                    Ret = purchase.Ret,
+                    Err = purchase.Changed ? 0 : 1,
+                    ErrMsg = purchase.Error,
+                    // Lua 购买成功回调会立即读取背包/货币，必须先刷新缓存。
+                    PrePushes = purchase.Changed
+                        ? await services.BuildBuyPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)
+                        : [],
                 };
                 break;
             case "shop.GetShopsInfo":
@@ -31,6 +38,23 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
                 break;
             case "bag.GetBagInfo":
                 result = ModuleResult.Ok(await shop.BuildGetBagInfoRetAsync(ctx.ProfileId, ctx.Ct));
+                break;
+            case "bag.GetNormalTreasureInfo":
+                ShopService.TreasureOpenResult treasure =
+                    await shop.BuildOpenNormalTreasureRetAsync(request, ctx.ProfileId, ctx.Ct);
+                result = new ModuleResult
+                {
+                    Ret = treasure.Ret,
+                    Err = treasure.Changed ? 0 : 1,
+                    ErrMsg = treasure.Error,
+                    // 宝箱成功回调会立即重读背包并展示装备；先刷新所有可能受奖励影响的缓存。
+                    PrePushes = treasure.Changed
+                        ? await services.BuildBuyPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct,
+                            treasure.RemovedTreasureTemplateId > 0
+                                ? [treasure.RemovedTreasureTemplateId]
+                                : null)
+                        : [],
+                };
                 break;
             case "shop.RefreshShop":
             default:
@@ -47,39 +71,48 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
     /// - FASHION → 时装解锁
     /// 返回 TBuyGoodsRet{Reward, GoodId, BuyNum}，并把更新后的账号落盘。
     /// </summary>
-    private async Task<byte[]> BuildBuyGoodsRetAsync(GameContext ctx, TRequest request)
+    private async Task<PurchaseResult> BuildBuyGoodsRetAsync(GameContext ctx, TRequest request)
     {
-        if (request.Args is null) return [];
+        if (request.Args is null) return new([], false, "purchase request is missing");
         BuyGoodsArg arg = TMessageCodec.DecodeBuyGoodsArg(request.Args);
         if (arg.BuyNum <= 0) arg = arg with { BuyNum = 1 };
+        if (!services.GmGoodsMap.TryGetValue(arg.GoodId, out GmGoodConfig? goods) ||
+            goods.ShopId != arg.ShopId)
+            return new([], false, "shop goods were not found");
 
-        var account = await ctx.GetAccountAsync();
-        var grant = ApplyGoods(account, arg.GoodId, arg.BuyNum);
-        if (grant.Reward.Type == 0) return [];
+        using var _ = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
+        PlayerAccount account = await ctx.GetAccountAsync();
+        GoodsGrant grant = ApplyGoods(account, arg.GoodId, arg.BuyNum);
+        if (grant.Reward.Type == 0) return new([], false, "shop goods could not be granted");
         await services.SaveAccountAsync(grant.Account, ctx.Ct);
 
-        return TMessageCodec.EncodeBuyGoodsRet(grant.Reward, arg.GoodId, arg.BuyNum);
+        return new(TMessageCodec.EncodeBuyGoodsRet(grant.Reward, arg.GoodId, arg.BuyNum), true, "");
     }
 
     /// <summary>处理 shop.QualityBuyGoods（多选/批量购买）：对每个 GoodId 免费发放。</summary>
-    private async Task<byte[]> BuildQualityBuyGoodsRetAsync(GameContext ctx, TRequest request)
+    private async Task<PurchaseResult> BuildQualityBuyGoodsRetAsync(GameContext ctx, TRequest request)
     {
-        if (request.Args is null) return [];
+        if (request.Args is null) return new([], false, "purchase request is missing");
         QualityBuyGoodsArg arg = TMessageCodec.DecodeQualityBuyGoodsArg(request.Args);
-        if (arg.GoodIdList.Count == 0) return [];
+        if (arg.GoodIdList.Count == 0) return new([], false, "purchase list is empty");
 
-        var account = await ctx.GetAccountAsync();
+        using var _ = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
+        PlayerAccount account = await ctx.GetAccountAsync();
         var rewards = new List<CommonReward>();
         foreach (var goodId in arg.GoodIdList)
         {
+            if (!services.GmGoodsMap.TryGetValue(goodId, out GmGoodConfig? goods) ||
+                goods.ShopId != arg.ShopId)
+                continue;
             var grant = ApplyGoods(account, goodId, 1);
             if (grant.Reward.Type == 0) continue;
             account = grant.Account;
             rewards.Add(grant.Reward);
         }
+        if (rewards.Count == 0) return new([], false, "shop goods were not found");
         await services.SaveAccountAsync(account, ctx.Ct);
 
-        return TMessageCodec.EncodeQualityBuyGoodsRet(rewards, arg.GoodIdList);
+        return new(TMessageCodec.EncodeQualityBuyGoodsRet(rewards, arg.GoodIdList), true, "");
     }
 
     /// <summary>发放单个 GM 商品，返回更新后的账号和奖励。无效商品返回 Type=0 的空奖励。</summary>

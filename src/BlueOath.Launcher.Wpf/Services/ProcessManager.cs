@@ -274,19 +274,20 @@ public class ProcessManager
             string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             string runRoot = Path.Combine(_rootDir, "runtime", "debug", stamp);
             string tlsRoot = Path.Combine(runRoot, "tls");
-            string dataRoot = _settings.DataRoot;
+            string dataRoot = ResolvePath(_settings.DataRoot);
             string traffic = Path.Combine(runRoot, "traffic");
             Directory.CreateDirectory(runRoot);
             Directory.CreateDirectory(tlsRoot);
 
-            string payloadLog = Path.Combine(Path.GetDirectoryName(_settings.PayloadPath) ?? "", "BlueOath.Payload.log");
+            string payloadPath = ResolvePath(_settings.PayloadPath);
+            string payloadLog = Path.Combine(Path.GetDirectoryName(payloadPath) ?? _rootDir, "BlueOath.Payload.log");
             if (!config.KeepLog && File.Exists(payloadLog)) File.Delete(payloadLog);
 
             Stage = ProcessStage.CleaningUp;
             LogSystem("正在清理残留进程...");
             KillLeftoverProcesses();
 
-            string serverDll = _settings.ServerDllPath;
+            string serverDll = ResolvePath(_settings.ServerDllPath);
             if (!File.Exists(serverDll))
             {
                 LogError("服务器程序集未找到: " + serverDll);
@@ -593,8 +594,10 @@ public class ProcessManager
 
     private async Task<int> StartProxy(string leafPem, string leafKeyPem, int serverPort, int proxyPort, CancellationToken token)
     {
-        string proxyScript = _settings.ProxyScriptPath;
-        var psi = new ProcessStartInfo(_settings.PythonPath)
+        string proxyScript = ResolvePath(_settings.ProxyScriptPath);
+        string resolvedPythonPath = ResolvePath(_settings.PythonPath);
+        string pythonPath = File.Exists(resolvedPythonPath) ? resolvedPythonPath : _settings.PythonPath;
+        var psi = new ProcessStartInfo(pythonPath)
         {
             Arguments = $"\"{proxyScript}\" --port {proxyPort} --backend-port {serverPort} --cert \"{leafPem}\" --key \"{leafKeyPem}\"",
             UseShellExecute = false,
@@ -661,7 +664,7 @@ public class ProcessManager
 
     private async Task<int> InjectGame(string region, int proxyPort, int serverPort, CancellationToken token)
     {
-        string clientDir = _settings.GameClientPath;
+        string clientDir = ResolvePath(_settings.GameClientPath);
         string exe = region == "cn" ? "clsy.exe" : "blueoath.exe";
         string exePath = Path.Combine(clientDir, exe);
         if (!File.Exists(exePath))
@@ -670,8 +673,8 @@ public class ProcessManager
             return -1;
         }
 
-        string injector = _settings.InjectorPath;
-        string payload = _settings.PayloadPath;
+        string injector = ResolvePath(_settings.InjectorPath);
+        string payload = ResolvePath(_settings.PayloadPath);
         string nativeDir = Path.GetDirectoryName(injector) ?? "";
         string bootstrapIni = Path.Combine(nativeDir, "bootstrap.ini");
 
@@ -683,7 +686,7 @@ public class ProcessManager
 
         WriteBootstrapIni(bootstrapIni, proxyPort, serverPort);
 
-        string baselinePath = _settings.BaselinePath;
+        string baselinePath = ResolvePath(_settings.BaselinePath);
         string gameHash = "";
         if (File.Exists(baselinePath))
         {

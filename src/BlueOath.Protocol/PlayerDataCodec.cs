@@ -25,11 +25,11 @@ public sealed class PSkillEntry
     }
 }
 
-/// <summary>
-/// Resources consumed by a single build formula. Currently empty; extend with the
-/// TBuildProject fields (Items/Gold) when real build data is needed.
-/// </summary>
-public sealed record BuildProject();
+/// <summary>Resources consumed by a single traditional build formula.</summary>
+public sealed record BuildItem(int ResId = 0, int Count = 0);
+
+/// <summary>A traditional build formula containing item materials and gold.</summary>
+public sealed record BuildProject(IReadOnlyList<BuildItem>? Items = null, int Gold = 0);
 
 /// <summary>A single ship-building formula (building / builded / waiting).</summary>
 public sealed record BuildFormula(long EndTime = 0, BuildProject? Project = null, int HeroId = 0);
@@ -49,12 +49,45 @@ public sealed record BathHeroInfo(
 /// <summary>Payload for the <c>bathroom.BathroomInfo</c> server message.</summary>
 public sealed record BathroomInfo(IReadOnlyList<BathHeroInfo>? HeroList = null, int IsAllAuto = 0);
 
+/// <summary>基地地图上的单个地块（TLandInfo）。</summary>
+public sealed record BuildingLandInfo(int Index = 0, int BuildingId = 0);
+
+/// <summary>基地中的单栋建筑（TBuildingInfo）。当前离线切片不启用生产字段。</summary>
+public sealed record BuildingInfo(
+    int Id = 0,
+    int Tid = 0,
+    int Level = 0,
+    IReadOnlyList<uint>? HeroList = null,
+    int Status = 1,
+    long LastUpdateTime = 0,
+    long LastBuildUpdateTime = 0);
+
+/// <summary>building.UpdateBuildingInfo 的完整基地快照（TUserBuildingInfo）。</summary>
+public sealed record UserBuildingInfo(
+    IReadOnlyList<BuildingInfo>? BuildingInfos = null,
+    IReadOnlyList<BuildingLandInfo>? LandList = null,
+    int WorkerStrength = 1_000_000,
+    int WorkerRecover = 10,
+    int FoodMax = 100,
+    int ElectricMax = 100,
+    long WorkerUpdateTime = 0);
+
+/// <summary>building.SetHero 请求（TSetHeroArg）。</summary>
+public sealed record SetBuildingHeroArg(int BuildingId, IReadOnlyList<uint> HeroIds);
+
+/// <summary>building.SetBuildingListHero 请求（TSetBuildingListHeroArg）。HeroIds 以 -1 分隔每栋建筑。</summary>
+public sealed record SetBuildingListHeroArg(IReadOnlyList<int> BuildingIds, IReadOnlyList<int> HeroIds);
+
+/// <summary>building.AddBuilding 请求（TAddBuildingArg）。</summary>
+public sealed record AddBuildingArg(int Tid, int Index);
+
 /// <summary>One hero owned by the player (THeroGrid). Extend with Equips/PSkill/CurHp/etc. as needed.</summary>
 public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, int Fashioning = 0,
     int Exp = 0, int CreateTime = 0, int UpdateTime = 0, int Affection = 0, int MarryTime = 0,
     long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "",
-    bool Lock = false, int Advance = 0, int AdvLv = 0,
-    IReadOnlyList<PSkillEntry>? PSkills = null);
+    int ChangeNameTime = 0, bool Lock = false, int Advance = 0, int AdvLv = 0,
+    IReadOnlyList<PSkillEntry>? PSkills = null, IReadOnlyList<int>? ArrRemouldEffect = null,
+    int RemouldLV = 0);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -66,10 +99,20 @@ public sealed record IllustrateInfo(int IllustrateId = 0, long GetTime = 0, long
 /// <summary>图鉴装备条目（TIllustrateEquipInfo）。</summary>
 public sealed record IllustrateEquipInfo(int EquipTemplateId = 0, long GetEquipTime = 0, bool NewEquip = false);
 
+/// <summary>已解锁的个人剧情（THeroMemory）。HeroId 对应 config_building_character_story.ship_fleet_id。</summary>
+public sealed record HeroMemory(uint HeroId = 0, int PlotId = 0);
+
+/// <summary>活动剧情回顾进度（TMemoryInfo）。Index 为该章节已解锁的剧情节点数。</summary>
+public sealed record ChapterMemory(int ChapterId = 0, int Index = 0);
+
+/// <summary>活动剧情回顾列表（TMemoryList）。</summary>
+public sealed record StoryMemoryList(IReadOnlyList<ChapterMemory>? MemoryList = null);
+
 /// <summary>图鉴信息推送（TIllustrateInfoRet）。</summary>
 public sealed record IllustrateInfoRet(
     IReadOnlyList<IllustrateInfo>? IllustrateList = null,
-    IReadOnlyList<IllustrateEquipInfo>? IllustrateEquipList = null);
+    IReadOnlyList<IllustrateEquipInfo>? IllustrateEquipList = null,
+    IReadOnlyList<HeroMemory>? HeroMemoryList = null);
 
 /// <summary>引导设置项（TGuideSetting，Key/Value 均为 string）。</summary>
 public sealed record GuideSetting(string Key, string Value);
@@ -104,6 +147,13 @@ public sealed record BagGridInfo(int TemplateId = 0, int Num = 0);
 
 /// <summary>仓库信息（TBagInfoRet）。bagType=BagType.ITEM_BAG/EQUIP_BAG。</summary>
 public sealed record BagInfoRet(int BagType = 0, int BagSize = 0, IReadOnlyList<BagGridInfo>? BagInfo = null);
+
+/// <summary>普通宝箱使用参数（TBagNormalTreasureInfoArg）。</summary>
+public sealed record BagNormalTreasureInfoArg(int TreasureId = 0, int TreasureNum = 0);
+
+/// <summary>宝箱开启结果（TBagTreasureInfoRet）。</summary>
+public sealed record BagTreasureInfoRet(
+    IReadOnlyList<CommonReward>? TreasuresInfo = null, int TreasureId = 0);
 
 /// <summary>单个船型的时装解锁信息（TFashionInfo）。</summary>
 public sealed record FashionInfo(int SfId = 0, IReadOnlyList<int>? FashionTid = null);
@@ -171,7 +221,23 @@ public static class PlayerDataCodec
         return output.ToArray();
     }
 
-    public static byte[] Encode(BuildProject _) => [];
+    public static byte[] Encode(BuildProject value)
+    {
+        using var output = new MemoryStream();
+        if (value.Items is not null)
+            foreach (BuildItem item in value.Items) WriteMessage(output, 1, Encode(item));
+        // 客户端会直接读取 Project.Gold，即使为 0 也必须显式编码。
+        WriteVarintField(output, 2, unchecked((ulong)value.Gold));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(BuildItem value)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)value.ResId));
+        WriteVarintField(output, 2, unchecked((ulong)value.Count));
+        return output.ToArray();
+    }
 
     public static byte[] Encode(BathroomInfo value)
     {
@@ -200,6 +266,177 @@ public static class PlayerDataCodec
         if (value.BuffTime != 0) WriteVarintField(output, 7, unchecked((ulong)value.BuffTime));
         if (value.Power != 0) WriteVarintField(output, 8, unchecked((ulong)value.Power));
         return output.ToArray();
+    }
+
+    // ── Building snapshot encoding / C2S argument decoding ──
+
+    public static byte[] Encode(UserBuildingInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.BuildingInfos is not null)
+            foreach (BuildingInfo building in value.BuildingInfos)
+                WriteMessage(output, 1, Encode(building));
+        if (value.LandList is not null)
+            foreach (BuildingLandInfo land in value.LandList)
+                WriteMessage(output, 2, Encode(land));
+
+        WriteVarintField(output, 3, unchecked((ulong)value.WorkerStrength));
+        WriteVarintField(output, 4, unchecked((ulong)value.WorkerRecover));
+        WriteVarintField(output, 5, 0); // Food: no offline upkeep.
+        WriteVarintField(output, 6, unchecked((ulong)value.FoodMax));
+        WriteVarintField(output, 7, 0); // Electric: no offline consumption.
+        WriteVarintField(output, 8, unchecked((ulong)value.ElectricMax));
+        WriteVarintField(output, 9, unchecked((ulong)value.WorkerUpdateTime));
+        WriteVarintField(output, 10, unchecked((ulong)value.WorkerUpdateTime));
+
+        // PbToLua omitted these repeated fields when the original server sent none. A fully
+        // populated harmless entry preserves the non-nil tables expected by BuildingData.
+        byte[] emptyPlot = new byte[] { 0x08, 0x01, 0x10, 0x00, 0x18, 0x00 };
+        WriteMessage(output, 11, emptyPlot);
+        WriteMessage(output, 12, emptyPlot);
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(BuildingInfo value)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)value.Id));
+        WriteVarintField(output, 2, unchecked((ulong)value.Tid));
+        WriteVarintField(output, 3, unchecked((ulong)value.Level));
+        if (value.HeroList is not null)
+            foreach (uint heroId in value.HeroList)
+                WriteVarintField(output, 4, heroId);
+        WriteVarintField(output, 5, 0); // Productivity
+        WriteVarintField(output, 6, 0); // ProduceSpeed
+        WriteVarintField(output, 7, 0); // ProductCount
+        WriteVarintField(output, 8, unchecked((ulong)value.Status));
+        WriteVarintField(output, 9, unchecked((ulong)value.LastUpdateTime));
+        WriteVarintField(output, 10, 0); // RecipeId
+        WriteVarintField(output, 11, 0); // ItemCount
+        WriteVarintField(output, 12, unchecked((ulong)value.LastUpdateTime));
+        WriteVarintField(output, 13, unchecked((ulong)value.LastBuildUpdateTime));
+        WriteVarintField(output, 15, 0); // RecipeTime
+        WriteVarintField(output, 16, 0); // FloatCount
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(BuildingLandInfo value)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)value.Index));
+        WriteVarintField(output, 2, unchecked((ulong)value.BuildingId));
+        return output.ToArray();
+    }
+
+    public static SetBuildingHeroArg DecodeSetBuildingHeroArg(ReadOnlySpan<byte> payload)
+    {
+        int buildingId = 0;
+        var heroIds = new List<uint>();
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0:
+                    buildingId = checked((int)reader.ReadVarint());
+                    break;
+                case 2 when wire == 0:
+                    heroIds.Add(checked((uint)reader.ReadVarint()));
+                    break;
+                case 2 when wire == 2:
+                    ReadPackedInt32(reader.ReadBytes(), value => heroIds.Add(checked((uint)value)));
+                    break;
+                default:
+                    reader.Skip(wire);
+                    break;
+            }
+        }
+        return new SetBuildingHeroArg(buildingId, heroIds);
+    }
+
+    public static SetBuildingListHeroArg DecodeSetBuildingListHeroArg(ReadOnlySpan<byte> payload)
+    {
+        var buildingIds = new List<int>();
+        var heroIds = new List<int>();
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0:
+                    buildingIds.Add(checked((int)reader.ReadVarint()));
+                    break;
+                case 1 when wire == 2:
+                    ReadPackedInt32(reader.ReadBytes(), buildingIds.Add);
+                    break;
+                case 2 when wire == 0:
+                    heroIds.Add(unchecked((int)reader.ReadVarint()));
+                    break;
+                case 2 when wire == 2:
+                    ReadPackedInt32(reader.ReadBytes(), heroIds.Add);
+                    break;
+                default:
+                    reader.Skip(wire);
+                    break;
+            }
+        }
+        return new SetBuildingListHeroArg(buildingIds, heroIds);
+    }
+
+    public static AddBuildingArg DecodeAddBuildingArg(ReadOnlySpan<byte> payload)
+    {
+        int tid = 0;
+        int index = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: tid = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: index = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return new AddBuildingArg(tid, index);
+    }
+
+    public static int DecodeBuildingIdArg(ReadOnlySpan<byte> payload)
+    {
+        int buildingId = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 0) buildingId = checked((int)reader.ReadVarint());
+            else reader.Skip(wire);
+        }
+        return buildingId;
+    }
+
+    public static byte[] EncodeAddBuildingRet(int buildingId)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)buildingId));
+        return output.ToArray();
+    }
+
+    private static void ReadPackedInt32(ReadOnlySpan<byte> payload, Action<int> add)
+    {
+        int offset = 0;
+        while (offset < payload.Length)
+        {
+            ulong value = 0;
+            int shift = 0;
+            byte current;
+            do
+            {
+                if (offset >= payload.Length || shift >= 64)
+                    throw new InvalidDataException("Invalid packed protobuf int32");
+                current = payload[offset++];
+                value |= (ulong)(current & 0x7f) << shift;
+                shift += 7;
+            } while ((current & 0x80) != 0);
+            add(unchecked((int)value));
+        }
     }
 
     // ── Bathroom C2S argument decoding ──
@@ -374,9 +611,20 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         if (value.UpdateTime != 0) WriteVarintField(output, 20, unchecked((ulong)value.UpdateTime));
         WriteVarintField(output, 21, unchecked((ulong)value.MarryType));
         if (value.Fashioning != 0) WriteVarintField(output, 22, unchecked((ulong)value.Fashioning));
+        // ArrRemouldEffect / RemouldLV 对应改造页的节点集合与已完成阶段数。
+        if (value.ArrRemouldEffect is { Count: > 0 } remouldEffects)
+            foreach (int effectId in remouldEffects)
+                WriteVarintField(output, 23, unchecked((ulong)effectId));
+        // 即使尚未完成第一阶段也显式编码 0，避免 Lua 侧拿到 nil 后参与数值比较。
+        WriteVarintField(output, 24, unchecked((ulong)value.RemouldLV));
+        // AdvLv 是协议中独立于 Advance 的字段，改造详情也会读取它。
+        WriteVarintField(output, 25, unchecked((ulong)value.AdvLv));
         // Advance (field 6, int32)：突破等级，必须编码，nil 会导致 break_page 星级计算崩溃。
         WriteVarintField(output, 6, unchecked((ulong)value.Advance));
         WriteStringField(output, 15, value.Name);
+        // ChangeNamePage 会直接用该值参与冷却时间加法；即使尚未改名也必须编码 0，
+        // 否则 Lua protobuf 返回 nil，点击确认时会在发送请求前中断。
+        WriteVarintField(output, 16, unchecked((ulong)value.ChangeNameTime));
         // Lock 必须无条件编码。解锁时若省略 false，客户端增量合并后可能继续保留旧的 true。
         WriteVarintField(output, 12, value.Lock ? 1UL : 0UL);
         return output.ToArray();
@@ -387,8 +635,34 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         using var output = new MemoryStream();
         if (value.IllustrateList is not null)
             foreach (var item in value.IllustrateList) WriteMessage(output, 1, Encode(item));
+        if (value.HeroMemoryList is not null)
+            foreach (var item in value.HeroMemoryList) WriteMessage(output, 8, Encode(item));
         if (value.IllustrateEquipList is not null)
             foreach (var item in value.IllustrateEquipList) WriteMessage(output, 9, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(HeroMemory value)
+    {
+        using var output = new MemoryStream();
+        if (value.HeroId != 0) WriteVarintField(output, 1, value.HeroId);
+        if (value.PlotId != 0) WriteVarintField(output, 2, unchecked((ulong)value.PlotId));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(StoryMemoryList value)
+    {
+        using var output = new MemoryStream();
+        if (value.MemoryList is not null)
+            foreach (var item in value.MemoryList) WriteMessage(output, 1, Encode(item));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(ChapterMemory value)
+    {
+        using var output = new MemoryStream();
+        if (value.ChapterId != 0) WriteVarintField(output, 1, unchecked((ulong)value.ChapterId));
+        if (value.Index != 0) WriteVarintField(output, 2, unchecked((ulong)value.Index));
         return output.ToArray();
     }
 
@@ -522,7 +796,40 @@ var reader = new GameLoginCodec.ProtoReader(payload);
     {
         using var output = new MemoryStream();
         if (value.TemplateId != 0) WriteVarintField(output, 1, unchecked((ulong)value.TemplateId));
-        if (value.Num != 0) WriteVarintField(output, 2, unchecked((ulong)value.Num));
+        // Num=0 is the client's deletion marker. The bundled Lua protobuf decoder omits
+        // absent scalar fields, so suppressing zero here produces `num=nil`; BagData then
+        // keeps a phantom item and pages such as MarryBookPage crash on math.tointeger(nil).
+        // Always writing field 2 also makes zero-count sentinels in older saves self-heal
+        // as soon as the inventory is synchronized.
+        WriteVarintField(output, 2, unchecked((ulong)value.Num));
+        return output.ToArray();
+    }
+
+    public static BagNormalTreasureInfoArg DecodeBagNormalTreasureInfoArg(ReadOnlySpan<byte> payload)
+    {
+        var treasureId = 0;
+        var treasureNum = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: treasureId = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: treasureNum = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return new BagNormalTreasureInfoArg(treasureId, treasureNum);
+    }
+
+    public static byte[] Encode(BagTreasureInfoRet value)
+    {
+        using var output = new MemoryStream();
+        if (value.TreasuresInfo is not null)
+            foreach (var reward in value.TreasuresInfo)
+                WriteMessage(output, 1, Encode(reward));
+        if (value.TreasureId != 0)
+            WriteVarintField(output, 2, unchecked((ulong)value.TreasureId));
         return output.ToArray();
     }
 
@@ -686,33 +993,4 @@ private static byte[] BuildPSkillBytes(uint psId, uint exp, int level, int repla
         return ms.ToArray();
     }
 
-    /// <summary>Encode building.UpdateBuildingInfo push (TUserBuildingInfo).</summary>
-    public static byte[] EncodeBuildingInfo(uint now)
-    {
-        using var output = new MemoryStream();
-        // BuildingInfos[0] (field 1): TBuildingInfo { Id=1, Tid=1, Level=1, Productivity=0, Status=1(Idle) }
-        // TBuildingInfo: Id=1(0x08,0x01), Tid=1(0x10,0x01), Level=1(0x18,0x01),
-        // Productivity=0(0x28,0x00), Status=1(0x40,0x01)
-        var buildingInfo = new byte[] { 0x08, 0x01, 0x10, 0x01, 0x18, 0x01, 0x28, 0x00, 0x40, 0x01 };
-        WriteMessage(output, 1, buildingInfo);
-        // LandList[0] (field 2): TLandInfo { Index=1, BuildingId=1 }
-        var landInfo = new byte[] { 0x08, 0x01, 0x10, 0x01 };
-        WriteMessage(output, 2, landInfo);
-        // WorkerStrength (field 3): 1000000 = 100 * BuildingBase.Int(10000) for full bar
-        WriteVarintField(output, 3, 1000000);
-        // WorkerRecover (field 4): 10
-        WriteVarintField(output, 4, 10);
-        // FoodMax (field 6): 100
-        WriteVarintField(output, 6, 100);
-        // ElectricMax (field 8): 100
-        WriteVarintField(output, 8, 100);
-        // WorkerUpdateTime (field 9): now
-        WriteVarintField(output, 9, now);
-        // NormalPlotDatas[0] (field 11): THeroPlotData { HeroId=1, PlotId=0, BuildingId=0 }
-        var plotData = new byte[] { 0x08, 0x01, 0x10, 0x00, 0x18, 0x00 };
-        WriteMessage(output, 11, plotData);
-        // SpecialPlotDatas[0] (field 12): THeroPlotData { HeroId=1, PlotId=0, BuildingId=0 }
-        WriteMessage(output, 12, plotData);
-        return output.ToArray();
-    }
 }

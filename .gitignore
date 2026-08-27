@@ -38,6 +38,7 @@ __pycache__/
 /native/build/
 /native/build-msvc/
 /native/build-nmake-x86/
+/native/build-nmake-x86-*/
 /native/_backup/
 
 # ---- Local Codex / developer runtime state ----

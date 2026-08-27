@@ -153,7 +153,11 @@ function ShowGirlPage:_UpdatePage()
   end
   self.bBattleOpen = self.param.battleOpen
   if self.showType == ShowGirlType.Girl then
-    self.bNew = Logic.illustrateLogic:IsFirstGetHero(self.girlId)
+    if self.param.bNew ~= nil then
+      self.bNew = self.param.bNew
+    else
+      self.bNew = Logic.illustrateLogic:IsFirstGetHero(self.girlId)
+    end
     self.quality = Logic.shipLogic:GetQuality(self.girlId)
   else
     self.bNew = true
@@ -443,9 +447,8 @@ end
 
 function ShowGirlPage:OnClickBack()
   if self.heroId ~= nil then
-    local quality = Logic.shipLogic:GetQuality(self.girlId)
     local isLock = Logic.shipLogic:IsLock(self.heroId)
-    if not isLock and (self.bNew or quality >= HeroRarityType.SR) then
+    if not isLock and self.bNew then
       local tabParam = {
         msgType = NoticeType.TwoButton,
         callback = function(bool)

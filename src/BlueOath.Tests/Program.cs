@@ -1,6 +1,8 @@
 using BlueOath.Core;
 using BlueOath.Mods;
 using BlueOath.Protocol;
+using BlueOath.Server.Protocols;
+using BlueOath.Server.Configs;
 using BlueOath.Storage;
 using System.Diagnostics;
 using System.Net;
@@ -16,6 +18,14 @@ var tests = new (string Name, Func<Task> Run)[]
     ("temporary game login frame round-trips", GameLoginFrameTest),
     ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
     ("equipment renovation request decodes consumed equipment ids", EquipRiseStarArgsCodecTest),
+    ("zero-count bag entries encode an explicit deletion marker", BagDeletionMarkerCodecTest),
+    ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
+    ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
+    ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
+    ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
+    ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
+    ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
+    ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
     ("sqlite repository persists player account (character + dock)", AccountStorageTest),
     ("game service resolves deterministic battle", GameTest),
@@ -28,15 +38,51 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("protobuf login server creates a local profile", GameLoginIntegrationTest),
     ("tactic SetHerosTactic persists formation", TacticIntegrationTest),
     ("all fashions unlocked on account creation", FashionUnlockIntegrationTest),
+    ("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest),
+    ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest),
+    ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest),
+    ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest)];
 if (args.Contains("--retire-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--hero-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
 if (args.Contains("--affection-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--rename-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("hero rename supports Unicode, reset and client synchronization", HeroMutationIntegrationTest)];
+if (args.Contains("--marry-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("oath ring purchase and consecutive marriages are atomic", HeroMutationIntegrationTest)];
+if (args.Contains("--shop-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("oath ring purchase refreshes inventory before its response", HeroMutationIntegrationTest)];
+if (args.Contains("--treasure-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("equipment treasure consumes its box and persists a new equipment instance", TreasureIntegrationTest)];
+if (args.Contains("--buildship-codec", StringComparer.OrdinalIgnoreCase))
+    tests = [("build ship response omits empty special rewards", BuildShipRewardCodecTest)];
 if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
+if (args.Contains("--story-unlock", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
+        ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest)
+    ];
+if (args.Contains("--remould-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
+        ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest)
+    ];
+if (args.Contains("--construction-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
+        ("traditional construction consumes resources and persists its queue", ConstructionIntegrationTest)
+    ];
+if (args.Contains("--building-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [
+        ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
+        ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest)
+    ];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -80,6 +126,186 @@ static async Task GameLoginFrameTest()
         GameLoginCodec.DecodeLogin(decoded.Payload).Pid == "frame-player", "game login frame mismatch");
 }
 
+static Task RemouldConfigAndCodecTest()
+{
+    string root = FindRepositoryRoot();
+    RemouldConfigLoader.Load(root);
+    Assert(RemouldConfigLoader.AllEffects.Count >= 800,
+        "ship remould effect config was not loaded");
+    ConfigShipRemouldTemplate stage = RemouldConfigLoader.GetTemplate(525)
+        ?? throw new InvalidDataException("Oakland remould stage 525 was not loaded");
+    IReadOnlyList<long> stageEffects = stage.RemouldItemGroup is { Count: > 0 } configuredEffects
+        ? configuredEffects
+        : throw new InvalidDataException("Oakland remould stage has no effects");
+    Assert(stageEffects.All(id => RemouldConfigLoader.GetEffect(checked((int)id)) is not null),
+        "a stage references a missing remould effect");
+    Assert(RemouldConfigLoader.AllEffects.Values
+        .SelectMany(effect => effect.Cost ?? [])
+        .All(cost => cost.Count >= 3 && cost[0] is not (2 or 3)),
+        "remould config contains an unsupported instance-asset cost");
+
+    var args = new ProtocolPackage();
+    args.Write(0x08, 7UL);
+    args.Write(0x10, 388UL);
+    HeroRemouldArg decoded = ProtocolDecoder.DecodeHeroRemouldArg(args.ToArray());
+    Assert(decoded == new HeroRemouldArg(7, 388), "TRemouldArg field layout did not decode");
+
+    byte[] hero = PlayerDataCodec.Encode(new HeroGrid(
+        HeroId: 7,
+        TemplateId: PlayerAccountFactory.DefaultHeroTemplateId,
+        Lvl: 80,
+        AdvLv: 3,
+        ArrRemouldEffect: [388, 400],
+        RemouldLV: 2));
+    Assert(ContainsSequence(hero, new byte[] { 0xB8, 0x01, 0x84, 0x03 }) &&
+        ContainsSequence(hero, new byte[] { 0xB8, 0x01, 0x90, 0x03 }),
+        "THeroGrid did not encode repeated ArrRemouldEffect field 23");
+    Assert(ContainsSequence(hero, new byte[] { 0xC0, 0x01, 0x02 }) &&
+        ContainsSequence(hero, new byte[] { 0xC8, 0x01, 0x03 }),
+        "THeroGrid did not encode RemouldLV/AdvLv fields 24/25");
+    return Task.CompletedTask;
+}
+
+static Task ConstructionConfigAndCodecTest()
+{
+    ConstructionConfigLoader.Load(FindRepositoryRoot());
+    Assert(ConstructionConfigLoader.Formulas.Count == 4,
+        "traditional construction formulas were not loaded");
+    Assert(ConstructionConfigLoader.Qualities.Count == 2020,
+        "traditional construction quality curve was not loaded");
+    Assert(ConstructionConfigLoader.Ships.Count == 30,
+        "traditional construction ship packages were not loaded");
+
+    var steel = new ProtocolPackage().Write(0x08, 10029UL).Write(0x10, 30UL);
+    var aluminium = new ProtocolPackage().Write(0x08, 10030UL).Write(0x10, 40UL);
+    var project = new ProtocolPackage()
+        .Write(0x0A, steel.ToArray())
+        .Write(0x0A, aluminium.ToArray())
+        .Write(0x10, 50UL);
+    var request = new ProtocolPackage().Write(0x0A, project.ToArray());
+    ConstructionProjectsArg decoded = ProtocolDecoder.DecodeConstructionProjectsArg(request.ToArray());
+    Assert(decoded.Projects.Count == 1 && decoded.Projects[0].Gold == 50 &&
+        decoded.Projects[0].Items.SequenceEqual([
+            new ConstructionItemArg(10029, 30), new ConstructionItemArg(10030, 40)]),
+        "traditional construction project protobuf mismatch");
+    Assert(ProtocolDecoder.DecodeConstructionIndexArg(new byte[] { 0x08, 0x01, 0x08, 0x02 })
+        .Indexes.SequenceEqual([1, 2]), "unpacked construction indexes did not decode");
+    Assert(ProtocolDecoder.DecodeConstructionIndexArg(new byte[] { 0x0A, 0x02, 0x01, 0x02 })
+        .Indexes.SequenceEqual([1, 2]), "packed construction indexes did not decode");
+
+    ConstructionProject persistedProject = new(
+        [new ConstructionItem(10029, 30), new ConstructionItem(10030, 40)], 50);
+    PlayerAccount account = PlayerAccountFactory.CreateDefault("queue-test", 1) with
+    {
+        Construction = new PlayerConstruction([
+            new ConstructionJob(1, 40110211, 100, 100, false, persistedProject),
+            new ConstructionJob(2, 40110211, 200, 200, false, persistedProject),
+            new ConstructionJob(3, 40110211, 50, 0, false, persistedProject)], persistedProject, 4),
+    };
+    PlayerAccount refreshed = ConstructionService.RefreshQueue(account, 500);
+    Assert(refreshed.Construction?.Jobs.All(job => job.Completed) == true,
+        "offline construction queue did not cascade through waiting work");
+    byte[] info = ConstructionService.EncodeInfo(refreshed.Construction);
+    Assert(info.Count(value => value == 0x0A) >= 3,
+        "completed traditional construction jobs were not encoded");
+    return Task.CompletedTask;
+}
+
+static Task BuildingCodecTest()
+{
+    BuildingConfigLoader.Load(FindRepositoryRoot());
+    Assert(BuildingConfigLoader.Infos.Count == 35 && BuildingConfigLoader.Lands.Count == 10,
+        "building or land configs were not loaded");
+    Assert(BuildingConfigLoader.GetInfo(11) is { Type: 2, Level: 1 } &&
+        BuildingConfigLoader.GetLand(2)?.BuildinggroupId?.Contains(2) == true,
+        "electric building/land config mismatch");
+    Assert(BuildingConfigLoader.GetLevelUp(11)?.Leveluptime == 0,
+        "JP level-1 building should complete immediately");
+    Assert(BuildingConfigLoader.MaterialTemplateIds.SequenceEqual(
+            new[] { 14001, 14002, 14003, 14004, 14011 }),
+        "building material ids were not collected from level-up configs");
+
+    PlayerBuilding state = PlayerAccountFactory.DefaultBuilding(1234);
+    Assert(state.Buildings.Count == 2 && state.Buildings.Any(x => x.Tid == 2) &&
+        state.Buildings.Any(x => x.Tid == 41), "default office/dormitory state mismatch");
+    Assert(state.Lands.Any(x => x.Index == 1 && x.BuildingId == 1) &&
+        state.Lands.Any(x => x.Index == 6 && x.BuildingId == 2), "default building land mapping mismatch");
+
+    byte[] snapshot = PlayerDataCodec.Encode(BuildingService.ToProtocol(state, 1234));
+    Assert(ContainsSequence(snapshot, new byte[] { 0x08, 0x01, 0x10, 0x02, 0x18, 0x02, 0x28, 0x00 }),
+        "building snapshot omitted the level-2 office");
+    Assert(ContainsSequence(snapshot, new byte[] { 0x08, 0x02, 0x10, 0x29, 0x18, 0x01, 0x28, 0x00 }),
+        "building snapshot omitted the level-1 dormitory");
+
+    var setHero = new ProtocolPackage().Write(0x08, 2UL).Write(0x10, 1UL);
+    SetBuildingHeroArg decoded = PlayerDataCodec.DecodeSetBuildingHeroArg(setHero.ToArray());
+    Assert(decoded.BuildingId == 2 && decoded.HeroIds.SequenceEqual(new uint[] { 1 }),
+        "building.SetHero request did not decode");
+
+    var setList = new ProtocolPackage()
+        .Write(0x08, 1UL)
+        .Write(0x08, 2UL)
+        .Write(0x10, unchecked((ulong)(long)-1))
+        .Write(0x10, 1UL)
+        .Write(0x10, unchecked((ulong)(long)-1));
+    SetBuildingListHeroArg listDecoded = PlayerDataCodec.DecodeSetBuildingListHeroArg(setList.ToArray());
+    Assert(listDecoded.BuildingIds.SequenceEqual(new[] { 1, 2 }) &&
+        listDecoded.HeroIds.SequenceEqual(new[] { -1, 1, -1 }),
+        "building.SetBuildingListHero request did not preserve -1 separators");
+
+    var add = new ProtocolPackage().Write(0x08, 11UL).Write(0x10, 2UL);
+    AddBuildingArg addDecoded = PlayerDataCodec.DecodeAddBuildingArg(add.ToArray());
+    Assert(addDecoded == new AddBuildingArg(11, 2), "building.AddBuilding request did not decode");
+    var buildingId = new ProtocolPackage().Write(0x08, 3UL);
+    Assert(PlayerDataCodec.DecodeBuildingIdArg(buildingId.ToArray()) == 3,
+        "building lifecycle building id did not decode");
+    Assert(PlayerDataCodec.EncodeAddBuildingRet(3).SequenceEqual(new byte[] { 0x08, 0x03 }),
+        "building.AddBuilding response did not contain the new building id");
+    return Task.CompletedTask;
+}
+
+static Task StoryUnlockConfigTest()
+{
+    var root = FindRepositoryRoot();
+    ChapterCopyLoader.Load(root);
+    CharacterStoryLoader.Load(root);
+
+    Assert(ChapterCopyLoader.GetCopyIds(1).Count > 0, "main story chapter was not loaded");
+    Assert(ChapterCopyLoader.GetCopyIds(14005).Contains(953001), "event story chapter was not loaded");
+    Assert(ChapterCopyLoader.GetCopyIds(14006).Contains(955001), "side story chapter was not loaded");
+    Assert(ChapterCopyLoader.GetCopyIds(10001).Contains(40001), "archived activity story was not loaded");
+    Assert(ChapterCopyLoader.GetCopyType(953001) == 1, "event story was not exposed as PlotCopy");
+    Assert(ChapterCopyLoader.AllChapterMemories.Contains(new ChapterMemory(10001, 15)),
+        "archived activity story was not marked fully unlocked");
+    Assert(CharacterStoryLoader.AllMemories.Count > 0, "personal stories were not loaded");
+    Assert(CharacterStoryLoader.AllMemories.Contains(new HeroMemory(2064011, 1001)),
+        "known personal story was not exposed through HeroMemoryList");
+    return Task.CompletedTask;
+}
+
+static Task HeroMemoryCodecTest()
+{
+    var memory = new HeroMemory(2064011, 1001);
+    var nested = PlayerDataCodec.Encode(memory);
+    var payload = PlayerDataCodec.Encode(new IllustrateInfoRet(
+        IllustrateEquipList: [new IllustrateEquipInfo()],
+        HeroMemoryList: [memory]));
+
+    Assert(payload.Length >= nested.Length + 4, "personal story payload is incomplete");
+    Assert(payload[0] == 0x42, "HeroMemoryList must use illustrate field 8");
+    Assert(payload[1] == nested.Length, "HeroMemory message length mismatch");
+    Assert(payload.AsSpan(2, nested.Length).SequenceEqual(nested), "HeroMemory message body mismatch");
+    Assert(payload[2 + nested.Length] == 0x4A, "IllustrateEquipList must remain field 9");
+
+    var chapter = new ChapterMemory(10001, 15);
+    var chapterNested = PlayerDataCodec.Encode(chapter);
+    var chapterPayload = PlayerDataCodec.Encode(new StoryMemoryList([chapter]));
+    Assert(chapterPayload[0] == 0x0A, "MemoryList must use field 1");
+    Assert(chapterPayload[1] == chapterNested.Length, "MemoryInfo message length mismatch");
+    Assert(chapterPayload.AsSpan(2).SequenceEqual(chapterNested), "MemoryInfo message body mismatch");
+    return Task.CompletedTask;
+}
+
 static Task EquipEnhanceRetCodecTest()
 {
     var payload = TMessageCodec.EncodeEquipEnhanceRet(42, 3, 200);
@@ -93,6 +319,38 @@ static Task EquipRiseStarArgsCodecTest()
     var args = TMessageCodec.DecodeEquipRiseStarArgs(new byte[] { 0x08, 0x08, 0x10, 0x0E, 0x10, 0x0F });
     Assert(args.EquipId == 8 && args.ConsumeIds!.SequenceEqual(new uint[] { 14, 15 }),
         "equipment renovation request protobuf mismatch");
+    return Task.CompletedTask;
+}
+
+static Task BagDeletionMarkerCodecTest()
+{
+    var payload = PlayerDataCodec.Encode(new BagGridInfo(10180, 0));
+    Assert(payload.AsSpan().SequenceEqual(new byte[] { 0x08, 0xC4, 0x4F, 0x10, 0x00 }),
+        "zero-count bag entry omitted the explicit Num=0 deletion marker");
+    return Task.CompletedTask;
+}
+
+static Task TreasureCodecTest()
+{
+    var arg = PlayerDataCodec.DecodeBagNormalTreasureInfoArg(
+        new byte[] { 0x08, 0xBC, 0x50, 0x10, 0x01 });
+    Assert(arg == new BagNormalTreasureInfoArg(10300, 1),
+        "normal treasure request protobuf mismatch");
+
+    var payload = PlayerDataCodec.Encode(new BagTreasureInfoRet(
+        [new CommonReward(Type: 2, ConfigId: 30164, Num: 1, Id: 7)], TreasureId: 10300));
+    Assert(payload.Length > 5 && payload[0] == 0x0A && payload[^3..].SequenceEqual(new byte[] { 0x10, 0xBC, 0x50 }),
+        "normal treasure response protobuf mismatch");
+    return Task.CompletedTask;
+}
+
+static Task BuildShipRewardCodecTest()
+{
+    var payload = ProtocolEncoder.EncodeBuildShipRet(
+        [new CommonReward(Type: 1, ConfigId: 2, Num: 1, Id: 3)]);
+    Assert(payload.AsSpan().SequenceEqual(
+        new byte[] { 0x0A, 0x08, 0x08, 0x01, 0x10, 0x02, 0x18, 0x01, 0x20, 0x03, 0x1A, 0x00 }),
+        "build ship response must omit empty SpReward while retaining aligned TransReward");
     return Task.CompletedTask;
 }
 
@@ -187,13 +445,23 @@ static async Task AccountStorageTest()
         Character = account.Character with { Level = 10 },
         Dock = new HeroDock(
             [new Hero(1, PlayerAccountFactory.DefaultHeroTemplateId, 5), new Hero(2, 10210512, 3)],
-            BagSize: 200)
+            BagSize: 200),
+        Building = account.Building! with
+        {
+            Buildings = account.Building!.Buildings
+                .Select(building => building.Id == 2
+                    ? building with { HeroIds = new uint[] { 1 } }
+                    : building)
+                .ToArray(),
+        },
     };
     await repo.SaveAccountAsync(updated);
     var reloaded = await repo.LoadAccountAsync("hero");
     Assert(reloaded is not null, "account was not reloaded");
     Assert(reloaded!.Character.Level == 10, "character update not persisted");
     Assert(reloaded.Dock.Heroes.Count == 2 && reloaded.Dock.BagSize == 200, "dock update not persisted");
+    Assert(reloaded.Building?.Buildings.Single(x => x.Id == 2).HeroIds.SequenceEqual(new uint[] { 1 }) == true,
+        "building assignment not persisted");
 
     // Reset 应同时清除档案与账号。
     await repo.ResetAsync("hero");
@@ -316,6 +584,93 @@ static async Task GameLoginIntegrationTest()
     }
 }
 
+static async Task TreasureIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    var data = Path.Combine(root, "test-treasure-tmp");
+    Directory.CreateDirectory(data);
+    const string profileId = "treasure-player";
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "treasure test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        var port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        var stream = client.GetStream();
+
+        async Task<TResponse> RoundTrip(string method, byte[]? args, ICollection<TResponse>? prePushes = null)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return response;
+                prePushes?.Add(response);
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("player.GetUserList", null);
+        await RoundTrip("player.CreateUser",
+            new byte[] { 0x0A, 0x04, (byte)'b', (byte)'o', (byte)'x', (byte)'1', 0x10, 0x01 });
+        await RoundTrip("user.UserLogin", new byte[] { 0x08, 0x01 });
+
+        // GM 商品 10001（shop 18）发放一个 10300「激稀有武器箱」。
+        TResponse bought = await RoundTrip("shop.BuyGoods",
+            new byte[] { 0x08, 0x12, 0x10, 0x91, 0x4E, 0x18, 0x01 });
+        Assert(bought.Err == 0, "equipment treasure could not be granted");
+        var repo = new SqliteGameRepository(data);
+        PlayerAccount before = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("treasure profile was not persisted");
+        int equipCountBefore = before.Equip?.Items.Count ?? 0;
+        Assert(before.Bag?.Items.Any(x => x.TemplateId == 10300 && x.Num == 1) == true,
+            "granted equipment treasure was missing from the bag");
+
+        var openPushes = new List<TResponse>();
+        TResponse opened = await RoundTrip("bag.GetNormalTreasureInfo",
+            new byte[] { 0x08, 0xBC, 0x50, 0x10, 0x01 }, openPushes);
+        Assert(opened.Err == 0 && opened.Ret is { Length: > 0 }, "equipment treasure response was empty");
+        Assert(opened.Ret![0] == 0x0A && opened.Ret[^3..].SequenceEqual(new byte[] { 0x10, 0xBC, 0x50 }),
+            "equipment treasure response did not contain reward and treasure id");
+        TResponse bagPush = openPushes.Single(x => x.Method == "bag.UpdateBagData");
+        Assert(bagPush.Ret is { Length: > 0 } &&
+            ContainsSequence(bagPush.Ret, new byte[] { 0x08, 0xBC, 0x50, 0x10, 0x00 }),
+            "consumed equipment treasure did not send a Num=0 bag deletion marker");
+
+        PlayerAccount after = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("opened treasure profile was not persisted");
+        Assert(after.Bag?.Items.All(x => x.TemplateId != 10300) != false,
+            "opened equipment treasure was not consumed");
+        Assert((after.Equip?.Items.Count ?? 0) == equipCountBefore + 1,
+            "opening the treasure did not create exactly one equipment instance");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
 static async Task TacticIntegrationTest()
 {
     var root = FindRepositoryRoot();
@@ -393,6 +748,140 @@ static async Task TacticIntegrationTest()
         byte[] marker = [0x10, 0x01, 0x18, 0x01]; // heroInfo=1 + modeId=1
         Assert(get.Ret is { Length: > 0 } && ContainsSequence(get.Ret, marker),
             "tactic.GetHerosTactic did not include saved hero info");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+static async Task BuildingAssignmentIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
+    // 配置加载器从数据目录向上定位客户端配置，因此集成数据放在仓库根目录内。
+    var data = Path.Combine(root, "test-building-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "building-player";
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "building test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        NetworkStream stream = client.GetStream();
+
+        async Task<TResponse> RoundTrip(
+            string method,
+            byte[]? args,
+            ICollection<TResponse>? prePushes = null)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, args, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return response;
+                prePushes?.Add(response);
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("player.GetUserList", null);
+        await RoundTrip("player.CreateUser",
+            new byte[] { 0x0A, 0x04, (byte)'b', (byte)'a', (byte)'s', (byte)'e', 0x10, 0x01 });
+
+        var assignedPushes = new List<TResponse>();
+        var setHero = new ProtocolPackage().Write(0x08, 2UL).Write(0x10, 1UL);
+        TResponse assigned = await RoundTrip("building.SetHero", setHero.ToArray(), assignedPushes);
+        Assert(assigned.Err == 0, "building.SetHero returned an error");
+        TResponse? push = assignedPushes.LastOrDefault(item => item.Method == "building.UpdateBuildingInfo");
+        Assert(push is not null, "building.SetHero did not send a refresh push before its response");
+        Assert(push!.IsResponse == 0 && push.Method == "building.UpdateBuildingInfo",
+            "building.SetHero sent the wrong refresh push");
+        Assert(push.Ret is { Length: > 0 } &&
+            ContainsSequence(push.Ret, new byte[] { 0x08, 0x02, 0x10, 0x29, 0x18, 0x01, 0x20, 0x01 }),
+            "dormitory refresh did not include the assigned hero");
+
+        var initialRepo = new SqliteGameRepository(data);
+        PlayerAccount beforeConstruction = await initialRepo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("building profile was not persisted before construction");
+        int initialGold = beforeConstruction.Character.Gold;
+        string initialBag = JsonSerializer.Serialize(beforeConstruction.Bag);
+        Assert(BuildingConfigLoader.MaterialTemplateIds.All(templateId =>
+                beforeConstruction.Bag?.Items.SingleOrDefault(item => item.TemplateId == templateId)?.Num >= 99_999),
+            "new profile did not receive the building materials required by the client");
+
+        var addPushes = new List<TResponse>();
+        var add = new ProtocolPackage().Write(0x08, 11UL).Write(0x10, 2UL);
+        TResponse added = await RoundTrip("building.AddBuilding", add.ToArray(), addPushes);
+        Assert(added.Err == 0 && added.Ret?.SequenceEqual(new byte[] { 0x08, 0x03 }) == true,
+            "building.AddBuilding did not return building id 3");
+        TResponse? addPush = addPushes.LastOrDefault(item => item.Method == "building.UpdateBuildingInfo");
+        Assert(addPush?.Ret is { Length: > 0 } &&
+            ContainsSequence(addPush.Ret, new byte[] { 0x08, 0x03, 0x10, 0x0B, 0x18, 0x01 }),
+            "building.AddBuilding did not pre-push the new electric building");
+
+        var occupied = new ProtocolPackage().Write(0x08, 11UL).Write(0x10, 2UL);
+        TResponse duplicate = await RoundTrip("building.AddBuilding", occupied.ToArray());
+        Assert(duplicate.Err != 0, "building.AddBuilding accepted an occupied land");
+
+        static byte[] BuildingId(int id) => new ProtocolPackage().Write(0x08, unchecked((ulong)id)).ToArray();
+
+        var officeUpgradePushes = new List<TResponse>();
+        TResponse officeUpgraded = await RoundTrip(
+            "building.UpgradeBuilding", BuildingId(1), officeUpgradePushes);
+        Assert(officeUpgraded.Err == 0 && officeUpgradePushes.Any(item =>
+                item.Method == "building.UpdateBuildingInfo" && item.Ret is { Length: > 0 } &&
+                ContainsSequence(item.Ret, new byte[] { 0x08, 0x01, 0x10, 0x03, 0x18, 0x03 })),
+            "office upgrade to level 3 was not synchronized before the response");
+
+        TResponse electricUpgraded = await RoundTrip("building.UpgradeBuilding", BuildingId(3));
+        Assert(electricUpgraded.Err == 0, "electric building upgrade failed");
+        TResponse electricDegraded = await RoundTrip("building.DegradeBuilding", BuildingId(3));
+        Assert(electricDegraded.Err == 0, "electric building degradation failed");
+
+        TResponse officeDegraded = await RoundTrip("building.DegradeBuilding", BuildingId(1));
+        Assert(officeDegraded.Err == 0, "office degradation from level 3 to level 2 failed");
+        TResponse invalidOfficeDegrade = await RoundTrip("building.DegradeBuilding", BuildingId(1));
+        Assert(invalidOfficeDegrade.Err == 3409,
+            "office degradation ignored an occupied land's office-level requirement");
+
+        TResponse finished = await RoundTrip("building.FinishBuilding", BuildingId(3));
+        Assert(finished.Err == 0, "building.FinishBuilding was not idempotent for an instant build");
+
+        var repo = new SqliteGameRepository(data);
+        PlayerAccount persisted = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("building profile was not persisted");
+        Assert(persisted.Building?.Buildings.Single(x => x.Id == 2).HeroIds.SequenceEqual(new uint[] { 1 }) == true,
+            "building assignment was not written to the profile database");
+        Assert(persisted.Building?.Buildings.Single(x => x.Id == 1) is { Tid: 2, Level: 2 } &&
+            persisted.Building.Buildings.Single(x => x.Id == 3) is { Tid: 11, Level: 1 } &&
+            persisted.Building.Lands.Any(x => x.Index == 2 && x.BuildingId == 3),
+            "building lifecycle result was not written to the profile database");
+        Assert(persisted.Character.Gold == initialGold &&
+            JsonSerializer.Serialize(persisted.Bag) == initialBag,
+            "base construction unexpectedly consumed gold or items");
     }
     finally
     {
@@ -495,6 +984,502 @@ static bool ContainsSequence(byte[] haystack, byte[] needle)
     return false;
 }
 
+static async Task EquipEnhanceIntegrationTest()
+{
+    var root = FindRepositoryRoot();
+    var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
+    var data = Path.Combine(root, "test-equip-enhance-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "equip-enhance-player";
+    const uint normalEquipId = 77;
+    const uint heroPageEquipId = 78;
+    const uint boundEquipId = 79;
+    const int urEquipTemplateId = 100106;
+
+    var repo = new SqliteGameRepository(data);
+    await repo.CreateAsync(profileId, profileId);
+    PlayerAccount seeded = await repo.LoadAccountAsync(profileId)
+        ?? throw new InvalidDataException("failed to seed equipment enhancement account");
+    Hero hero = seeded.Dock.Heroes[0];
+    uint[] slots = [normalEquipId, heroPageEquipId, boundEquipId, 0, 0, 0];
+    seeded = seeded with
+    {
+        Character = seeded.Character with { Gold = 100_000, UrEquipCoin = 100 },
+        Dock = seeded.Dock with
+        {
+            Heroes = [hero with { EquipSlots = slots }],
+        },
+        Equip = new PlayerEquip(
+        [
+            new EquipItem(normalEquipId, urEquipTemplateId, EnhanceLv: 1, HeroId: hero.HeroId),
+            new EquipItem(heroPageEquipId, urEquipTemplateId, EnhanceLv: 1, HeroId: hero.HeroId),
+            new EquipItem(boundEquipId, urEquipTemplateId, EnhanceLv: 35, HeroId: hero.HeroId),
+        ], 2000),
+        Bag = new PlayerBag(
+        [
+            new BagItem(60000, 10),
+            new BagItem(10029, 200),
+            new BagItem(10030, 200),
+            new BagItem(60003, 15),
+            new BagItem(10000, 12),
+        ], 100),
+    };
+    await repo.SaveAccountAsync(seeded);
+
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "equipment enhancement test server did not start");
+        var readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15));
+        using var ready = JsonDocument.Parse(readyLine ?? throw new InvalidDataException("server did not report ready"));
+        var port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        var stream = client.GetStream();
+
+        async Task<(TResponse Response, List<TResponse> Pushes)> RoundTrip(string method, byte[]? requestArgs)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, requestArgs, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            List<TResponse> pushes = [];
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return (response, pushes);
+                pushes.Add(response);
+            }
+        }
+
+        static byte[] EnhanceArgs(uint equipId, params (uint TemplateId, uint Num)[] items)
+        {
+            var args = new ProtocolPackage().Write(0x08, equipId);
+            foreach (var item in items)
+            {
+                var body = new ProtocolPackage()
+                    .Write(0x08, item.TemplateId)
+                    .Write(0x10, item.Num);
+                args.Write(0x12, body.ToArray());
+            }
+            return args.ToArray();
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("hero.GetHeroInfo", null); // drain login synchronization pushes
+
+        var (normalResponse, normalPushes) = await RoundTrip("equip.Enhance", EnhanceArgs(normalEquipId,
+            (60000, 5), (10029, 100), (10030, 100)));
+        Assert(normalResponse.Err == 0 && normalResponse.Ret is { Length: > 0 },
+            "equipped UR normal enhancement was rejected");
+        Assert(normalPushes.Any(p => p.Method == "bag.UpdateBagData") &&
+            normalPushes.Any(p => p.Method == "equip.UpdateEquipBagData"),
+            "equipped UR normal enhancement did not refresh bag and equipment data");
+        PlayerAccount normallyEnhanced = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("normal enhancement account disappeared");
+        Assert(normallyEnhanced.Equip!.Items.Single(e => e.EquipId == normalEquipId).EnhanceLv == 2,
+            "equipped UR normal enhancement did not persist level 2");
+        Assert(normallyEnhanced.Bag!.Items.Single(i => i.TemplateId == 60000).Num == 5 &&
+            normallyEnhanced.Bag.Items.Single(i => i.TemplateId == 10029).Num == 100 &&
+            normallyEnhanced.Bag.Items.Single(i => i.TemplateId == 10030).Num == 100,
+            "equipped UR normal enhancement consumed the wrong material amount");
+
+        var (heroPageResponse, heroPagePushes) =
+            await RoundTrip("equip.EnhanceBind", EnhanceArgs(heroPageEquipId));
+        Assert(heroPageResponse.Err == 0 && heroPageResponse.Ret is { Length: > 0 },
+            "hero-page UR enhancement without ItemArr was rejected");
+        Assert(heroPagePushes.Any(p => p.Method == "bag.UpdateBagData") &&
+            heroPagePushes.Any(p => p.Method == "equip.UpdateEquipBagData"),
+            "hero-page UR enhancement did not refresh bag and equipment data");
+        PlayerAccount heroPageEnhanced = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("hero-page enhancement account disappeared");
+        Assert(heroPageEnhanced.Equip!.Items.Single(e => e.EquipId == heroPageEquipId).EnhanceLv == 2,
+            "hero-page UR enhancement did not persist level 2");
+        Assert(!heroPageEnhanced.Bag!.Items.Any(i => i.TemplateId is 60000 or 10029 or 10030),
+            "hero-page UR enhancement did not consume its configured materials");
+
+        var (boundResponse, boundPushes) = await RoundTrip("equip.EnhanceBind", EnhanceArgs(boundEquipId));
+        Assert(boundResponse.Err == 0 && boundResponse.Ret is { Length: > 0 },
+            "equipped UR bound enhancement was rejected");
+        Assert(boundPushes.Any(p => p.Method == "user.UpdateUserInfo") &&
+            boundPushes.Any(p => p.Method == "bag.UpdateBagData") &&
+            boundPushes.Any(p => p.Method == "equip.UpdateEquipBagData"),
+            "bound enhancement did not refresh currency, bag, and equipment data");
+        PlayerAccount boundEnhanced = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("bound enhancement account disappeared");
+        Assert(boundEnhanced.Equip!.Items.Single(e => e.EquipId == boundEquipId).EnhanceLv == 36,
+            "equipped UR bound enhancement did not persist level 36");
+        Assert(boundEnhanced.Character.UrEquipCoin == 90 && boundEnhanced.Character.Gold == 65_000,
+            "equipped UR bound enhancement did not consume configured currencies");
+        Assert(!boundEnhanced.Bag!.Items.Any(i => i.TemplateId is 60003 or 10000),
+            "equipped UR bound enhancement did not consume configured bag materials");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+static async Task ConstructionIntegrationTest()
+{
+    string root = FindRepositoryRoot();
+    string serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0",
+        "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the server first");
+    string data = Path.Combine(root, ".test-data", "blueoath-construction-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "construction-test";
+    var repo = new SqliteGameRepository(data);
+    await repo.CreateAsync(profileId, profileId);
+
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "construction test server did not start");
+        string readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20))
+            ?? throw new InvalidDataException("server did not report ready");
+        using var ready = JsonDocument.Parse(readyLine);
+        int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        NetworkStream stream = client.GetStream();
+
+        async Task<(TResponse Response, List<TResponse> Pushes)> RoundTrip(string method, byte[]? requestArgs)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, requestArgs, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            List<TResponse> pushes = [];
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return (response, pushes);
+                pushes.Add(response);
+            }
+        }
+
+        static byte[] Project(int gold, int steelCount, int aluminiumCount)
+        {
+            var steel = new ProtocolPackage().Write(0x08, 10029UL)
+                .Write(0x10, checked((ulong)steelCount));
+            var aluminium = new ProtocolPackage().Write(0x08, 10030UL)
+                .Write(0x10, checked((ulong)aluminiumCount));
+            return new ProtocolPackage()
+                .Write(0x0A, steel.ToArray())
+                .Write(0x0A, aluminium.ToArray())
+                .Write(0x10, checked((ulong)gold))
+                .ToArray();
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("hero.GetHeroInfo", null); // drain login synchronization pushes
+        PlayerAccount baseline = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("construction account was not initialized");
+        int steelBefore = baseline.Bag?.Items.Single(item => item.TemplateId == 10029).Num ?? 0;
+        int aluminiumBefore = baseline.Bag?.Items.Single(item => item.TemplateId == 10030).Num ?? 0;
+        int quickBefore = baseline.Bag?.Items.Single(item => item.TemplateId == 10031).Num ?? 0;
+
+        var invalidArgs = new ProtocolPackage().Write(0x0A, Project(29, 30, 30));
+        var (invalid, invalidPushes) = await RoundTrip("build.BuildingByFormula", invalidArgs.ToArray());
+        Assert(invalid.Err != 0 && invalidPushes.Count == 0,
+            "an out-of-range construction project was not rejected atomically");
+
+        var projects = new ProtocolPackage();
+        for (int i = 0; i < 3; i++) projects.Write(0x0A, Project(30, 30, 30));
+        var (started, startPushes) = await RoundTrip("build.BuildingByFormula", projects.ToArray());
+        Assert(started.Err == 0, $"valid construction request was rejected: {started.ErrMsg}");
+        Assert(startPushes.Any(push => push.Method == "build.BuildsInfo") &&
+            startPushes.Any(push => push.Method == "bag.UpdateBagData") &&
+            startPushes.Any(push => push.Method == "user.UpdateUserInfo"),
+            "construction start did not synchronize queue, materials, and currency");
+
+        PlayerAccount queued = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("construction queue was not persisted");
+        IReadOnlyList<ConstructionJob> queuedJobs = queued.Construction?.Jobs ?? [];
+        Assert(queuedJobs.Count == 3 && queuedJobs.Count(job => job.EndTime > 0) == 2 &&
+            queuedJobs.Count(job => job.EndTime == 0) == 1,
+            "construction did not use two active slots and one waiting slot");
+        Assert(queued.Character.Gold == baseline.Character.Gold - 90 &&
+            queued.Bag!.Items.Single(item => item.TemplateId == 10029).Num == steelBefore - 90 &&
+            queued.Bag.Items.Single(item => item.TemplateId == 10030).Num == aluminiumBefore - 90,
+            "construction resources were not deducted exactly once");
+        Assert(queued.Construction?.LastProject?.Gold == 30,
+            "last construction formula was not persisted for client reuse");
+
+        byte[] firstIndex = new ProtocolPackage().Write(0x08, 1UL).ToArray();
+        var (finished, finishPushes) = await RoundTrip("build.BuildQuicklyFinish", firstIndex);
+        Assert(finished.Err == 0 && finishPushes.Any(push => push.Method == "build.BuildsInfo") &&
+            finishPushes.Any(push => push.Method == "bag.UpdateBagData"),
+            "quick construction did not synchronize its queue and item cost");
+        PlayerAccount quickFinished = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("quick-finished construction was not persisted");
+        Assert(quickFinished.Construction?.Jobs.Count(job => job.Completed) == 1 &&
+            quickFinished.Construction.Jobs.Count(job => !job.Completed && job.EndTime > 0) == 2 &&
+            quickFinished.Construction.Jobs.All(job => job.Completed || job.EndTime > 0),
+            "quick construction did not promote the waiting job into the free slot");
+        Assert(quickFinished.Bag!.Items.Single(item => item.TemplateId == 10031).Num == quickBefore - 1,
+            "quick construction item was not consumed");
+
+        var (received, receivePushes) = await RoundTrip("build.BuildReceive", firstIndex);
+        Assert(received.Err == 0 && received.Ret is { Length: > 0 } && received.Ret[0] == 0x0A,
+            "construction receive did not return a ship reward");
+        Assert(receivePushes.Any(push => push.Method == "build.BuildsInfo") &&
+            receivePushes.Any(push => push.Method == "hero.UpdateHeroBagData") &&
+            receivePushes.Any(push => push.Method == "illustrate.IllustrateInfo"),
+            "construction receive did not synchronize queue, dock, and illustration data");
+        PlayerAccount receivedAccount = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("received construction was not persisted");
+        Assert(receivedAccount.Construction?.Jobs.Count == 2 &&
+            receivedAccount.Dock.Heroes.Count == baseline.Dock.Heroes.Count + 1,
+            "receiving a construction result did not remove one job and add one ship");
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
+static async Task HeroRemouldIntegrationTest()
+{
+    string root = FindRepositoryRoot();
+    string serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0",
+        "BlueOath.Server.dll");
+    Assert(File.Exists(serverDll), "server assembly is missing; build the server first");
+
+    RemouldConfigLoader.Load(root);
+    ConfigShipRemouldTemplate stage = RemouldConfigLoader.GetTemplate(525)
+        ?? throw new InvalidDataException("Oakland remould stage was not loaded");
+    ConfigShipRemouldTemplate nextStage = RemouldConfigLoader.GetTemplate(526)
+        ?? throw new InvalidDataException("Oakland second remould stage was not loaded");
+    List<int> stageEffectIds = (stage.RemouldItemGroup ?? []).Select(id => checked((int)id)).ToList();
+    List<int> nextStageEffectIds = (nextStage.RemouldItemGroup ?? [])
+        .Select(id => checked((int)id)).ToList();
+    List<int> allEffectIds = [.. stageEffectIds, .. nextStageEffectIds];
+    int effectId = stageEffectIds
+        .First(id => RemouldConfigLoader.GetEffect(checked((int)id))?.RemouldPrev is not { Count: > 0 });
+    ConfigShipRemouldEffect effect = RemouldConfigLoader.GetEffect(effectId)
+        ?? throw new InvalidDataException("initial Oakland remould effect was not loaded");
+    Dictionary<(int Type, int Id), int> selectedCosts = (effect.Cost ?? [])
+        .GroupBy(cost => (Type: checked((int)cost[0]), Id: checked((int)cost[1])))
+        .ToDictionary(group => group.Key, group => checked((int)group.Sum(cost => cost[2])));
+    Dictionary<(int Type, int Id), int> stageCosts = allEffectIds
+        .SelectMany(id => RemouldConfigLoader.GetEffect(id)?.Cost ?? [])
+        .GroupBy(cost => (Type: checked((int)cost[0]), Id: checked((int)cost[1])))
+        .ToDictionary(group => group.Key, group => checked((int)group.Sum(cost => cost[2])));
+
+    string data = Path.Combine(root, ".test-data", "blueoath-remould-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(data);
+    const string profileId = "remould-test";
+    var repo = new SqliteGameRepository(data);
+    await repo.CreateAsync(profileId, profileId);
+    PlayerAccount seeded = await repo.LoadAccountAsync(profileId)
+        ?? throw new InvalidDataException("failed to seed remould account");
+    Hero hero = seeded.Dock.Heroes.Single() with
+    {
+        Level = Math.Max(100, checked((int)effect.LimitLevel)),
+        Advance = Math.Max(10, checked((int)effect.LimitStar)),
+    };
+    seeded = seeded with { Dock = seeded.Dock with { Heroes = [hero] } };
+    foreach (var (key, amount) in stageCosts)
+    {
+        if (key.Type == GameServices.GoodsTypeCurrency)
+        {
+            Assert(GameServices.TryGetCurrency(seeded, key.Id, out int current),
+                $"unsupported remould currency {key.Id}");
+            if (current < amount + 10)
+                seeded = GameServices.AddCurrency(seeded, key.Id, amount + 10 - current);
+        }
+        else
+        {
+            int current = seeded.Bag?.Items.FirstOrDefault(i => i.TemplateId == key.Id)?.Num ?? 0;
+            if (current < amount + 10)
+                seeded = GameServices.AddBagItem(seeded, key.Id, amount + 10 - current);
+        }
+    }
+    await repo.SaveAccountAsync(seeded);
+
+    var startInfo = new ProcessStartInfo("dotnet")
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    startInfo.ArgumentList.Add(serverDll);
+    startInfo.ArgumentList.Add("--port=0");
+    startInfo.ArgumentList.Add("--game-login-port=0");
+    startInfo.ArgumentList.Add("--region=jp");
+    startInfo.ArgumentList.Add("--data=" + data);
+    using var process = new Process { StartInfo = startInfo };
+    try
+    {
+        Assert(process.Start(), "remould test server did not start");
+        string readyLine = await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20))
+            ?? throw new InvalidDataException("server did not report ready");
+        using var ready = JsonDocument.Parse(readyLine);
+        int port = ready.RootElement.GetProperty("gameLoginPort").GetInt32();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var client = new TcpClient();
+        await client.ConnectAsync("127.0.0.1", port, timeout.Token);
+        NetworkStream stream = client.GetStream();
+
+        async Task<(TResponse Response, List<TResponse> Pushes)> RoundTrip(string method, byte[]? requestArgs)
+        {
+            byte[] request = TMessageCodec.EncodeRequest(new TRequest(method, requestArgs, 1));
+            await NetSocketFrameCodec.WriteAsync(stream, request, NetSocketFrameCodec.TypeData, timeout.Token);
+            List<TResponse> pushes = [];
+            while (true)
+            {
+                var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
+                Assert(frame is not null, $"empty response for {method}");
+                TResponse response = TMessageCodec.DecodeResponse(frame!.Value.Payload);
+                if (response.IsResponse == 1) return (response, pushes);
+                pushes.Add(response);
+            }
+        }
+
+        await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        await RoundTrip("hero.GetHeroInfo", null); // drain login synchronization pushes
+
+        byte[] EncodeRemouldArg(int id)
+        {
+            var value = new ProtocolPackage();
+            value.Write(0x08, 1UL);
+            value.Write(0x10, checked((ulong)id));
+            return value.ToArray();
+        }
+
+        byte[] remouldArg = EncodeRemouldArg(effectId);
+        var (response, pushes) = await RoundTrip("hero.HeroRemould", remouldArg);
+        Assert(response.Err == 0, $"valid remould request was rejected: {response.ErrMsg}");
+        Assert(pushes.Any(push => push.Method == "hero.UpdateHeroBagData"),
+            "remould did not refresh hero data before its response");
+        Assert(pushes.Any(push => push.Method == "bag.UpdateBagData"),
+            "remould did not refresh item costs before its response");
+        Assert(pushes.Any(push => push.Method == "user.UpdateUserInfo"),
+            "remould did not refresh currency costs before its response");
+
+        PlayerAccount saved = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("remould account disappeared");
+        Hero savedHero = saved.Dock.Heroes.Single();
+        Assert(savedHero.RemouldEffects?.Contains(effectId) == true,
+            "completed remould effect was not persisted");
+        Assert(savedHero.RemouldLevel == 0,
+            "a partially completed first stage advanced RemouldLevel");
+        foreach (var (key, amount) in selectedCosts)
+        {
+            if (key.Type == GameServices.GoodsTypeCurrency)
+            {
+                Assert(GameServices.TryGetCurrency(seeded, key.Id, out int before) &&
+                    GameServices.TryGetCurrency(saved, key.Id, out int after) && after == before - amount,
+                    $"remould currency {key.Id} was not deducted exactly once");
+            }
+            else
+            {
+                int before = seeded.Bag?.Items.FirstOrDefault(i => i.TemplateId == key.Id)?.Num ?? 0;
+                int after = saved.Bag?.Items.FirstOrDefault(i => i.TemplateId == key.Id)?.Num ?? 0;
+                Assert(after == before - amount, $"remould item {key.Id} was not deducted exactly once");
+            }
+        }
+
+        var (duplicate, duplicatePushes) = await RoundTrip("hero.HeroRemould", remouldArg);
+        Assert(duplicate.Err != 0 && duplicatePushes.Count == 0,
+            "duplicate remould request was not rejected atomically");
+        PlayerAccount unchanged = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("remould account disappeared after duplicate request");
+        Assert(unchanged.Dock.Heroes.Single().RemouldEffects?.Count(id => id == effectId) == 1,
+            "duplicate remould request changed persisted state");
+
+        int nextEffectId = checked((int)(nextStage.RemouldItemGroup ?? [])
+            .First(id => RemouldConfigLoader.GetEffect(checked((int)id))?.RemouldPrev is not { Count: > 0 }));
+        var (earlyStage, earlyPushes) = await RoundTrip("hero.HeroRemould", EncodeRemouldArg(nextEffectId));
+        Assert(earlyStage.Err != 0 && earlyPushes.Count == 0,
+            "a second-stage remould effect was accepted before the first stage completed");
+
+        var completed = new HashSet<int> { effectId };
+        while (completed.Count < stageEffectIds.Count)
+        {
+            int candidate = stageEffectIds.First(id => !completed.Contains(id) &&
+                (RemouldConfigLoader.GetEffect(id)?.RemouldPrev is not { Count: > 0 } prerequisites ||
+                 prerequisites.Any(prev => completed.Contains(checked((int)prev)))));
+            var (nodeResponse, _) = await RoundTrip("hero.HeroRemould", EncodeRemouldArg(candidate));
+            Assert(nodeResponse.Err == 0,
+                $"valid first-stage remould effect {candidate} was rejected: {nodeResponse.ErrMsg}");
+            completed.Add(candidate);
+        }
+
+        PlayerAccount stageCompleted = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("remould account disappeared after stage completion");
+        Hero completedHero = stageCompleted.Dock.Heroes.Single();
+        Assert(completedHero.RemouldLevel == 1 &&
+            stageEffectIds.All(id => completedHero.RemouldEffects?.Contains(id) == true),
+            "completing every first-stage node did not advance RemouldLevel to 1");
+        while (completed.Count < allEffectIds.Count)
+        {
+            int candidate = nextStageEffectIds.First(id => !completed.Contains(id) &&
+                (RemouldConfigLoader.GetEffect(id)?.RemouldPrev is not { Count: > 0 } prerequisites ||
+                 prerequisites.Any(prev => completed.Contains(checked((int)prev)))));
+            var (nodeResponse, _) = await RoundTrip("hero.HeroRemould", EncodeRemouldArg(candidate));
+            Assert(nodeResponse.Err == 0,
+                $"valid second-stage remould effect {candidate} was rejected: {nodeResponse.ErrMsg}");
+            completed.Add(candidate);
+        }
+
+        PlayerAccount fullyRemoulded = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("remould account disappeared after completion");
+        Hero fullyRemouldedHero = fullyRemoulded.Dock.Heroes.Single();
+        Assert(fullyRemouldedHero.RemouldLevel == 3 &&
+            allEffectIds.All(id => fullyRemouldedHero.RemouldEffects?.Contains(id) == true),
+            "completing both node stages did not include the terminal empty stage in RemouldLevel");
+        foreach (List<long> skillEffect in allEffectIds
+                     .SelectMany(id => RemouldConfigLoader.GetEffect(id)?.RemouldEffectType ?? [])
+                     .Where(value => value.Count >= 2 && value[0] is 4 or 5))
+        {
+            uint oldSkillId = checked((uint)skillEffect[1]);
+            PSkillEntry? skill = fullyRemouldedHero.PSkills?.FirstOrDefault(value => value.PSkillId == oldSkillId);
+            Assert(skill is not null, $"remould skill {oldSkillId} was not added to PSkill");
+            if (skillEffect[0] == 5)
+                Assert(skill!.Replace == checked((int)skillEffect[2]),
+                    $"remould skill {oldSkillId} was not replaced");
+        }
+    }
+    finally
+    {
+        if (!process.HasExited) { process.Kill(true); process.WaitForExit(3000); }
+        if (Directory.Exists(data)) Directory.Delete(data, true);
+    }
+}
+
 static async Task HeroMutationIntegrationTest()
 {
     var root = FindRepositoryRoot();
@@ -510,14 +1495,29 @@ static async Task HeroMutationIntegrationTest()
     await repo.CreateAsync(profileId, profileId);
     PlayerAccount seeded = await repo.LoadAccountAsync(profileId)
         ?? throw new InvalidDataException("failed to seed retirement account");
+    Assert(seeded.Dock.Heroes[0].Affection == PlayerAccountFactory.DefaultAffection,
+        "new profiles did not initialize affection at 50");
     Hero second = seeded.Dock.Heroes[0] with
     {
         HeroId = 2,
+        TemplateId = 40320111,
+        Fashioning = 4032011,
+        Affection = 990_000,
         EquipSlots = new uint[] { 77, 0, 0, 0, 0, 0 },
+    };
+    Hero third = seeded.Dock.Heroes[0] with
+    {
+        HeroId = 3,
+        Affection = 1_000_000,
+    };
+    Hero legacyLowAffection = seeded.Dock.Heroes[0] with
+    {
+        HeroId = 4,
+        Affection = 10_000,
     };
     seeded = seeded with
     {
-        Dock = seeded.Dock with { Heroes = [seeded.Dock.Heroes[0], second] },
+        Dock = seeded.Dock with { Heroes = [seeded.Dock.Heroes[0], second, third, legacyLowAffection] },
         Equip = new PlayerEquip([new EquipItem(77, 30421, HeroId: 2)], 2000),
         // Existing profiles may predate affection gifts and therefore have an empty bag.
         Bag = new PlayerBag([], 100),
@@ -565,6 +1565,20 @@ static async Task HeroMutationIntegrationTest()
         }
 
         await RoundTrip("player.Login", GameLoginCodec.Encode(new TArgLogin(profileId, 1, "open", "hash")));
+        // Login synchronization is emitted immediately after the login response, so the next
+        // request observes those queued pushes before its own response.
+        var (initialHeroResponse, _) = await RoundTrip("hero.GetHeroInfo", null);
+        Assert(initialHeroResponse.Ret is { Length: > 0 } &&
+            ContainsSequence(initialHeroResponse.Ret, new byte[] { 0x80, 0x01, 0x00 }),
+            "hero data did not explicitly initialize ChangeNameTime=0");
+        Assert(ContainsSequence(initialHeroResponse.Ret!, new byte[] { 0x98, 0x01, 0x00 }) &&
+            ContainsSequence(initialHeroResponse.Ret!, new byte[] { 0xA8, 0x01, 0x00 }),
+            "unmarried hero data did not explicitly initialize MarryTime/MarryType=0");
+        PlayerAccount migrated = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("migrated account disappeared");
+        Assert(migrated.Dock.Heroes.Single(h => h.HeroId == 4).Affection ==
+                PlayerAccountFactory.DefaultAffection,
+            "legacy affection migration was not persisted during account load");
 
         int initialAffection = second.Affection;
         var giftArgs = new ProtocolPackage();
@@ -582,11 +1596,24 @@ static async Task HeroMutationIntegrationTest()
         PlayerAccount gifted = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("gift account disappeared");
         int giftedAffection = gifted.Dock.Heroes.Single(h => h.HeroId == 2).Affection;
-        Assert(giftedAffection > initialAffection, "gift did not increase persisted affection");
-        Assert(gifted.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 997,
-            "starter gift inventory was not provisioned and deducted atomically");
+        Assert(giftedAffection == PlayerAccountFactory.UnmarriedMaxAffection &&
+            giftedAffection > initialAffection,
+            "gift did not cap persisted unmarried affection at 100");
+        Assert(gifted.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 998,
+            "gift count was not limited to the quantity actually needed");
         Assert(gifted.Bag?.Items.Count(i => i.Num == 999) == 7,
             "not all configured affection gift types were provisioned for the existing profile");
+
+        var (cappedGiftResponse, cappedGiftPushes) =
+            await RoundTrip("hero.AddAffection", giftArgs.ToArray());
+        Assert(cappedGiftResponse.Err != 0 && cappedGiftPushes.Count == 0,
+            "gift at the unmarried affection limit was accepted");
+        PlayerAccount cappedGiftRejected = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("capped gift account disappeared");
+        Assert(cappedGiftRejected.Dock.Heroes.Single(h => h.HeroId == 2).Affection ==
+                PlayerAccountFactory.UnmarriedMaxAffection &&
+            cappedGiftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 998,
+            "gift at the affection limit changed affection or inventory");
 
         // A failed request must not grant affection or consume the final gift.
         var excessiveGiftArgs = new ProtocolPackage();
@@ -600,8 +1627,41 @@ static async Task HeroMutationIntegrationTest()
         PlayerAccount giftRejected = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("gift rejection account disappeared");
         Assert(giftRejected.Dock.Heroes.Single(h => h.HeroId == 2).Affection == giftedAffection &&
-            giftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 997,
+            giftRejected.Bag?.Items.Single(i => i.TemplateId == 280002).Num == 998,
             "failed gift request changed persisted data");
+
+        const string customName = "马克西姆";
+        var renameArgs = new ProtocolPackage();
+        renameArgs.Write(0x08, 2UL);
+        renameArgs.Write(0x12, customName);
+        var (renameResponse, renamePushes) = await RoundTrip("hero.ChangeName", renameArgs.ToArray());
+        Assert(renameResponse.Err == 0, "Unicode hero rename was rejected");
+        TResponse renameHeroPush = renamePushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("rename did not refresh hero data before its response");
+        Assert(renameHeroPush.Ret is { Length: > 0 } &&
+            ContainsSequence(renameHeroPush.Ret, Encoding.UTF8.GetBytes(customName)),
+            "rename update did not contain the UTF-8 custom name");
+        PlayerAccount renamed = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("rename account disappeared");
+        Hero renamedHero = renamed.Dock.Heroes.Single(h => h.HeroId == 2);
+        Assert(renamedHero.Name == customName && renamedHero.ChangeNameTime > 0,
+            "Unicode custom name or rename time was not persisted");
+
+        var resetNameArgs = new ProtocolPackage();
+        resetNameArgs.Write(0x08, 2UL);
+        resetNameArgs.Write(0x12, "");
+        var (resetNameResponse, resetNamePushes) =
+            await RoundTrip("hero.ChangeName", resetNameArgs.ToArray());
+        Assert(resetNameResponse.Err == 0, "resetting a custom hero name was rejected");
+        TResponse resetNamePush = resetNamePushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("name reset did not refresh hero data before its response");
+        Assert(resetNamePush.Ret is { Length: > 0 } &&
+            ContainsSequence(resetNamePush.Ret, new byte[] { 0x7A, 0x00 }),
+            "name reset did not explicitly clear the cached custom name");
+        PlayerAccount resetNameAccount = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("name reset account disappeared");
+        Assert(resetNameAccount.Dock.Heroes.Single(h => h.HeroId == 2).Name == "",
+            "custom name reset was not persisted");
 
         var lockArgs = new ProtocolPackage();
         lockArgs.Write(0x08, 2UL);
@@ -635,18 +1695,75 @@ static async Task HeroMutationIntegrationTest()
             ?? throw new InvalidDataException("unlock account disappeared");
         Assert(!unlocked.Dock.Heroes.Single(h => h.HeroId == 2).Lock, "unlock state was not persisted");
 
-        // A hero mutation refreshes the full dock. HeroGrid.Name is a custom nickname, not the
-        // handbook's Chinese display name; otherwise the JP client mixes Chinese and Japanese
-        // names after a ship is built or updated.
+        // The ring shop uses a retired event token in the JP config. Existing profiles must receive
+        // that client-side currency, and the purchased ring must be pushed before the Lua callback.
+        var buyRingArgs = new ProtocolPackage();
+        buyRingArgs.Write(0x08, 1072UL);
+        buyRingArgs.Write(0x10, 102021UL);
+        buyRingArgs.Write(0x18, 1UL);
+        var (buyRingResponse, buyRingPushes) =
+            await RoundTrip("shop.BuyGoods", buyRingArgs.ToArray());
+        Assert(buyRingResponse.Err == 0 && buyRingResponse.Ret is { Length: > 0 },
+            "oath ring purchase did not return a reward");
+        Assert(buyRingPushes.Any(p => p.Method == "bag.UpdateBagData"),
+            "oath ring purchase did not refresh inventory before its response");
+        PlayerAccount ringPurchased = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("ring purchase account disappeared");
+        Assert(ringPurchased.Bag?.Items.Single(i => i.TemplateId == 10180).Num == 1,
+            "purchased oath ring was not persisted");
+        Assert(ringPurchased.Bag?.Items.Single(i => i.TemplateId == 17553).Num == 99_999_999,
+            "retired-event currency required by the ring shop was not provisioned");
+
+        // A hero mutation refreshes the client cache before success. HeroGrid.Name is a custom
+        // nickname, not the handbook's Chinese display name, so JP/CN clients stay localized.
         var marryArgs = new ProtocolPackage();
         marryArgs.Write(0x08, 2UL);
         marryArgs.Write(0x10, 1UL);
-        var (_, marryPushes) = await RoundTrip("hero.Marry", marryArgs.ToArray());
+        var (marryResponse, marryPushes) = await RoundTrip("hero.Marry", marryArgs.ToArray());
+        Assert(marryResponse.Err == 0, "Blucher marriage was rejected");
         TResponse marryHeroPush = marryPushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
             ?? throw new InvalidDataException("marriage did not refresh hero data");
         Assert(marryHeroPush.Ret is { Length: > 0 } &&
             !ContainsSequence(marryHeroPush.Ret, Encoding.UTF8.GetBytes("奥克兰")),
             "hero update incorrectly sent the Chinese handbook name as a custom nickname");
+        TResponse marryBagPush = marryPushes.FirstOrDefault(p => p.Method == "bag.UpdateBagData")
+            ?? throw new InvalidDataException("marriage did not refresh ring inventory");
+        Assert(marryBagPush.Ret is { Length: > 0 } &&
+            ContainsSequence(marryBagPush.Ret, new byte[] { 0x08, 0xC4, 0x4F, 0x10, 0x00 }),
+            "marriage did not send an explicit zero-count ring deletion marker");
+        Assert(marryPushes.Any(p => p.Method == "user.UpdateUserInfo"),
+            "marriage did not refresh ring inventory and MarriedNum before its response");
+        PlayerAccount married = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("marriage account disappeared");
+        Assert(married.Dock.Heroes.Single(h => h.HeroId == 2).MarryTime > 0 &&
+            married.Bag?.Items.Single(i => i.TemplateId == 10180).Num == 0,
+            "marriage and ring deduction were not persisted atomically");
+
+        var noRingArgs = new ProtocolPackage();
+        noRingArgs.Write(0x08, 3UL);
+        noRingArgs.Write(0x10, 1UL);
+        var (noRingResponse, noRingPushes) = await RoundTrip("hero.Marry", noRingArgs.ToArray());
+        Assert(noRingResponse.Err != 0 && noRingPushes.Count == 0,
+            "marriage without an oath ring was reported as success");
+        PlayerAccount rejectedMarriage = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("rejected marriage account disappeared");
+        Assert(rejectedMarriage.Dock.Heroes.Single(h => h.HeroId == 3).MarryTime == 0 &&
+            rejectedMarriage.Character.MarriedNum == married.Character.MarriedNum,
+            "failed marriage changed persistent data");
+
+        var (secondRingResponse, _) = await RoundTrip("shop.BuyGoods", buyRingArgs.ToArray());
+        Assert(secondRingResponse.Err == 0, "second oath ring purchase was rejected");
+        var (secondMarryResponse, secondMarryPushes) =
+            await RoundTrip("hero.Marry", noRingArgs.ToArray());
+        Assert(secondMarryResponse.Err == 0 &&
+            secondMarryPushes.Any(p => p.Method == "hero.UpdateHeroBagData"),
+            "a second eligible ship could not be married after purchasing another ring");
+        PlayerAccount twiceMarried = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("second marriage account disappeared");
+        Assert(twiceMarried.Dock.Heroes.Single(h => h.HeroId == 3).MarryTime > 0 &&
+            twiceMarried.Character.MarriedNum == married.Character.MarriedNum + 1 &&
+            twiceMarried.Bag?.Items.Single(i => i.TemplateId == 10180).Num == 0,
+            "consecutive marriage state was not persisted correctly");
 
         // The shipped Lua protobuf runtime uses the proto2 unpacked representation for HeroIds.
         var retireArgs = new ProtocolPackage();

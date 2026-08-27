@@ -129,6 +129,54 @@ internal static class BuildShipExtractLoader
     }
 }
 
+/// <summary>传统舰船建造所需的配方、品质与舰船包配置。</summary>
+internal static class ConstructionConfigLoader
+{
+    private static readonly Dictionary<int, ConfigBuildFormula> _formulas = new();
+    private static readonly Dictionary<int, ConfigBuildQuality> _qualities = new();
+    private static readonly Dictionary<int, ConfigBuildShip> _ships = new();
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildFormula>(
+                         configDir, "config_build_formula.db"))
+                _formulas[id] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildQuality>(
+                         configDir, "config_build_quality.db"))
+                _qualities[id] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildShip>(
+                         configDir, "config_build_ship.db"))
+                _ships[id] = cfg;
+            Console.Error.WriteLine(
+                $"[Construction] loaded {_formulas.Count} formulas / {_qualities.Count} quality rows / {_ships.Count} ship packages");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Construction] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    internal static IReadOnlyDictionary<int, ConfigBuildFormula> Formulas => _formulas;
+    internal static IReadOnlyDictionary<int, ConfigBuildQuality> Qualities => _qualities;
+    internal static IReadOnlyDictionary<int, ConfigBuildShip> Ships => _ships;
+}
+
+/// <summary>加载可使用道具配置（宝箱 id → 掉落池 id）。</summary>
+internal static class ItemInfoLoader
+{
+    public static Dictionary<int, ConfigItemInfo> Load(string dataRoot)
+    {
+        var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+        return ConfigDbLoader.LoadAll<ConfigItemInfo>(configDir, "config_item_info.db");
+    }
+}
+
 internal static class ShipLevelupLoader
 {
     public static (Dictionary<int, int> ExpPerItem, Dictionary<int, int> ExpNeeded) Load(string configDir)
@@ -497,6 +545,8 @@ internal static class EquipLoader
     private static readonly Dictionary<int, ConfigEquip> _equips = new();
     private static readonly Dictionary<int, ConfigEquipEnhanceItem> _enhanceItems = new();
     private static readonly Dictionary<int, ConfigEquipEnhanceLevel> _enhanceLevels = new();
+    private static readonly Dictionary<int, ConfigEquipEnhanceLevelUr> _enhanceLevelsUr = new();
+    private static readonly Dictionary<int, ConfigEquipLevelbreakItem> _levelbreakItems = new();
     private static readonly Dictionary<int, ConfigEquipEnhanceRenovate> _renovateLevels = new();
     private static bool _loaded;
 
@@ -512,6 +562,10 @@ internal static class EquipLoader
                 _enhanceItems[id] = cfg;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceLevel>(configDir, "config_equip_enhance_level.db"))
                 _enhanceLevels[id] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceLevelUr>(configDir, "config_equip_enhance_level_ur.db"))
+                _enhanceLevelsUr[checked((int)cfg.EnchanceLevel)] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipLevelbreakItem>(configDir, "config_equip_levelbreak_item.db"))
+                _levelbreakItems[id] = cfg;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceRenovate>(configDir, "config_equip_enhance_renovate.db"))
                 _renovateLevels[id] = cfg;
         }
@@ -525,6 +579,10 @@ internal static class EquipLoader
         => _enhanceItems.TryGetValue(id, out var cfg) ? cfg : null;
     public static ConfigEquipEnhanceLevel? GetEnhanceLevel(int level)
         => _enhanceLevels.TryGetValue(level, out var cfg) ? cfg : null;
+    public static ConfigEquipEnhanceLevelUr? GetEnhanceLevelUr(int level)
+        => _enhanceLevelsUr.TryGetValue(level, out var cfg) ? cfg : null;
+    public static ConfigEquipLevelbreakItem? GetLevelbreakItem(int type)
+        => _levelbreakItems.TryGetValue(type, out var cfg) ? cfg : null;
     public static ConfigEquipEnhanceRenovate? GetRenovateLevel(int level)
         => _renovateLevels.TryGetValue(level, out var cfg) ? cfg : null;
 }
@@ -553,10 +611,51 @@ internal static class AffectionItemLoader
     public static IReadOnlyDictionary<int, ConfigAffectionItem> All => _items;
 }
 
+/// <summary>舰船改造节点与阶段配置。</summary>
+internal static class RemouldConfigLoader
+{
+    private static readonly Dictionary<int, ConfigShipRemouldEffect> _effects = new();
+    private static readonly Dictionary<int, ConfigShipRemouldTemplate> _templates = new();
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _effects.Clear();
+            _templates.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigShipRemouldEffect>(
+                         configDir, "config_ship_remould_effect.db"))
+                _effects[id] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigShipRemouldTemplate>(
+                         configDir, "config_ship_remould_template.db"))
+                _templates[id] = cfg;
+            Console.Error.WriteLine(
+                $"[Remould] loaded {_effects.Count} effects / {_templates.Count} stages from {configDir}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Remould] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    public static ConfigShipRemouldEffect? GetEffect(int id)
+        => _effects.TryGetValue(id, out var cfg) ? cfg : null;
+
+    public static ConfigShipRemouldTemplate? GetTemplate(int id)
+        => _templates.TryGetValue(id, out var cfg) ? cfg : null;
+
+    public static IReadOnlyDictionary<int, ConfigShipRemouldEffect> AllEffects => _effects;
+}
+
 internal static class ChapterCopyLoader
 {
     private static readonly Dictionary<int, List<int>> _chapterCopies = new();
     private static readonly Dictionary<int, int> _firstCopyMap = new();
+    private static readonly List<ChapterMemory> _allChapterMemories = [];
     private static readonly Dictionary<int, List<int>> _seaChapterCopies = new();
     private static int _seaFirstChapterId = 0;
     private static readonly Dictionary<int, int> _copyTypeMap = new();
@@ -578,7 +677,17 @@ internal static class ChapterCopyLoader
                     copies.Add(item.GetInt32());
                 if (copies.Count == 0) return;
                 var ct = classType.GetInt32();
-                if (ct == 1)
+                var plotType = doc.RootElement.TryGetProperty("chapter_plot_type", out var chapterPlotType)
+                    ? chapterPlotType.GetInt32()
+                    : 0;
+                var memoryId = doc.RootElement.TryGetProperty("memory_id", out var memory)
+                    ? memory.GetInt32()
+                    : 0;
+                if (memoryId > 0)
+                    _allChapterMemories.Add(new ChapterMemory(id, copies.Count));
+                // 番外/日常剧情由 chapter_plot_type 标记；限时活动剧情由 memory_id
+                // 收录进图鉴回顾。两者都可能使用 11/27/35/37 等非 1 class_type。
+                if (plotType > 0 || memoryId > 0)
                 {
                     _chapterCopies[id] = copies;
                     _firstCopyMap[id] = copies[0];
@@ -595,6 +704,10 @@ internal static class ChapterCopyLoader
                     }
                 }
             });
+            _allChapterMemories.Sort(static (left, right) => left.ChapterId.CompareTo(right.ChapterId));
+            Console.Error.WriteLine(
+                $"[ChapterCopy] loaded {_chapterCopies.Count} story chapters, " +
+                $"{_allChapterMemories.Count} archived activity chapters and {_seaChapterCopies.Count} sea chapters");
         }
         catch { }
         _loaded = true;
@@ -608,6 +721,9 @@ internal static class ChapterCopyLoader
 
     public static List<int> GetAllChapterIds()
         => [.. _chapterCopies.Keys.OrderBy(x => x)];
+
+    public static IReadOnlyList<ChapterMemory> AllChapterMemories
+        => _allChapterMemories;
 
     public static List<int> GetSeaLevels()
     {
@@ -627,6 +743,43 @@ internal static class ChapterCopyLoader
 
     public static int GetCopyType(int copyId)
         => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;
+}
+
+/// <summary>从个人剧情配置生成图鉴协议所需的完整 THeroMemory 列表。</summary>
+internal static class CharacterStoryLoader
+{
+    private static readonly List<HeroMemory> _allMemories = [];
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _allMemories.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildingCharacterStory>(
+                         configDir, "config_building_character_story.db"))
+            {
+                if (cfg.ShipFleetId <= 0 || id <= 0) continue;
+                // 客户端以 ship_fleet_id 分组，再用配置行 id 读取剧情封面和标题。
+                _allMemories.Add(new HeroMemory(checked((uint)cfg.ShipFleetId), id));
+            }
+            _allMemories.Sort(static (left, right) =>
+            {
+                var heroOrder = left.HeroId.CompareTo(right.HeroId);
+                return heroOrder != 0 ? heroOrder : left.PlotId.CompareTo(right.PlotId);
+            });
+            Console.Error.WriteLine($"[CharacterStory] loaded {_allMemories.Count} personal stories from {configDir}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[CharacterStory] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    public static IReadOnlyList<HeroMemory> AllMemories => _allMemories;
 }
 
 internal static class ShipHandbookLoader
@@ -728,4 +881,96 @@ internal static class PlotTriggerLoader
     }
 
     public static IReadOnlyList<int> AllPlotIds => _allPlotIds;
+}
+
+/// <summary>基地建造所需的建筑、地块、等级与工人体力配置。</summary>
+internal static class BuildingConfigLoader
+{
+    private static Dictionary<int, ConfigBuildinginfo> _infos = [];
+    private static Dictionary<int, ConfigBuilding> _lands = [];
+    private static Dictionary<int, ConfigBuildinglevelup> _levelUps = [];
+    private static ConfigWorker? _worker;
+    private static bool _loaded;
+
+    internal static IReadOnlyDictionary<int, ConfigBuildinginfo> Infos => _infos;
+    internal static IReadOnlyDictionary<int, ConfigBuilding> Lands => _lands;
+    internal static IReadOnlyList<int> MaterialTemplateIds { get; private set; } = [];
+
+    internal static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _infos = ConfigDbLoader.LoadAll<ConfigBuildinginfo>(configDir, "config_buildinginfo.db");
+            _lands = ConfigDbLoader.LoadAll<ConfigBuilding>(configDir, "config_building.db");
+            _levelUps = ConfigDbLoader.LoadAll<ConfigBuildinglevelup>(configDir, "config_buildinglevelup.db");
+            MaterialTemplateIds = _levelUps.Values
+                .SelectMany(GetMaterialTemplateIds)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+            _worker = ConfigDbLoader.LoadAll<ConfigWorker>(configDir, "config_worker.db")
+                .Values.FirstOrDefault();
+            Console.Error.WriteLine(
+                $"[Building] loaded {_infos.Count} buildings / {_lands.Count} lands / " +
+                $"{_levelUps.Count} levels / {MaterialTemplateIds.Count} materials");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Building] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    internal static ConfigBuildinginfo? GetInfo(int tid) =>
+        _infos.TryGetValue(tid, out ConfigBuildinginfo? value) ? value : null;
+
+    internal static ConfigBuilding? GetLand(int index) =>
+        _lands.TryGetValue(index, out ConfigBuilding? value) ? value : null;
+
+    internal static ConfigBuildinglevelup? GetLevelUp(int tid) =>
+        _levelUps.TryGetValue(tid, out ConfigBuildinglevelup? value) ? value : null;
+
+    internal static ConfigBuildinginfo? GetInfo(int type, int level) =>
+        _infos.Values.FirstOrDefault(info => info.Type == type && info.Level == level);
+
+    internal static int GetMaxWorkerStrength(int officeLevel)
+    {
+        if (_worker is null) return 100;
+        long max = _worker.Workerhpmax;
+        IReadOnlyList<long> levels = _worker.Workerhplevelup ?? [];
+        for (int i = 0; i < Math.Min(officeLevel, levels.Count); i++) max += levels[i];
+        return checked((int)max);
+    }
+
+    private static IEnumerable<int> GetMaterialTemplateIds(ConfigBuildinglevelup level)
+    {
+        int raw1 = GetItemTemplateId(level.Rawmaterial1);
+        int raw2 = GetItemTemplateId(level.Rawmaterial2);
+        int raw3 = GetItemTemplateId(level.Rawmaterial3);
+        if (raw1 > 0) yield return raw1;
+        if (raw2 > 0) yield return raw2;
+        if (raw3 > 0) yield return raw3;
+    }
+
+    // 建筑物资配置格式为 [资源类型, 模板 ID, 数量]，资源类型 1 表示仓库道具。
+    private static int GetItemTemplateId(IReadOnlyList<long>? material) =>
+        material is { Count: >= 3 } && material[0] == 1
+            ? checked((int)material[1])
+            : 0;
+
+    private static int GetItemTemplateId(IReadOnlyList<object>? material)
+    {
+        if (material is not { Count: >= 3 }) return 0;
+        static bool TryInt64(object value, out long result)
+        {
+            if (value is System.Text.Json.JsonElement json && json.TryGetInt64(out result)) return true;
+            return long.TryParse(Convert.ToString(value), out result);
+        }
+        return TryInt64(material[0], out long type) && type == 1 &&
+            TryInt64(material[1], out long templateId)
+                ? checked((int)templateId)
+                : 0;
+    }
 }

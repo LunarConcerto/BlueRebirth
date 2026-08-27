@@ -20,12 +20,40 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     PostPushes = await services.BuildPostEquipPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct),
                 };
                 break;
-            case "hero.Marry":
             case "hero.AddExp":
-                byte[] ret = request.Method == "hero.AddExp" ?
-                    await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct) :
+                result = await UpdateHero(ctx,
+                    await hero.BuildAddExpRetAsync(request, ctx.ProfileId, ctx.Ct));
+                break;
+            case "hero.Marry":
+                HeroService.MarryResult marry =
                     await hero.BuildMarryRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
-                result = await UpdateHero(ctx, ret);
+                if (!marry.Changed || marry.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = marry.Ret,
+                        Err = 1,
+                        ErrMsg = marry.Error,
+                    };
+                    break;
+                }
+                PlayerAccount marryAccount = await ctx.GetAccountAsync();
+                uint marryNow = (uint)ctx.Now;
+                result = new ModuleResult
+                {
+                    Ret = marry.Ret,
+                    // MarrySuccess 会立即读取 HeroData、BagData 和 MarriedNum。
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(
+                                [GameServices.ToHeroGrid(marry.UpdatedHero)], marryAccount.Dock.BagSize)),
+                            Time: marryNow)),
+                        services.BuildBagPush(marryAccount, marryNow),
+                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, marryNow, ctx.Ct),
+                    ],
+                };
                 break;
             case "hero.LockHero":
                 byte[] lockRet = await hero.BuildLockHeroRetAsync(request, ctx.ProfileId, ctx.Ct);
@@ -78,7 +106,32 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 };
                 break;
             case "hero.ChangeName":
-                result = ModuleResult.Ok(await hero.BuildChangeNameRetAsync(request, ctx.ProfileId, ctx.Ct));
+                HeroService.ChangeNameResult rename =
+                    await hero.BuildChangeNameRetAsync(request, ctx.ProfileId, ctx.Now, ctx.Ct);
+                if (!rename.Changed || rename.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = rename.Ret,
+                        Err = 1,
+                        ErrMsg = rename.Error,
+                    };
+                    break;
+                }
+                PlayerAccount renameAccount = await ctx.GetAccountAsync();
+                result = new ModuleResult
+                {
+                    Ret = rename.Ret,
+                    // ChangeNameSuccess 会立刻从 HeroData 读取名称，必须先刷新客户端缓存。
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(
+                                [GameServices.ToHeroGrid(rename.UpdatedHero)], renameAccount.Dock.BagSize)),
+                            Time: (uint)ctx.Now)),
+                    ],
+                };
                 break;
             case "hero.AddAffection":
                 HeroService.AddAffectionResult affection =
@@ -148,13 +201,43 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     PrePushes = BuildHeroBagPushes(skillAccount, skillHeroes, (uint)ctx.Now),
                 };
                 break;
+            case "hero.HeroRemould":
+                HeroService.RemouldResult remould =
+                    await hero.BuildHeroRemouldRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (!remould.Changed || remould.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = remould.Ret,
+                        Err = 1,
+                        ErrMsg = remould.Error,
+                    };
+                    break;
+                }
+                PlayerAccount remouldAccount = await ctx.GetAccountAsync();
+                uint remouldNow = (uint)ctx.Now;
+                result = new ModuleResult
+                {
+                    Ret = remould.Ret,
+                    // Lua 成功回调会立即重读节点、技能、背包和货币，均需在应答前刷新。
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(
+                                [GameServices.ToHeroGrid(remould.UpdatedHero)], remouldAccount.Dock.BagSize)),
+                            Time: remouldNow)),
+                        services.BuildBagPush(remouldAccount, remouldNow),
+                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, remouldNow, ctx.Ct),
+                    ],
+                };
+                break;
             case "hero.HeroIntensify":
             case "hero.HeroAdvanceMUB":
             case "hero.AutoEquip":
             case "hero.AutoUnEquip":
             case "hero.HeroAdvMaxLv":
             case "hero.HeroEquipEffect":
-            case "hero.HeroRemould":
             case "hero.EquipBinding":
             case "hero.EquipUnBinding":
             case "hero.EquipLockTransplant":
