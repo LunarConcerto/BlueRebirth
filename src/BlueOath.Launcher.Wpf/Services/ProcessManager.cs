@@ -523,6 +523,7 @@ public class ProcessManager
     private async Task<int> StartServer(string serverDll, string dataRoot, string traffic,
         int gameLoginPort, int gmPort, string profileId, string profileName, CancellationToken token)
     {
+        var args = $"\"{serverDll}\" --port=0 --region=jp \"--data={dataRoot}\" \"--client-path={ResolveClientPath()}\" \"--capture={traffic}\" --game-login-port={gameLoginPort} --gm-port={gmPort}";
         var psi = new ProcessStartInfo("dotnet")
         {
             UseShellExecute = false,

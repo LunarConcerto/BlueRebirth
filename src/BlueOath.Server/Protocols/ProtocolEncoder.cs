@@ -465,18 +465,21 @@ internal static class ProtocolEncoder
         {
             if (shipInfoId <= 0 || !vcrSent.Add(shipInfoId)) return;
             ProtocolPackage sv = new();
-            sv.Write(0x08, unchecked((ulong)shipInfoId));
-            if (isSearch3d)
+            sv.Write(0x08, unchecked((ulong)shipInfoId)); // ShipInfoId(1)
+            if (isSeaCopy)
             {
-                sv.Write(0x10, 1UL); // StartVcr(2)=true
-                sv.Write(0x18, 1UL); // EndVcr(3)=true
+                sv.Write(0x10, 1UL); // StartVcr(2)=true（海域跳进场演出）
+                sv.Write(0x18, 1UL); // EndVcr(3)=true（海域跳沉没演出）
             }
+
             byte[] svb = sv.ToArray();
             ms.Write(0x8A, svb);
         }
 
+        // 玩家战船（非 NPC 类型本就默认跳过；下发无妨）
         foreach (Hero dh in deploy)
-            EmitVcr(checked((dh.TemplateId - 1) / 10));
+            EmitVcr(checked((int)((dh.TemplateId - 1) / 10)));
+        // 敌舰（关键）：必须在其 si_id 才能匹配跳过
         foreach (int fid in fleetIdList)
             foreach (int enemyId in CopyBattleLoader.GetEnemyIds(fid))
                 if (CopyBattleLoader.GetEnemyStat(enemyId) is { } est && est.ShipInfoId > 0)

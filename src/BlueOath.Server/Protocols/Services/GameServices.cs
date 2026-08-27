@@ -58,21 +58,7 @@ internal sealed class GameServices
         FashionConfigLoader.Load(configDir);
         var gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         FashionShopCatalog fashionShopCatalog = FashionShopGoodsLoader.Load(configDir);
-        // gm-goods.json 的旧生成器无法得知时装货架，曾把部分时装默认放入 shop 1。
-        // 用 config_shop.shelf_list 重建 23/29 的完整目录，并替换旧目录项；
-        // 其他活动商店中的时装不受影响。
-        _gmGoods = fashionShopCatalog.Goods.Count == 0
-            ? gmGoods
-            : gmGoods with
-            {
-                Goods = gmGoods.Goods
-                    .Where(goods => !ShouldReplaceFashionCatalogGood(
-                        goods, fashionShopCatalog.ShelfGoodIds))
-                    .Concat(fashionShopCatalog.Goods)
-                    .ToList(),
-            };
-        _gmGoods = EquipmentModLoader.MergeGoods(
-            _gmGoods, equipmentMods, message => _logger.LogWarning("{Message}", message));
+        _gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
@@ -93,14 +79,6 @@ internal sealed class GameServices
         PlotTriggerLoader.Load(configDir);
         CharacterStoryLoader.Load(configDir);
         RemouldConfigLoader.Load(configDir);
-    }
-
-    private static bool ShouldReplaceFashionCatalogGood(
-        GmGoodConfig goods, IReadOnlySet<int> shelfGoodIds)
-    {
-        if (goods.Type != GoodsTypeFashion) return false;
-        // shop 1 中的时装是旧生成器的无归属占位项；23/29 则全部由当前货架重建。
-        return goods.ShopId is 1 or 23 or 29 || shelfGoodIds.Contains(goods.GoodId);
     }
 
     /// <summary>文件日志（game-login.log）供各模块记录帧级诊断。</summary>
