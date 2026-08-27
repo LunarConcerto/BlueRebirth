@@ -2,25 +2,33 @@
 
 ## 1) 启动器版本号更新机制
 
-启动器版本号由 `src/BlueOath.Launcher.Wpf` 的 MSBuild 目标自动管理：
+启动器版本号由 `src/BlueOath.Launcher.Wpf` 的 MSBuild 目标按需管理：
 
 - 版本文件：`src/BlueOath.Launcher.Wpf/version.txt`
-- 生成目标：`src/BlueOath.Launcher.Wpf/BlueOath.Launcher.Wpf.csproj` 的 `GenerateVersion`
+- 递增目标：`IncrementLauncherVersion`（仅由发布器按需显式调用）
+- 生成目标：`GenerateVersion`
 - 输出常量：`src/BlueOath.Launcher.Wpf/VersionInfo.g.cs` 的 `VersionInfo.Version`
 
-更新流程如下（每次 `BeforeBuild`）：
+普通构建流程如下：
 
 1. 读取 `version.txt`，例如当前 `1.0.15`
-2. 按 `.` 拆分为 `Major.Minor.Build`
-3. `Build` 自增 `+1`
-4. 将新值写回 `version.txt`（副作用）
-5. 用新值生成 `VersionInfo.g.cs`
-6. 运行时与启动器 UI 显示为自增后的版本
+2. 用当前值生成 `VersionInfo.g.cs`
+3. 将当前值设置为程序集版本
+4. 不修改 `version.txt`
+
+正式发版需要递增版本时，给发布器显式传入参数：
+
+```powershell
+dotnet run --project src\BlueOath.Publisher\BlueOath.Publisher.csproj -- --increment-version --output "D:\tmp\release\BlueOath-Release" --configuration Release
+```
+
+发布器先单独调用一次 `IncrementLauncherVersion`，将修订号递增一次并写回 `version.txt`，随后执行普通发布；`GenerateVersion` 使用新版本生成代码和程序集信息。递增目标不挂在常规构建链上，避免带 RID 的多阶段构建重复递增。
 
 ### 关键说明
 
-- 该机制是“自增型”，只要构建就会改文件，适合本地构建场景，但会产生未提交文件变更。
-- 需要人工固定版本时，建议直接先编辑 `version.txt` 到目标基准版本，再触发一次构建。
+- `dotnet build`、`dotnet test` 和不带 `--increment-version` 的发布均不会更改版本号。
+- `--increment-version` 每调用一次就递增一次，发版失败后重试时不要重复传入，除非确实需要再次升版。
+- `version.txt` 是唯一版本源；`VersionInfo.g.cs` 是供 C# 代码读取的生成文件。
 
 ## 2) CI 触发机制
 

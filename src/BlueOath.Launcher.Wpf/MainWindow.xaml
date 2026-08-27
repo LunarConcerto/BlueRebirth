@@ -21,6 +21,9 @@
         <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
             <views:SettingsPage />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:AccountsViewModel}">
+            <views:AccountsPage />
+        </DataTemplate>
     </Window.Resources>
 
     <Grid>
@@ -61,6 +64,13 @@
                             CommandParameter="1"
                             Margin="0,0,4,0" />
                     <Button Content="设置"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Height="30"
+                            FontSize="12"
+                            Command="{Binding NavigateToPageCommand}"
+                            CommandParameter="3"
+                            Margin="0,0,4,0" />
+                    <Button Content="账号"
                             Style="{StaticResource SecondaryButtonStyle}"
                             Height="30"
                             FontSize="12"

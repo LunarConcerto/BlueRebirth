@@ -60,41 +60,67 @@ internal static class GmGoodsConfigLoader
     }
 }
 
+internal sealed record FashionShopCatalog(
+    IReadOnlyList<GmGoodConfig> Goods,
+    IReadOnlySet<int> ShelfGoodIds);
+
 /// <summary>
-/// 从客户端配置补齐时装商店商品。gm-goods.json 未覆盖全部限时时装，
-/// 其中大破时装全部带 period_buy，因此历史生成结果会让 shop 29 始终为空。
-/// 每个 FashionTid 选一个可见商品，避免同一时装的历史复刻商品重复出现。
+/// 从客户端货架配置重建精选换装（23）和大破换装（29）商品。
+/// config_fashion.shop_id 含有旧版单商店时期的遗留值；当前分栏应以
+/// config_shop.shelf_list 为准。每个商店内每个 FashionTid 只保留一个商品，
+/// 避免同一时装的历史复刻商品重复出现。
 /// </summary>
 internal static class FashionShopGoodsLoader
 {
-    public static IReadOnlyList<GmGoodConfig> Load(
-        string configDir, IReadOnlyList<GmGoodConfig> existingGoods)
+    private static readonly int[] FashionShopIds = [23, 29];
+
+    public static FashionShopCatalog Load(string configDir)
     {
         try
         {
-            Dictionary<int, ConfigShopGoods> configs =
+            Dictionary<int, ConfigShopGoods> goodsConfigs =
                 ConfigDbLoader.LoadAll<ConfigShopGoods>(configDir, "config_shop_goods.db");
-            var existingFashionIds = existingGoods
-                .Where(g => g.Type == GameServices.GoodsTypeFashion)
-                .Select(g => g.ItemId)
-                .ToHashSet();
-            var usedGoodIds = existingGoods.Select(g => g.GoodId).ToHashSet();
+            Dictionary<int, ConfigShop> shopConfigs =
+                ConfigDbLoader.LoadAll<ConfigShop>(configDir, "config_shop.db");
+            var shopByGoodId = new Dictionary<int, int>();
+            foreach (int shopId in FashionShopIds)
+            {
+                if (!shopConfigs.TryGetValue(shopId, out ConfigShop? shop))
+                    throw new InvalidDataException($"fashion shop {shopId} is missing from config_shop.db");
+                foreach (long rawGoodId in shop.ShelfList ?? [])
+                {
+                    int goodId = checked((int)rawGoodId);
+                    if (shopByGoodId.TryGetValue(goodId, out int otherShopId) && otherShopId != shopId)
+                        throw new InvalidDataException(
+                            $"fashion good {goodId} belongs to both shop {otherShopId} and {shopId}");
+                    shopByGoodId[goodId] = shopId;
+                }
+            }
 
-            var result = configs
-                .Where(kv => !usedGoodIds.Contains(kv.Key))
-                .Where(kv => kv.Value.GoodsVisible == 1 &&
-                             kv.Value.Goods is { Count: >= 2 } goods &&
-                             goods[0] == GameServices.GoodsTypeFashion &&
-                             FashionConfigLoader.FashionShopIdMap.ContainsKey(checked((int)goods[1])))
+            var candidates = shopByGoodId
+                .Where(kv => goodsConfigs.ContainsKey(kv.Key))
                 .Select(kv => new
                 {
                     GoodId = kv.Key,
-                    Config = kv.Value,
-                    FashionId = checked((int)kv.Value.Goods![1]),
-                    Num = kv.Value.Goods!.Count >= 3 ? checked((int)kv.Value.Goods[2]) : 1,
+                    ShopId = kv.Value,
+                    Config = goodsConfigs[kv.Key],
                 })
-                .Where(x => !existingFashionIds.Contains(x.FashionId))
-                .GroupBy(x => x.FashionId)
+                .Where(x => x.Config.GoodsVisible == 1 &&
+                            x.Config.Goods is { Count: >= 2 } goods &&
+                            goods[0] == GameServices.GoodsTypeFashion &&
+                            FashionConfigLoader.FashionSfIdMap.ContainsKey(checked((int)goods[1])))
+                .Select(x => new
+                {
+                    x.GoodId,
+                    x.ShopId,
+                    x.Config,
+                    FashionId = checked((int)x.Config.Goods![1]),
+                    Num = x.Config.Goods!.Count >= 3 ? checked((int)x.Config.Goods[2]) : 1,
+                })
+                .ToList();
+
+            var result = candidates
+                .GroupBy(x => (x.ShopId, x.FashionId))
                 // 无期限商品优先；只有限时复刻时选最新的一条。
                 .Select(group => group
                     .OrderByDescending(x => x.Config.PeriodBuy is not { Count: > 0 })
@@ -102,20 +128,23 @@ internal static class FashionShopGoodsLoader
                     .First())
                 .Select(x => new GmGoodConfig(
                     x.GoodId,
-                    FashionConfigLoader.FashionShopIdMap[x.FashionId],
+                    x.ShopId,
                     GameServices.GoodsTypeFashion,
                     x.FashionId,
                     Math.Max(1, x.Num)))
                 .OrderBy(x => x.ShopId)
                 .ThenBy(x => x.GoodId)
                 .ToList();
-            Console.Error.WriteLine($"[fashion-shop] supplemented {result.Count} catalog goods");
-            return result;
+            int ignoredShelfGoods = shopByGoodId.Count - candidates.Count;
+            Console.Error.WriteLine(
+                $"[fashion-shop] cataloged {result.Count} fashions from {shopByGoodId.Count} shelf goods" +
+                (ignoredShelfGoods == 0 ? "" : $"; ignored {ignoredShelfGoods} invalid shelf goods"));
+            return new FashionShopCatalog(result, shopByGoodId.Keys.ToHashSet());
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[fashion-shop] failed to load goods: {ex.Message}");
-            return [];
+            return new FashionShopCatalog([], new HashSet<int>());
         }
     }
 }
@@ -713,7 +742,9 @@ internal static class RemouldConfigLoader
     private static readonly Dictionary<int, ConfigShipRemouldTemplate> _templates = new();
     private static bool _loaded;
 
-    public static void Load(string configDir)
+    public static void Load(
+        string configDir,
+        IReadOnlyList<EquipmentModDefinition>? modEquipment = null)
     {
         if (_loaded) return;
         try
@@ -935,7 +966,6 @@ internal static class FashionConfigLoader
 {
     private static readonly List<FashionEntry> _allFashion = [];
     private static readonly Dictionary<int, int> _fashionSfIdMap = new();
-    private static readonly Dictionary<int, int> _fashionShopIdMap = new();
     private static bool _loaded;
 
     /// <summary>已按 SfId 分组的全部时装条目（登录/login-push 用）。</summary>
@@ -943,9 +973,6 @@ internal static class FashionConfigLoader
 
     /// <summary>FashionTid → SfId（belong_to_ship）全量映射。</summary>
     public static IReadOnlyDictionary<int, int> FashionSfIdMap => _fashionSfIdMap;
-
-    /// <summary>FashionTid → 实际售卖商店（config_fashion.shop_id）映射。</summary>
-    public static IReadOnlyDictionary<int, int> FashionShopIdMap => _fashionShopIdMap;
 
     public static void Load(string configDir)
     {
@@ -961,8 +988,6 @@ internal static class FashionConfigLoader
                         entries[sfId] = list = [];
                     if (!list.Contains(id)) list.Add(id);
                     _fashionSfIdMap[id] = sfId;
-                    if (cfg.ShopId > 0)
-                        _fashionShopIdMap[id] = checked((int)cfg.ShopId);
                 });
             foreach (var (sfId, tids) in entries.OrderBy(kv => kv.Key))
                 _allFashion.Add(new FashionEntry(sfId, tids.OrderBy(x => x).ToList()));

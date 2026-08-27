@@ -1,0 +1,9 @@
+{
+  "id": "fashion-preview-fix.mod",
+  "version": "1.1.0",
+  "entry": "main.lua",
+  "targetClients": ["jp-1.4.0"],
+  "dependencies": [],
+  "loadOrder": 60,
+  "enabled": true
+}

@@ -312,7 +312,8 @@ public class ProcessManager
             {
                 Stage = ProcessStage.StartingServer;
                 LogSystem("正在启动本地服务器...");
-                serverPort = await StartServer(serverDll, dataRoot, traffic, config.GameLoginPort, gmPort, token);
+                serverPort = await StartServer(serverDll, dataRoot, traffic, config.GameLoginPort, gmPort,
+                    config.ProfileId, token);
                 if (serverPort < 0)
                 {
                     LogError("服务器启动失败。");
@@ -520,12 +521,10 @@ public class ProcessManager
     }
 
     private async Task<int> StartServer(string serverDll, string dataRoot, string traffic,
-        int gameLoginPort, int gmPort, CancellationToken token)
+        int gameLoginPort, int gmPort, string profileId, CancellationToken token)
     {
-        var args = $"\"{serverDll}\" --port=0 --region=jp \"--data={dataRoot}\" \"--client-path={ResolveClientPath()}\" \"--capture={traffic}\" --game-login-port={gameLoginPort} --gm-port={gmPort}";
         var psi = new ProcessStartInfo("dotnet")
         {
-            Arguments = args,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
@@ -534,6 +533,15 @@ public class ProcessManager
             StandardOutputEncoding = System.Text.Encoding.UTF8,
             StandardErrorEncoding = System.Text.Encoding.UTF8
         };
+        psi.ArgumentList.Add(serverDll);
+        psi.ArgumentList.Add("--port=0");
+        psi.ArgumentList.Add("--region=jp");
+        psi.ArgumentList.Add("--data=" + dataRoot);
+        psi.ArgumentList.Add("--client-path=" + ResolveClientPath());
+        psi.ArgumentList.Add("--capture=" + traffic);
+        psi.ArgumentList.Add("--game-login-port=" + gameLoginPort);
+        psi.ArgumentList.Add("--gm-port=" + gmPort);
+        psi.ArgumentList.Add("--profile-id=" + profileId);
 
         _serverProcess = Process.Start(psi);
         if (_serverProcess is null) return -1;

@@ -1,4 +1,5 @@
 using BlueOath.Protocol;
+using BlueOath.Core;
 
 namespace BlueOath.Server;
 
@@ -16,7 +17,8 @@ internal sealed record ServerOptions(
     bool TlsMaterialOnly,
     int? GameLoginPort,
     int? KcpGameLoginPort,
-    int? GmPort)
+    int? GmPort,
+    string ProfileId)
 {
     /// <summary>解析命令行参数；未显式指定的项使用默认值（JP 服、临时端口、本地 data 目录）。</summary>
     public static ServerOptions Parse(string[] args)
@@ -32,6 +34,7 @@ internal sealed record ServerOptions(
         int? gameLoginPort = null;
         int? kcpGameLoginPort = null;
         int? gmPort = null;
+        var profileId = PlayerAccountFactory.DefaultProfileId;
 
         foreach (var arg in args)
         {
@@ -61,9 +64,20 @@ internal sealed record ServerOptions(
             else if (arg.StartsWith("--gm-port=", StringComparison.OrdinalIgnoreCase) &&
                 int.TryParse(arg[10..], out var parsedGmPort) && parsedGmPort is >= 0 and <= 65535)
                 gmPort = parsedGmPort;
+            else if (arg.StartsWith("--profile-id=", StringComparison.OrdinalIgnoreCase))
+                profileId = NormalizeProfileId(arg[13..]);
         }
 
         return new ServerOptions(port, profile, dataRoot, clientPath, enableTls, tlsOutputRoot, captureRoot,
-            tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort);
+            tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort, profileId);
+    }
+
+    private static string NormalizeProfileId(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return PlayerAccountFactory.DefaultProfileId;
+        string normalized = new(value.Trim().Where(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.').ToArray());
+        if (normalized.Length == 0) return PlayerAccountFactory.DefaultProfileId;
+        return normalized.Length <= 64 ? normalized : normalized[..64];
     }
 }

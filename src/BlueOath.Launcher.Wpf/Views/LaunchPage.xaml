@@ -130,6 +130,19 @@
                 </StackPanel>
 
                 <StackPanel Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,12">
+                        <TextBlock Text="账号" FontSize="13" Foreground="{StaticResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <ComboBox Width="170" ItemsSource="{Binding Accounts}"
+                                  SelectedItem="{Binding ActiveAccount}"
+                                  DisplayMemberPath="Name"
+                                  Style="{StaticResource SettingComboBoxStyle}"
+                                  IsEnabled="{Binding IsLaunching, Converter={StaticResource BooleanInvertConverter}}" />
+                        <Button Content="管理" Style="{StaticResource SecondaryButtonStyle}"
+                                Height="32" FontSize="12" Padding="12,0" Margin="8,0,0,0"
+                                Command="{Binding ManageAccountsCommand}" />
+                    </StackPanel>
+
                     <Button Content="启动游戏"
                             Style="{StaticResource PrimaryLaunchButtonStyle}"
                             Command="{Binding LaunchCommand}"

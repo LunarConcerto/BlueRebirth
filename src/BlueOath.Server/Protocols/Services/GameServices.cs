@@ -25,6 +25,7 @@ internal sealed class GameServices
     private readonly SqliteGameRepository _repo;
     private readonly ILogger _logger;
     private readonly ILogger _fileLogger;
+    private readonly string _defaultProfileId;
     private readonly GmGoodsConfig _gmGoods;
     private readonly Dictionary<int, GmGoodConfig> _gmGoodsMap;
     private readonly Dictionary<int, int> _fashionSfIdMap;
@@ -44,6 +45,7 @@ internal sealed class GameServices
         _repo = repo;
         _logger = loggerFactory.CreateLogger<GameServices>();
         _fileLogger = loggerFactory.CreateLogger(Infrastructure.GameLoginFileLoggerProvider.Category);
+        _defaultProfileId = options.ProfileId;
         // 游戏客户端配置目录直接来自启动参数 --client-path（不再从 dataRoot 向上逐级查找）。
         string configDir = ConfigDbLoader.BuildConfigDir(options.ClientPath);
         string clientId = options.Profile.Region == ClientRegion.Japan
@@ -53,18 +55,20 @@ internal sealed class GameServices
             EquipmentModLoader.ResolveModsRoot(options.ClientPath), clientId);
         FashionConfigLoader.Load(configDir);
         var gmGoods = GmGoodsConfigLoader.Load(options.DataRoot);
-        IReadOnlyList<GmGoodConfig> supplementalFashionGoods =
-            FashionShopGoodsLoader.Load(configDir, gmGoods.Goods);
-        // gm-goods.json 由 config_shop_goods 生成，而该表不记录时装所属商店。
-        // 历史生成器因此把时装默认放到了 shop 1，导致客户端的精选时装
-        // (23) 和大破时装 (29) 分类收到空列表。以 config_fashion.shop_id 为准
-        // 修正路由，同一份配置同时用于列表下发和购买校验。
-        _gmGoods = gmGoods with
-        {
-            Goods = gmGoods.Goods.Concat(supplementalFashionGoods)
-                .Select(RouteFashionGoodsToConfiguredShop)
-                .ToList(),
-        };
+        FashionShopCatalog fashionShopCatalog = FashionShopGoodsLoader.Load(configDir);
+        // gm-goods.json 的旧生成器无法得知时装货架，曾把部分时装默认放入 shop 1。
+        // 用 config_shop.shelf_list 重建 23/29 的完整目录，并替换旧目录项；
+        // 其他活动商店中的时装不受影响。
+        _gmGoods = fashionShopCatalog.Goods.Count == 0
+            ? gmGoods
+            : gmGoods with
+            {
+                Goods = gmGoods.Goods
+                    .Where(goods => !ShouldReplaceFashionCatalogGood(
+                        goods, fashionShopCatalog.ShelfGoodIds))
+                    .Concat(fashionShopCatalog.Goods)
+                    .ToList(),
+            };
         _gmGoods = EquipmentModLoader.MergeGoods(
             _gmGoods, equipmentMods, message => _logger.LogWarning("{Message}", message));
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
@@ -89,12 +93,12 @@ internal sealed class GameServices
         RemouldConfigLoader.Load(configDir);
     }
 
-    private static GmGoodConfig RouteFashionGoodsToConfiguredShop(GmGoodConfig goods)
+    private static bool ShouldReplaceFashionCatalogGood(
+        GmGoodConfig goods, IReadOnlySet<int> shelfGoodIds)
     {
-        if (goods.Type == GoodsTypeFashion &&
-            FashionConfigLoader.FashionShopIdMap.TryGetValue(goods.ItemId, out int shopId))
-            return goods with { ShopId = shopId };
-        return goods;
+        if (goods.Type != GoodsTypeFashion) return false;
+        // shop 1 中的时装是旧生成器的无归属占位项；23/29 则全部由当前货架重建。
+        return goods.ShopId is 1 or 23 or 29 || shelfGoodIds.Contains(goods.GoodId);
     }
 
     /// <summary>文件日志（game-login.log）供各模块记录帧级诊断。</summary>
@@ -157,7 +161,7 @@ internal sealed class GameServices
     public async Task<LoginPayload> BuildLoginPayloadAsync(byte[] payload, CancellationToken ct)
     {
         var request = GameLoginCodec.DecodeLogin(payload);
-        var profileId = string.IsNullOrWhiteSpace(request.Pid) ? PlayerAccountFactory.DefaultProfileId : request.Pid;
+        var profileId = string.IsNullOrWhiteSpace(request.Pid) ? _defaultProfileId : request.Pid;
         _logger.LogInformation("game-login login pid={ProfileId}", profileId);
         if (await _repo.LoadAsync(profileId, ct) is null)
             await _repo.CreateAsync(profileId, profileId, ct);
@@ -169,9 +173,9 @@ internal sealed class GameServices
     public string ResolveLoginProfileId(TRequest request)
     {
         if (request.Args is null)
-            return PlayerAccountFactory.DefaultProfileId;
+            return _defaultProfileId;
         var login = GameLoginCodec.DecodeLogin(request.Args);
-        return string.IsNullOrWhiteSpace(login.Pid) ? PlayerAccountFactory.DefaultProfileId : login.Pid;
+        return string.IsNullOrWhiteSpace(login.Pid) ? _defaultProfileId : login.Pid;
     }
 
     public async Task<byte[]> BuildUpdateUserInfoPushAsync(string profileId, uint now, CancellationToken ct)

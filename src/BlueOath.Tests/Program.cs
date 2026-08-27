@@ -3,6 +3,8 @@ using BlueOath.Mods;
 using BlueOath.Protocol;
 using BlueOath.Server.Protocols;
 using BlueOath.Server.Configs;
+using BlueOath.Server;
+using BlueOath.Server.Hosting;
 using BlueOath.Storage;
 using System.Diagnostics;
 using System.Net;
@@ -14,6 +16,7 @@ var tests = new (string Name, Func<Task> Run)[]
 {
     ("frame codec handles fragmented input", FrameCodecTest),
     ("real login protobuf payload round-trips", LoginProtobufTest),
+    ("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest),
     ("client login wire envelope round-trips", ClientLoginWireTest),
     ("temporary game login frame round-trips", GameLoginFrameTest),
     ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
@@ -32,6 +35,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("game service resolves deterministic battle", GameTest),
     ("mod manager filters target and orders mods", ModTest),
     ("equipment mod adds a client/server template and GM shop good", EquipmentModTest),
+    ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
     ("kcp fragments reassemble across sticky and split buffers", KcpReassemblyTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
 };
@@ -91,6 +95,8 @@ if (args.Contains("--building-integration", StringComparer.OrdinalIgnoreCase))
         ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
         ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest)
     ];
+if (args.Contains("--fashion-preview-mod", StringComparer.OrdinalIgnoreCase))
+    tests = [("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest)];
 if (args.Contains("--login-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("protobuf login server creates a local profile", GameLoginIntegrationTest)];
 if (args.Contains("--mubar-battle-codec", StringComparer.OrdinalIgnoreCase))
@@ -492,6 +498,33 @@ static Task ModTest()
     Directory.Delete(root, true); return Task.CompletedTask;
 }
 
+static Task AccountProfileBootstrapTest()
+{
+    const string profileId = "player-test_01";
+    ServerOptions options = ServerOptions.Parse(["--profile-id=" + profileId]);
+    Assert(options.ProfileId == profileId, "server profile id option mismatch");
+
+    var endpoints = new ServerEndpoints { GameLoginPort = 8123 };
+    var responder = new BootstrapHttpResponder(endpoints, new AnnouncementConfig(), options);
+
+    using JsonDocument plData = JsonDocument.Parse(
+        responder.BuildResponse("GET /phone/getPlData/getPlData HTTP/1.1").Body);
+    Assert(plData.RootElement.GetProperty("pid").GetString() == profileId,
+        "getPlData did not expose selected profile");
+
+    using JsonDocument login = JsonDocument.Parse(
+        responder.BuildResponse("GET /login?test=1 HTTP/1.1").Body);
+    Assert(login.RootElement.GetProperty("Pid").GetString() == profileId &&
+        login.RootElement.GetProperty("openid").GetString() == profileId,
+        "SDK login did not expose selected profile");
+
+    using JsonDocument hash = JsonDocument.Parse(
+        responder.BuildResponse("GET /gethash HTTP/1.1").Body);
+    Assert(hash.RootElement.GetProperty("pid").GetString() == profileId,
+        "gethash did not expose selected profile");
+    return Task.CompletedTask;
+}
+
 static Task EquipmentModTest()
 {
     string modsRoot = Path.Combine(FindRepositoryRoot(), "Mods");
@@ -548,6 +581,30 @@ static Task EquipmentModConfigIntegrationTest()
         "real server catalog contains incorrect custom equipment attributes");
     Assert(EquipLoader.Get(30023) is { EId: 30023 },
         "source equipment disappeared after applying the mod overlay");
+    return Task.CompletedTask;
+}
+
+static Task FashionPreviewModTest()
+{
+    string root = FindRepositoryRoot();
+    string modsRoot = Path.Combine(root, "Mods");
+    var manager = new ModManager(modsRoot, "jp-1.4.0");
+    manager.LoadAll();
+    Assert(manager.LoadedIds.Contains("fashion-preview-fix.mod"),
+        "fashion preview fix was not discoverable by the JP mod loader");
+
+    string entry = File.ReadAllText(Path.Combine(modsRoot, "fashion-preview-fix.mod", "main.lua"));
+    Assert(entry.Contains("GetOwnFashionByHeroId", StringComparison.Ordinal) &&
+           entry.Contains("hero_id == nil", StringComparison.Ordinal) &&
+           entry.Contains("self:GetOwnFashion(sf_id)", StringComparison.Ordinal),
+        "fashion preview hook does not guard nil heroes through ship-level ownership");
+    Assert(!entry.Contains("key ~= \"heroId\"", StringComparison.Ordinal),
+        "fashion preview hook still strips heroId and can break remould ownership checks");
+    string bootstrap = File.ReadAllText(Path.Combine(modsRoot, "bootstrap.lua"));
+    Assert(bootstrap.Contains("fashion-preview-fix.mod/main.lua", StringComparison.Ordinal) &&
+           bootstrap.Contains("global_watchers", StringComparison.Ordinal) &&
+           bootstrap.Contains("watch_global = function", StringComparison.Ordinal),
+        "fashion preview fix is missing its shared runtime global watcher");
     return Task.CompletedTask;
 }
 
@@ -980,6 +1037,18 @@ static async Task BuildingAssignmentIntegrationTest()
 static async Task FashionUnlockIntegrationTest()
 {
     var root = FindRepositoryRoot();
+    string clientPath = Path.Combine(root, "blueoath", "blueoath");
+    string configDir = ConfigDbLoader.BuildConfigDir(clientPath);
+    FashionConfigLoader.Load(configDir);
+    FashionShopCatalog catalog = FashionShopGoodsLoader.Load(configDir);
+    Assert(catalog.Goods.Count(g => g.ShopId == 23) == 32 &&
+           catalog.Goods.Count(g => g.ShopId == 29) == 51,
+        "fashion catalog was not rebuilt from the 32 featured and 51 broken shelf entries");
+    Assert(catalog.Goods.Single(g => g.ItemId == 4011014).ShopId == 29,
+        "legacy Z1 broken fashion was not moved from its stale shop_id 23 to shelf shop 29");
+    Assert(catalog.Goods.All(g => g.ItemId != 1062024),
+        "archived Ranger broken fashion was reintroduced despite being absent from both shelves");
+
     var serverDll = Path.Combine(root, "src", "BlueOath.Server", "bin", "Debug", "net8.0", "BlueOath.Server.dll");
     Assert(File.Exists(serverDll), "server assembly is missing; build the solution first");
     // 游戏客户端配置目录由 --client-path 直接指定（不再依赖数据目录位置向上逐级查找）。
@@ -997,7 +1066,7 @@ static async Task FashionUnlockIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
-    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
+    startInfo.ArgumentList.Add("--client-path=" + clientPath);
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -1054,10 +1123,16 @@ static async Task FashionUnlockIntegrationTest()
 
         var shopsResponse = await RoundTrip("shop.GetShopsInfo", null);
         Dictionary<int, List<int>> shopGoods = DecodeShopGoods(shopsResponse.Ret ?? []);
-        Assert(shopGoods.GetValueOrDefault(23) is { Count: > 0 },
-            "featured fashion shop 23 did not receive its configured goods");
-        Assert(shopGoods.GetValueOrDefault(29) is { Count: > 0 },
-            "broken fashion shop 29 did not receive its configured goods");
+        Assert(shopGoods.GetValueOrDefault(23) is { Count: 32 },
+            $"featured fashion shop 23 did not contain its 32 shelf fashions " +
+            $"(actual: {shopGoods.GetValueOrDefault(23)?.Count ?? 0})");
+        Assert(shopGoods.GetValueOrDefault(29) is { Count: 51 },
+            $"broken fashion shop 29 did not contain its 51 shelf fashions " +
+            $"(actual: {shopGoods.GetValueOrDefault(29)?.Count ?? 0})");
+        Assert(!shopGoods[23].Intersect(shopGoods[29]).Any(),
+            "featured and broken fashion shops contained overlapping shelf goods");
+        Assert(shopGoods.GetValueOrDefault(1)?.Contains(500) != true,
+            "legacy unassigned fashion good 500 remained visible in shop 1");
 
         int fashionGoodId = shopGoods[23][0];
         var buyResponse = await RoundTrip("shop.BuyGoods", EncodeBuyGoodsRequest(23, fashionGoodId));
