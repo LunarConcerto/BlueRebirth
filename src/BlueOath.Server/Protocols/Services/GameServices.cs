@@ -243,10 +243,7 @@ internal sealed class GameServices
 
             // 建筑数据推送，包含 Office 建筑（BuildingInfos）防止
             // GetOffice() 返回 nil 导致 GetMaxWorkerStrength/GetCurStrengthReal 崩溃。
-            TMessageCodec.EncodeResponse(new TResponse(
-                Method: "building.UpdateBuildingInfo",
-                Ret: PlayerDataCodec.EncodeBuildingInfo(now),
-                Time: now)),
+            BuildingService.BuildInfoPush(account.Building, now),
 
             // 编队数据推送，填充玩家编队信息防止 fleetpage 打开时 exHeroInfo nil 崩溃。
             TMessageCodec.EncodeResponse(new TResponse(
@@ -341,10 +338,13 @@ internal sealed class GameServices
             PlayerAccount constructionReady = EnsureConstructionItems(account);
             bool constructionMigrated = !ReferenceEquals(constructionReady, account);
             account = constructionReady;
+            PlayerAccount buildingReady = EnsureBuilding(account);
+            bool buildingMigrated = !ReferenceEquals(buildingReady, account);
+            account = buildingReady;
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
-            if (affectionMigrated || constructionMigrated)
+            if (affectionMigrated || constructionMigrated || buildingMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
@@ -385,10 +385,13 @@ internal sealed class GameServices
         account = EnsureAffectionGifts(account);
         account = EnsureOathShopCurrency(account);
         account = EnsureConstructionItems(account);
+        PlayerAccount buildingReady = EnsureBuilding(account);
+        bool buildingMigrated = !ReferenceEquals(buildingReady, account);
+        account = buildingReady;
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
-        if (affectionMigrated)
+        if (affectionMigrated || buildingMigrated)
             await _repo.SaveAccountAsync(account, ct);
         return account;
     }
@@ -872,6 +875,14 @@ internal sealed class GameServices
             Bag = bag with { Items = items },
             Construction = new PlayerConstruction([]),
         };
+    }
+
+    /// <summary>为旧存档补上默认办公室与宿舍；新增字段为 null 时只迁移一次。</summary>
+    private static PlayerAccount EnsureBuilding(PlayerAccount account)
+    {
+        if (account.Building is not null) return account;
+        int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        return account with { Building = PlayerAccountFactory.DefaultBuilding(now) };
     }
 
     internal static PlayerAccount AddCurrency(PlayerAccount account, int currencyType, int num)

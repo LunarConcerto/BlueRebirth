@@ -149,6 +149,29 @@ public sealed record PlayerCopyProgress(
 public sealed record PlayerSeaCopyProgress(
     IReadOnlyList<CopyRecord> Records);
 
+/// <summary>基地中的单栋建筑。Tid 对应 config_buildinginfo，Id 是存档内的建筑实例 ID。</summary>
+public sealed record PlayerBuildingEntry(
+    int Id,
+    int Tid,
+    int Level,
+    IReadOnlyList<uint> HeroIds,
+    int Status = 1,
+    long LastUpdateTime = 0);
+
+/// <summary>基地地图上的地块与建筑实例映射。</summary>
+public sealed record PlayerBuildingLand(int Index, int BuildingId);
+
+/// <summary>
+/// 离线基地状态。当前只持久化已开放建筑与舰娘派驻关系；生产、材料和心情消耗暂不启用。
+/// </summary>
+public sealed record PlayerBuilding(
+    IReadOnlyList<PlayerBuildingEntry> Buildings,
+    IReadOnlyList<PlayerBuildingLand> Lands,
+    int WorkerStrength = 1_000_000,
+    int WorkerRecover = 10,
+    int FoodMax = 100,
+    int ElectricMax = 100);
+
 /// <summary>
 /// 玩家账号聚合（角色 + 船坞 + 仓库 + 时装 + 关卡进度）。存档数据库中实际存在的实体根，
 /// 后续如需加入建造/浴室/建筑等玩家域数据，可在此扩展新的成员（保持向后兼容：
@@ -166,7 +189,8 @@ public sealed record PlayerAccount(
     PlayerSeaCopyProgress? SeaProgress = null,
     IReadOnlyList<int>? PlotRewardIds = null,
     PlayerBath? Bath = null,
-    PlayerConstruction? Construction = null);
+    PlayerConstruction? Construction = null,
+    PlayerBuilding? Building = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
@@ -230,8 +254,24 @@ public static class PlayerAccountFactory
         var fashion = new PlayerFashion([]);
         var equip = new PlayerEquip([], EquipBagSize: 2000);
         var fleet = DefaultFleet();
-        return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet);
+        return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet,
+            Building: DefaultBuilding(nowSeconds));
     }
+
+    /// <summary>
+    /// 默认开放二级办公室与一级宿舍。办公室升到二级是为了让客户端合法解锁宿舍所在的第六地块。
+    /// </summary>
+    public static PlayerBuilding DefaultBuilding(int nowSeconds) => new(
+        Buildings:
+        [
+            new PlayerBuildingEntry(Id: 1, Tid: 2, Level: 2, HeroIds: [], LastUpdateTime: nowSeconds),
+            new PlayerBuildingEntry(Id: 2, Tid: 41, Level: 1, HeroIds: [], LastUpdateTime: nowSeconds),
+        ],
+        Lands:
+        [
+            new PlayerBuildingLand(Index: 1, BuildingId: 1),
+            new PlayerBuildingLand(Index: 6, BuildingId: 2),
+        ]);
 
     /// <summary>创建默认5个空编队（Normal type=1, modeId 1-5）。名称留空，由客户端按当前语言本地化。</summary>
     public static PlayerFleet DefaultFleet()
