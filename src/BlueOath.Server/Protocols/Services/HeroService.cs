@@ -1,5 +1,6 @@
 using BlueOath.Core;
 using BlueOath.Protocol;
+using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
@@ -11,6 +12,12 @@ internal sealed class HeroService(GameServices services)
         IReadOnlyList<uint> RetiredHeroIds,
         IReadOnlyList<uint> RemovedEquipIds,
         bool Changed);
+
+    internal sealed record AddAffectionResult(
+        byte[] Ret,
+        Hero? UpdatedHero,
+        bool Changed,
+        string Error);
 
     internal async Task<byte[]> BuildChangeEquipRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
@@ -267,21 +274,52 @@ internal sealed class HeroService(GameServices services)
         return [];
     }
 
-    internal async Task<byte[]> BuildAddAffectionRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<AddAffectionResult> BuildAddAffectionRetAsync(
+        TRequest request, string profileId, CancellationToken ct)
     {
-        if (request.Args is null) return [];
+        if (request.Args is null)
+            return new([], null, false, "gift request is missing");
         HeroAddAffectionArg arg = ProtocolDecoder.DecodeHeroAddAffectionArg(request.Args);
-        if (arg.HeroId == 0 || arg.Num <= 0) return [];
+        if (arg.HeroId == 0 || arg.TemplateId <= 0 || arg.Num <= 0)
+            return new([], null, false, "gift request is invalid");
+
+        ConfigAffectionItem? gift = services.GetAffectionItem(arg.TemplateId);
+        if (gift is null || gift.AffectionExp <= 0)
+            return new([], null, false, "gift configuration was not found");
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
         int heroIdx = heroList.FindIndex(h => h.HeroId == arg.HeroId);
-        if (heroIdx < 0) return [];
+        if (heroIdx < 0)
+            return new([], null, false, "hero was not found");
+
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        List<BagItem> bagItems = bag.Items.ToList();
+        int bagIdx = bagItems.FindIndex(i => i.TemplateId == arg.TemplateId);
+        if (bagIdx < 0 || bagItems[bagIdx].Num < arg.Num)
+            return new([], null, false, "not enough gifts");
+
         Hero hero = heroList[heroIdx];
-        heroList[heroIdx] = hero with { Affection = hero.Affection + arg.Num * 10000 };
-        account = account with { Dock = dock with { Heroes = heroList } };
+        long affection = checked((long)hero.Affection + gift.AffectionExp * arg.Num);
+        if (affection > int.MaxValue)
+            return new([], null, false, "affection value is too large");
+
+        Hero updatedHero = hero with { Affection = checked((int)affection) };
+        heroList[heroIdx] = updatedHero;
+        bagItems[bagIdx] = bagItems[bagIdx] with { Num = bagItems[bagIdx].Num - arg.Num };
+        account = account with
+        {
+            Dock = dock with { Heroes = heroList },
+            Bag = bag with { Items = bagItems },
+        };
         await services.SaveAccountAsync(account, ct);
-        return [];
+        return new(
+            ProtocolEncoder.EncodeHeroAddAffectionRet(arg.HeroId, updatedHero.Affection),
+            updatedHero,
+            true,
+            "");
     }
 
     internal async Task<byte[]> BuildGetHeroInfoRetAsync(string profileId, CancellationToken ct)

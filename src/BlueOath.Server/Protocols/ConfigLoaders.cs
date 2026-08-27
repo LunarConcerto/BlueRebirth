@@ -537,6 +537,29 @@ internal static class EquipLoader
         => _renovateLevels.TryGetValue(level, out var cfg) ? cfg : null;
 }
 
+internal static class AffectionItemLoader
+{
+    private static readonly Dictionary<int, ConfigAffectionItem> _items = new();
+    private static bool _loaded;
+
+    public static void Load(string dataRoot)
+    {
+        if (_loaded) return;
+        try
+        {
+            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
+            _items.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigAffectionItem>(configDir, "config_affection_item.db"))
+                _items[id] = cfg;
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigAffectionItem? Get(int id)
+        => _items.TryGetValue(id, out var cfg) ? cfg : null;
+}
+
 internal static class ChapterCopyLoader
 {
     private static readonly Dictionary<int, List<int>> _chapterCopies = new();

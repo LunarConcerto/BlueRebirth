@@ -103,6 +103,16 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 THeroAddAffectionRet: Ret(1), HeroId(2), Affection(3)。</summary>
+    internal static byte[] EncodeHeroAddAffectionRet(uint heroId, int affection)
+    {
+        ProtocolPackage output = new();
+        output.Write(0x08, 0UL);
+        output.Write(0x10, heroId);
+        output.Write(0x18, unchecked((ulong)affection));
+        return output.ToArray();
+    }
+
     internal static byte[] EncodeHeroAddExpRet(uint heroId, List<ItemCount> items)
     {
         ProtocolPackage output = new();

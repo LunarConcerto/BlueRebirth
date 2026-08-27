@@ -81,7 +81,34 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 result = ModuleResult.Ok(await hero.BuildChangeNameRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.AddAffection":
-                result = ModuleResult.Ok(await hero.BuildAddAffectionRetAsync(request, ctx.ProfileId, ctx.Ct));
+                HeroService.AddAffectionResult affection =
+                    await hero.BuildAddAffectionRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (!affection.Changed || affection.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = affection.Ret,
+                        Err = 1,
+                        ErrMsg = affection.Error,
+                    };
+                    break;
+                }
+                PlayerAccount affectionAccount = await ctx.GetAccountAsync();
+                uint affectionNow = (uint)ctx.Now;
+                result = new ModuleResult
+                {
+                    Ret = affection.Ret,
+                    // Lua 成功回调会立刻读取 HeroData 和 BagData，必须先刷新两份缓存。
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(
+                                [GameServices.ToHeroGrid(affection.UpdatedHero)], affectionAccount.Dock.BagSize)),
+                            Time: affectionNow)),
+                        services.BuildBagPush(affectionAccount, affectionNow),
+                    ],
+                };
                 break;
             case "hero.GetHeroInfo":
                 result = ModuleResult.Ok(await hero.BuildGetHeroInfoRetAsync(ctx.ProfileId, ctx.Ct));

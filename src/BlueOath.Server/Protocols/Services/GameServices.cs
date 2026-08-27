@@ -52,6 +52,7 @@ internal sealed class GameServices
         ShipMainLoader.Load(options.DataRoot);
         AssistShipLoader.Load(options.DataRoot);
         EquipLoader.Load(options.DataRoot);
+        AffectionItemLoader.Load(options.DataRoot);
         ShipHandbookLoader.Load(options.DataRoot);
         PlotTriggerLoader.Load(options.DataRoot);
     }
@@ -102,6 +103,7 @@ internal sealed class GameServices
     internal ConfigEquipEnhanceLevel? GetEquipEnhanceLevel(int level) => EquipLoader.GetEnhanceLevel(level);
     internal ConfigEquipEnhanceRenovate? GetEquipRenovateLevel(int level) => EquipLoader.GetRenovateLevel(level);
     internal ConfigEquip? GetEquipConfig(int id) => EquipLoader.Get(id);
+    internal ConfigAffectionItem? GetAffectionItem(int id) => AffectionItemLoader.Get(id);
 
     /// <summary>
     /// 处理登录操作码：解码 <c>TArgLogin</c>，按 <c>Pid</c> 创建/加载本地档案，
