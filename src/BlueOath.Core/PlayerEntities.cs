@@ -191,7 +191,8 @@ public sealed record PlayerAccount(
     IReadOnlyList<int>? PlotRewardIds = null,
     PlayerBath? Bath = null,
     PlayerConstruction? Construction = null,
-    PlayerBuilding? Building = null);
+    PlayerBuilding? Building = null,
+    string? ProfileDisplayName = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
@@ -232,9 +233,10 @@ public static class PlayerAccountFactory
     public const long HpCoefficient = 10000000000;
 
     /// <summary>创建新档案的默认账号（角色 + 含一只秘书舰的船坞 + 空仓库/时装）。</summary>
-    public static PlayerAccount CreateDefault(string profileId, int nowSeconds)
+    public static PlayerAccount CreateDefault(string profileId, int nowSeconds, string? displayName = null)
     {
-        var character = new PlayerCharacter(Uid: 1, Name: profileId, Level: 80, Class: 1, SecretaryId: 1,
+        string characterName = string.IsNullOrWhiteSpace(displayName) ? profileId : displayName.Trim();
+        var character = new PlayerCharacter(Uid: 1, Name: characterName, Level: 80, Class: 1, SecretaryId: 1,
             CreateTime: nowSeconds, Gold: DefaultGold, Diamond: DefaultDiamond, Supply: DefaultSupply,
             PvePt: 100, PlotChapterId: int.MaxValue);
         var hero = new Hero(
@@ -256,7 +258,7 @@ public static class PlayerAccountFactory
         var equip = new PlayerEquip([], EquipBagSize: 2000);
         var fleet = DefaultFleet();
         return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet,
-            Building: DefaultBuilding(nowSeconds));
+            Building: DefaultBuilding(nowSeconds), ProfileDisplayName: characterName);
     }
 
     /// <summary>

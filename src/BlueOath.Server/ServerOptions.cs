@@ -18,7 +18,8 @@ internal sealed record ServerOptions(
     int? GameLoginPort,
     int? KcpGameLoginPort,
     int? GmPort,
-    string ProfileId)
+    string ProfileId,
+    string ProfileName)
 {
     /// <summary>解析命令行参数；未显式指定的项使用默认值（JP 服、临时端口、本地 data 目录）。</summary>
     public static ServerOptions Parse(string[] args)
@@ -35,6 +36,7 @@ internal sealed record ServerOptions(
         int? kcpGameLoginPort = null;
         int? gmPort = null;
         var profileId = PlayerAccountFactory.DefaultProfileId;
+        string? profileName = null;
 
         foreach (var arg in args)
         {
@@ -66,10 +68,13 @@ internal sealed record ServerOptions(
                 gmPort = parsedGmPort;
             else if (arg.StartsWith("--profile-id=", StringComparison.OrdinalIgnoreCase))
                 profileId = NormalizeProfileId(arg[13..]);
+            else if (arg.StartsWith("--profile-name=", StringComparison.OrdinalIgnoreCase))
+                profileName = arg[15..];
         }
 
         return new ServerOptions(port, profile, dataRoot, clientPath, enableTls, tlsOutputRoot, captureRoot,
-            tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort, profileId);
+            tlsMaterialOnly, gameLoginPort, kcpGameLoginPort, gmPort, profileId,
+            NormalizeProfileName(profileName, profileId));
     }
 
     private static string NormalizeProfileId(string? value)
@@ -79,5 +84,13 @@ internal sealed record ServerOptions(
             char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.').ToArray());
         if (normalized.Length == 0) return PlayerAccountFactory.DefaultProfileId;
         return normalized.Length <= 64 ? normalized : normalized[..64];
+    }
+
+    private static string NormalizeProfileName(string? value, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return fallback;
+        string normalized = new(value.Trim().Where(character => !char.IsControl(character)).ToArray());
+        if (normalized.Length == 0) return fallback;
+        return normalized.Length <= 32 ? normalized : normalized[..32];
     }
 }

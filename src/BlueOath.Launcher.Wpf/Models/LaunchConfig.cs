@@ -3,6 +3,7 @@ namespace BlueOath.Launcher.Wpf.Models;
 public class LaunchConfig
 {
     public string ProfileId { get; set; } = "local-player";
+    public string ProfileName { get; set; } = "默认账号";
     public string Region { get; set; } = "jp";
     public int ServerPort { get; set; } = 0;
     public int GameLoginPort { get; set; } = 7201;

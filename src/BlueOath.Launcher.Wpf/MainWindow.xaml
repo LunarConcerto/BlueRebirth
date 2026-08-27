@@ -26,7 +26,7 @@
         </DataTemplate>
     </Window.Resources>
 
-    <Grid>
+    <Grid Background="{StaticResource BgDarkBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -82,6 +82,7 @@
         </Border>
 
         <ContentControl Grid.Row="1"
+                        Background="{StaticResource BgDarkBrush}"
                         Content="{Binding CurrentPage}" />
     </Grid>
 </Window>

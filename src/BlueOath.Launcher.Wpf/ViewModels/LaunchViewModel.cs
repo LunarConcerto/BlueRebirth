@@ -162,6 +162,7 @@ public class LaunchViewModel : ViewModelBase
         if (!TryResolveGameClientPath()) return;
 
         _config.ProfileId = ActiveAccount.Id;
+        _config.ProfileName = ActiveAccount.Name;
         var validationError = _processManager.ValidatePaths(_config, startServer);
         if (validationError is not null)
         {

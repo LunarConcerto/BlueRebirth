@@ -17,6 +17,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("frame codec handles fragmented input", FrameCodecTest),
     ("real login protobuf payload round-trips", LoginProtobufTest),
     ("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest),
+    ("launcher profile names initialize and migrate character names", AccountProfileNameMigrationTest),
     ("client login wire envelope round-trips", ClientLoginWireTest),
     ("temporary game login frame round-trips", GameLoginFrameTest),
     ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
@@ -102,7 +103,10 @@ if (args.Contains("--login-integration", StringComparer.OrdinalIgnoreCase))
 if (args.Contains("--mubar-battle-codec", StringComparer.OrdinalIgnoreCase))
     tests = [("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest)];
 if (args.Contains("--account-profile", StringComparer.OrdinalIgnoreCase))
-    tests = [("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest)];
+    tests = [
+        ("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest),
+        ("launcher profile names initialize and migrate character names", AccountProfileNameMigrationTest)
+    ];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
@@ -453,7 +457,7 @@ static async Task AccountStorageTest()
     await repo.CreateAsync("hero", "Hero");
     var account = await repo.LoadAccountAsync("hero");
     Assert(account is not null, "account was not created with profile");
-    Assert(account!.Character.Uid == 1 && account.Character.Name == "hero", "character defaults mismatch");
+    Assert(account!.Character.Uid == 1 && account.Character.Name == "Hero", "character defaults mismatch");
     Assert(account.Character.SecretaryId == 1, "secretary id mismatch");
     Assert(account.Dock.Heroes.Count == 1, "dock should contain one hero");
     Assert(account.Dock.Heroes[0].HeroId == account.Character.SecretaryId, "secretary hero not in dock");
@@ -503,8 +507,13 @@ static Task ModTest()
 static Task AccountProfileBootstrapTest()
 {
     const string profileId = "player-test_01";
-    ServerOptions options = ServerOptions.Parse(["--profile-id=" + profileId]);
-    Assert(options.ProfileId == profileId, "server profile id option mismatch");
+    const string profileName = "测试账号";
+    ServerOptions options = ServerOptions.Parse([
+        "--profile-id=" + profileId,
+        "--profile-name=" + profileName
+    ]);
+    Assert(options.ProfileId == profileId && options.ProfileName == profileName,
+        "server profile identity options mismatch");
 
     var endpoints = new ServerEndpoints { GameLoginPort = 8123 };
     var responder = new BootstrapHttpResponder(endpoints, new AnnouncementConfig(), options);
@@ -524,6 +533,32 @@ static Task AccountProfileBootstrapTest()
         responder.BuildResponse("GET /gethash HTTP/1.1").Body);
     Assert(hash.RootElement.GetProperty("pid").GetString() == profileId,
         "gethash did not expose selected profile");
+    return Task.CompletedTask;
+}
+
+static Task AccountProfileNameMigrationTest()
+{
+    const string profileId = "player-legacy01";
+    PlayerAccount legacy = PlayerAccountFactory.CreateDefault(profileId, 1) with
+    {
+        ProfileDisplayName = null
+    };
+
+    PlayerAccount migrated = GameServices.SynchronizeProfileDisplayName(legacy, "Asa");
+    Assert(migrated.Character.Name == "Asa" && migrated.ProfileDisplayName == "Asa",
+        "legacy profile id name was not migrated to the launcher account name");
+
+    PlayerAccount renamedInLauncher = GameServices.SynchronizeProfileDisplayName(migrated, "Bob");
+    Assert(renamedInLauncher.Character.Name == "Bob" && renamedInLauncher.ProfileDisplayName == "Bob",
+        "launcher-managed character name did not follow account rename");
+
+    PlayerAccount custom = renamedInLauncher with
+    {
+        Character = renamedInLauncher.Character with { Name = "游戏内昵称" }
+    };
+    PlayerAccount preserved = GameServices.SynchronizeProfileDisplayName(custom, "Carol");
+    Assert(preserved.Character.Name == "游戏内昵称" && preserved.ProfileDisplayName == "Carol",
+        "custom in-game character name was overwritten");
     return Task.CompletedTask;
 }
 

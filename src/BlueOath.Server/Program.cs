@@ -55,6 +55,7 @@ internal static class Program
             region = options.Profile.Region.ToString(),
             version = options.Profile.ClientVersion,
             profileId = options.ProfileId,
+            profileName = options.ProfileName,
             tls = tls is not null,
             rootCertificate = tls?.RootCertificatePath,
             leafCertificate = tls?.LeafCertificatePath,

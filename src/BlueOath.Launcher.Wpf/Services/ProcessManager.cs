@@ -313,7 +313,7 @@ public class ProcessManager
                 Stage = ProcessStage.StartingServer;
                 LogSystem("正在启动本地服务器...");
                 serverPort = await StartServer(serverDll, dataRoot, traffic, config.GameLoginPort, gmPort,
-                    config.ProfileId, token);
+                    config.ProfileId, config.ProfileName, token);
                 if (serverPort < 0)
                 {
                     LogError("服务器启动失败。");
@@ -521,7 +521,7 @@ public class ProcessManager
     }
 
     private async Task<int> StartServer(string serverDll, string dataRoot, string traffic,
-        int gameLoginPort, int gmPort, string profileId, CancellationToken token)
+        int gameLoginPort, int gmPort, string profileId, string profileName, CancellationToken token)
     {
         var psi = new ProcessStartInfo("dotnet")
         {
@@ -542,6 +542,7 @@ public class ProcessManager
         psi.ArgumentList.Add("--game-login-port=" + gameLoginPort);
         psi.ArgumentList.Add("--gm-port=" + gmPort);
         psi.ArgumentList.Add("--profile-id=" + profileId);
+        psi.ArgumentList.Add("--profile-name=" + profileName);
 
         _serverProcess = Process.Start(psi);
         if (_serverProcess is null) return -1;

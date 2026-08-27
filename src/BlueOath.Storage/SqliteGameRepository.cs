@@ -72,7 +72,7 @@ public sealed class SqliteGameRepository : IGameRepository
         await SaveAsync(new PlayerState(profileId, name, 1, 100, 0,
             [new Ship(1001, "Starter", 1, 100), new Ship(1002, "Scout", 1, 80)],
             new Formation([1001]), 0), ct);
-        await SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, now), ct);
+        await SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, now, name), ct);
     }
 
     public async Task BackupAsync(string profileId, string destination, CancellationToken ct = default)
