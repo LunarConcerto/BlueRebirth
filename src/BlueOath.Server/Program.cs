@@ -54,6 +54,7 @@ internal static class Program
             gmPort = endpoints.GmPort,
             region = options.Profile.Region.ToString(),
             version = options.Profile.ClientVersion,
+            profileId = options.ProfileId,
             tls = tls is not null,
             rootCertificate = tls?.RootCertificatePath,
             leafCertificate = tls?.LeafCertificatePath,

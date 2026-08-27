@@ -155,13 +155,13 @@ internal sealed class GameServices
     internal ConfigAffectionItem? GetAffectionItem(int id) => AffectionItemLoader.Get(id);
 
     /// <summary>
-    /// 处理登录操作码：解码 <c>TArgLogin</c>，按 <c>Pid</c> 创建/加载本地档案，
-    /// 返回 <c>TRetLogin</c> 编码结果与解析出的 profileId（供会话后续关联账号）。
+    /// 处理登录操作码：解码 <c>TArgLogin</c>，按服务器启动时选定的账号创建/加载本地档案，
+    /// 返回 <c>TRetLogin</c> 编码结果与 profileId（供会话后续关联账号）。
     /// </summary>
     public async Task<LoginPayload> BuildLoginPayloadAsync(byte[] payload, CancellationToken ct)
     {
-        var request = GameLoginCodec.DecodeLogin(payload);
-        var profileId = string.IsNullOrWhiteSpace(request.Pid) ? _defaultProfileId : request.Pid;
+        _ = GameLoginCodec.DecodeLogin(payload);
+        var profileId = _defaultProfileId;
         _logger.LogInformation("game-login login pid={ProfileId}", profileId);
         if (await _repo.LoadAsync(profileId, ct) is null)
             await _repo.CreateAsync(profileId, profileId, ct);
@@ -169,13 +169,11 @@ internal sealed class GameServices
         return new LoginPayload(GameOperationCodes.Login, GameLoginCodec.Encode(response), profileId);
     }
 
-    /// <summary>解析 <c>player.Login</c> 参数中的 Pid，返回关联的 profileId。</summary>
+    /// <summary>返回服务器启动时选定的账号，避免客户端缓存的旧 Pid 串档。</summary>
     public string ResolveLoginProfileId(TRequest request)
     {
-        if (request.Args is null)
-            return _defaultProfileId;
-        var login = GameLoginCodec.DecodeLogin(request.Args);
-        return string.IsNullOrWhiteSpace(login.Pid) ? _defaultProfileId : login.Pid;
+        _ = request;
+        return _defaultProfileId;
     }
 
     public async Task<byte[]> BuildUpdateUserInfoPushAsync(string profileId, uint now, CancellationToken ct)

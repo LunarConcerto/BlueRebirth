@@ -41,6 +41,7 @@ public sealed class AccountService
     public AccountProfile Add(string name)
     {
         string normalizedName = ValidateName(name, null);
+        AccountProfile previousActive = ActiveAccount;
         var account = new AccountProfile
         {
             Id = "player-" + Guid.NewGuid().ToString("N"),
@@ -49,23 +50,50 @@ public sealed class AccountService
         };
         Accounts.Add(account);
         ActiveAccount = account;
-        Save();
+        try
+        {
+            Save();
+        }
+        catch
+        {
+            Accounts.Remove(account);
+            ActiveAccount = previousActive;
+            throw;
+        }
         return account;
     }
 
     public void Rename(AccountProfile account, string name)
     {
         EnsureKnown(account);
+        string previousName = account.Name;
         account.Name = ValidateName(name, account);
-        Save();
+        try
+        {
+            Save();
+        }
+        catch
+        {
+            account.Name = previousName;
+            throw;
+        }
         ActiveAccountChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void Select(AccountProfile account)
     {
         EnsureKnown(account);
+        AccountProfile previousActive = ActiveAccount;
         ActiveAccount = account;
-        Save();
+        try
+        {
+            Save();
+        }
+        catch
+        {
+            ActiveAccount = previousActive;
+            throw;
+        }
     }
 
     public void Remove(AccountProfile account)
@@ -74,11 +102,22 @@ public sealed class AccountService
         if (Accounts.Count <= 1)
             throw new InvalidOperationException("至少需要保留一个账号。");
 
+        int removedIndex = Accounts.IndexOf(account);
+        AccountProfile previousActive = ActiveAccount;
         bool wasActive = ReferenceEquals(account, ActiveAccount);
         Accounts.Remove(account);
         if (wasActive)
             ActiveAccount = Accounts[0];
-        Save();
+        try
+        {
+            Save();
+        }
+        catch
+        {
+            Accounts.Insert(removedIndex, account);
+            ActiveAccount = previousActive;
+            throw;
+        }
     }
 
     private void Load()

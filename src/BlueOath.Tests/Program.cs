@@ -101,6 +101,8 @@ if (args.Contains("--login-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("protobuf login server creates a local profile", GameLoginIntegrationTest)];
 if (args.Contains("--mubar-battle-codec", StringComparer.OrdinalIgnoreCase))
     tests = [("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest)];
+if (args.Contains("--account-profile", StringComparer.OrdinalIgnoreCase))
+    tests = [("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest)];
 var failed = 0;
 foreach (var (name, run) in tests)
 {
