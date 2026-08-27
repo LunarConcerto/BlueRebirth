@@ -1,6 +1,5 @@
 ﻿using BlueOath.Core;
 using BlueOath.Protocol;
-using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
@@ -102,7 +101,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     Ret = await hero.BuildAdvanceRetAsync(request, ctx.ProfileId, ctx.Ct),
                 };
                 var advAccount = await ctx.GetAccountAsync();
-                var advHeroes = advAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+                var advHeroes = advAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
                 result = new ModuleResult
                 {
                     Ret = result.Ret,
@@ -115,7 +114,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     Ret = await hero.BuildStudySkillRetAsync(request, ctx.ProfileId, ctx.Ct),
                 };
                 var skillAccount = await ctx.GetAccountAsync();
-                var skillHeroes = skillAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+                var skillHeroes = skillAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
                 result = new ModuleResult
                 {
                     Ret = result.Ret,
@@ -147,7 +146,9 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
 
     private static async Task<ModuleResult> UpdateHero(GameContext ctx, byte[] ret) {
         PlayerAccount updatedAccount = await ctx.GetAccountAsync();
-        List<HeroGrid> updatedHeroes = updatedAccount.Dock.Heroes.Select(ToHeroGridWithName).ToList();
+        // Name carries only a player-defined nickname. For an unrenamed ship it must remain
+        // empty so JP/CN clients can display the name from their own localized config.
+        List<HeroGrid> updatedHeroes = updatedAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
         ModuleResult result = new()
         {
             Ret = ret,
@@ -172,9 +173,4 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
         return [heroPush, bagPush];
     }
 
-    private static HeroGrid ToHeroGridWithName(Hero h)
-    {
-        var grid = GameServices.ToHeroGrid(h);
-        return grid with { Name = ShipHandbookLoader.GetShipName(h.TemplateId) };
-    }
 }

@@ -206,6 +206,14 @@ internal sealed class GameServices
                 Ret: PlayerDataCodec.Encode(ToBathroomInfo(account.Bath)),
                 Time: now)),
 
+            // 退役/强化候选筛选会直接遍历 StudyData.ArrProgress，且不会处理尚未
+            // 初始化的 nil。字段 1 是可用训练位数量；空的 repeated ArrProgress
+            // 会由客户端 protobuf 默认成空表。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "study.GetStudyInfo",
+                Ret: new byte[] { 0x08, 0x02 },
+                Time: now)),
+
             // 船坞数据来自存档实体。秘书舰 HeroId 必须与 Character.SecretaryId 一致。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "hero.UpdateHeroBagData",

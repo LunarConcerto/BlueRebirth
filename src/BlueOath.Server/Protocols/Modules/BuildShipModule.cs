@@ -1,6 +1,5 @@
 ﻿using BlueOath.Core;
 using BlueOath.Protocol;
-using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
@@ -24,7 +23,9 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                     var newIds = services.GetLastBuildHeroIds();
                     var newHeroes = account.Dock.Heroes
                         .Where(h => newIds.Contains(h.HeroId))
-                        .Select(ToHeroGridWithName)
+                        // HeroGrid.Name is the player-defined nickname. Leave it empty for an
+                        // unrenamed ship so the client falls back to its localized ship_name.
+                        .Select(GameServices.ToHeroGrid)
                         .ToList();
                     var now = (uint)ctx.Now;
                     if (newHeroes.Count > 0)
@@ -60,9 +61,4 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
         return result;
     }
 
-    private static HeroGrid ToHeroGridWithName(Hero h)
-    {
-        var grid = GameServices.ToHeroGrid(h);
-        return grid with { Name = ShipHandbookLoader.GetShipName(h.TemplateId) };
-    }
 }

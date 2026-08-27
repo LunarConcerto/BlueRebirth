@@ -5,6 +5,7 @@ using BlueOath.Storage;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 
 var tests = new (string Name, Func<Task> Run)[]
@@ -440,18 +441,23 @@ static async Task FashionUnlockIntegrationTest()
         var userInfo = await RoundTrip("user.GetUserInfo", null);
         Assert(userInfo.Method == "user.GetUserInfo", "get user info response method mismatch");
 
-        // user.GetUserInfo 应答后，服务器会通过 PostPushes 推送 fashion.updateData。
-        // 持续读帧直到捕获该推送；空无人时装列表 Ret 为空数组（0 字节），
-        // 而全量解锁时应包含 1000+ 条时装（编码远大于 100 字节）。
+        // user.GetUserInfo 应答后，服务器会通过 PostPushes 初始化技能训练数据并推送
+        // fashion.updateData。若缺少 study.GetStudyInfo，退役页会对 nil ArrProgress
+        // 执行 ipairs，从而显示空白候选列表。
         byte[]? fashionRet = null;
-        for (var attempts = 0; attempts < 20 && fashionRet is null; attempts++)
+        byte[]? studyRet = null;
+        for (var attempts = 0; attempts < 24 && (fashionRet is null || studyRet is null); attempts++)
         {
             var frame = await NetSocketFrameCodec.ReadAsync(stream, timeout.Token);
-            Assert(frame is not null, "missing expected fashion.updateData push");
+            Assert(frame is not null, "missing expected login synchronization push");
             var push = TMessageCodec.DecodeResponse(frame!.Value.Payload);
             if (push.Method == "fashion.updateData")
                 fashionRet = push.Ret;
+            else if (push.Method == "study.GetStudyInfo")
+                studyRet = push.Ret;
         }
+        Assert(studyRet is { Length: > 0 } && ContainsSequence(studyRet, new byte[] { 0x08, 0x02 }),
+            "login synchronization did not initialize an empty study progress list");
         Assert(fashionRet is { Length: > 100 },
             $"fashion.updateData push did not contain unlocked fashions (ret length: {fashionRet?.Length ?? 0})");
     }
@@ -573,6 +579,19 @@ static async Task HeroMutationIntegrationTest()
         PlayerAccount unlocked = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("unlock account disappeared");
         Assert(!unlocked.Dock.Heroes.Single(h => h.HeroId == 2).Lock, "unlock state was not persisted");
+
+        // A hero mutation refreshes the full dock. HeroGrid.Name is a custom nickname, not the
+        // handbook's Chinese display name; otherwise the JP client mixes Chinese and Japanese
+        // names after a ship is built or updated.
+        var marryArgs = new ProtocolPackage();
+        marryArgs.Write(0x08, 2UL);
+        marryArgs.Write(0x10, 1UL);
+        var (_, marryPushes) = await RoundTrip("hero.Marry", marryArgs.ToArray());
+        TResponse marryHeroPush = marryPushes.FirstOrDefault(p => p.Method == "hero.UpdateHeroBagData")
+            ?? throw new InvalidDataException("marriage did not refresh hero data");
+        Assert(marryHeroPush.Ret is { Length: > 0 } &&
+            !ContainsSequence(marryHeroPush.Ret, Encoding.UTF8.GetBytes("奥克兰")),
+            "hero update incorrectly sent the Chinese handbook name as a custom nickname");
 
         // The shipped Lua protobuf runtime uses the proto2 unpacked representation for HeroIds.
         var retireArgs = new ProtocolPackage();
