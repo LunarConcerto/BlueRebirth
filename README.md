@@ -109,7 +109,7 @@ dotnet run --project .\src\BlueOath.Launcher\BlueOath.Launcher.csproj -- --regio
 
 ## 基线与 Mod
 
-`tools/baseline.ps1` 生成 `baseline.json`，记录两服版本、架构和关键文件 SHA-256。示例 Mod 位于 `Mods/example.mod`。`BlueOath.Mods` 负责清单、目标版本、依赖和加载顺序发现，并将事件排队给后续 xLua runtime handoff。
+`tools/baseline.ps1` 生成 `baseline.json`，记录两服版本、架构和关键文件 SHA-256。示例 Mod 位于 `Mods/example.mod`；`Mods/future-chapter.mod` 会在 JP 1.4.0 主线“始動編”末尾加入一个不可进入的 `0/0` 占位篇章。`BlueOath.Mods` 负责清单、目标版本、依赖和加载顺序发现，并将事件排队给后续 xLua runtime handoff。
 
 ### xLua Mod Loader（JP 1.4.0 实验版）
 
@@ -123,12 +123,15 @@ Payload 会等待已知版本的 `xlua.dll` 加载，在一次正常 `lua_pcallk
 
 ```text
 [LuaModLoader] lua_pcallk hook installed; waiting for Lua environment
+[LuaModLoader] lua: [BlueOath.Mods] future-chapter.mod/main.lua: configManager hooks installed
+[LuaModLoader] lua: [BlueOath.Mods] future-chapter.mod/main.lua: CopyLogic empty-chapter guards installed
 [LuaModLoader] lua: [BlueOath.Mods] example.mod/main.lua: example.mod bootstrap active
-[LuaModLoader] lua: [BlueOath.Mods] bootstrap complete; loaded 1 mod(s)
+[LuaModLoader] lua: [BlueOath.Mods] bootstrap complete; loaded 2 mod(s)
 [LuaModLoader] bootstrap executed successfully: ...\\Mods\\bootstrap.lua
 ```
 
-`bootstrap.lua` 当前通过一个显式入口列表加载 `example.mod/main.lua`，用于验证明文 Lua
+`bootstrap.lua` 当前通过一个显式入口列表加载 `future-chapter.mod/main.lua` 和
+`example.mod/main.lua`。前者验证客户端配置与逻辑方法可以安全覆盖，后者验证普通明文 Lua
 文件能够进入客户端运行时。通用的 `mod.json` 依赖排序、生命周期事件和模块覆盖仍属于后续工作。
 
 若完整 Payload 还受其它版本相关 hook 影响，可使用构建产物

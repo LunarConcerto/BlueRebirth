@@ -38,6 +38,7 @@ end
 -- This explicit index is intentionally tiny for the first runtime proof. A
 -- later step will generate it from mod.json dependency/loadOrder metadata.
 local entries = {
+  "future-chapter.mod/main.lua",
   "example.mod/main.lua"
 }
 
