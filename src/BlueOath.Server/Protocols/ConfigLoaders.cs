@@ -137,12 +137,11 @@ internal static class ConstructionConfigLoader
     private static readonly Dictionary<int, ConfigBuildShip> _ships = new();
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildFormula>(
                          configDir, "config_build_formula.db"))
                 _formulas[id] = cfg;
@@ -170,9 +169,8 @@ internal static class ConstructionConfigLoader
 /// <summary>加载可使用道具配置（宝箱 id → 掉落池 id）。</summary>
 internal static class ItemInfoLoader
 {
-    public static Dictionary<int, ConfigItemInfo> Load(string dataRoot)
+    public static Dictionary<int, ConfigItemInfo> Load(string configDir)
     {
-        var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
         return ConfigDbLoader.LoadAll<ConfigItemInfo>(configDir, "config_item_info.db");
     }
 }
@@ -618,12 +616,11 @@ internal static class RemouldConfigLoader
     private static readonly Dictionary<int, ConfigShipRemouldTemplate> _templates = new();
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             _effects.Clear();
             _templates.Clear();
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigShipRemouldEffect>(
@@ -751,12 +748,11 @@ internal static class CharacterStoryLoader
     private static readonly List<HeroMemory> _allMemories = [];
     private static bool _loaded;
 
-    public static void Load(string dataRoot)
+    public static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            var configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             _allMemories.Clear();
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigBuildingCharacterStory>(
                          configDir, "config_building_character_story.db"))
@@ -896,12 +892,11 @@ internal static class BuildingConfigLoader
     internal static IReadOnlyDictionary<int, ConfigBuilding> Lands => _lands;
     internal static IReadOnlyList<int> MaterialTemplateIds { get; private set; } = [];
 
-    internal static void Load(string dataRoot)
+    internal static void Load(string configDir)
     {
         if (_loaded) return;
         try
         {
-            string configDir = ConfigDbLoader.FindConfigDir(dataRoot);
             _infos = ConfigDbLoader.LoadAll<ConfigBuildinginfo>(configDir, "config_buildinginfo.db");
             _lands = ConfigDbLoader.LoadAll<ConfigBuilding>(configDir, "config_building.db");
             _levelUps = ConfigDbLoader.LoadAll<ConfigBuildinglevelup>(configDir, "config_buildinglevelup.db");
