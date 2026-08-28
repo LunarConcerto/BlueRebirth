@@ -1,5 +1,6 @@
 using BlueOath.Core;
 using BlueOath.Protocol;
+using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
@@ -54,7 +55,21 @@ internal sealed class BuildShipService(GameServices services)
     }
 
     /// <summary>扁平化后的掉落池条目（已递归展开 GoodsType.DROP）。</summary>
-    internal sealed record DropPoolEntry(int GoodsType, int ConfigId, int MinNum, int MaxNum, int Weight);
+    internal sealed record DropPoolEntry(int GoodsType, int ConfigId, int MinNum, int MaxNum, int Weight)
+    {
+        public override string ToString()
+        {
+            string goodsName = "No";
+            if (GoodsType == GameServices.GoodsTypeShip)
+            {
+                string shipName = ShipHandbookLoader.GetShipName(ConfigId);
+                goodsName = shipName;
+            }
+
+            return
+                $"{nameof(GoodsType)}: {GoodsType}, goodsName: {goodsName}, {nameof(ConfigId)}: {ConfigId}, {nameof(MinNum)}: {MinNum}, {nameof(MaxNum)}: {MaxNum}, {nameof(Weight)}: {Weight}";
+        }
+    }
 
     /// <summary>
     /// 处理 buildship.BuildShip：按 config_extract_ship → config_drop_item 标准流程抽取。
@@ -81,6 +96,8 @@ internal sealed class BuildShipService(GameServices services)
         var entries = FlattenDropPool((int)extractConfig.DropItemId);
         if (entries.Count == 0)
             return [];
+
+        // Console.WriteLine(string.Join(",\n", entries));
 
         long extractType = extractConfig.ExtractType;
 
