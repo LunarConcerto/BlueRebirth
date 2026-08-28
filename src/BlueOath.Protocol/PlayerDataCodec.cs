@@ -288,12 +288,6 @@ public static class PlayerDataCodec
         WriteVarintField(output, 8, unchecked((ulong)value.ElectricMax));
         WriteVarintField(output, 9, unchecked((ulong)value.WorkerUpdateTime));
         WriteVarintField(output, 10, unchecked((ulong)value.WorkerUpdateTime));
-
-        // PbToLua omitted these repeated fields when the original server sent none. A fully
-        // populated harmless entry preserves the non-nil tables expected by BuildingData.
-        byte[] emptyPlot = new byte[] { 0x08, 0x01, 0x10, 0x00, 0x18, 0x00 };
-        WriteMessage(output, 11, emptyPlot);
-        WriteMessage(output, 12, emptyPlot);
         return output.ToArray();
     }
 
