@@ -3,10 +3,10 @@ using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
-/// <summary>抽卡模块：buildship.*（BuildShip / BuildShipInfo / BuildShipBox / BuildShipReward）。</summary>
+/// <summary>抽卡模块：buildship.*（BuildShip 等）+ 许愿池 illustrate.ModiVowHeroList / VowHero。</summary>
 internal sealed class BuildShipModule(BuildShipService buildShip, GameServices services) : IGameModule
 {
-    public IReadOnlyList<string> Prefixes => ["buildship"];
+    public IReadOnlyList<string> Prefixes => ["buildship", "illustrate"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {
@@ -52,6 +52,14 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
             case "buildship.BuildShipInfo":
                 result = ModuleResult.Ok(new byte[] { 0x08, 0x00 }); // DrawInfo: empty
                 break;
+            case "illustrate.ModiVowHeroList":
+                // 许愿墙列表由客户端本地维护（_OnModiVowHero 用 state 回显调用 SetPreHeroList），
+                // 服务端只需返回成功。
+                result = ModuleResult.Ok([]);
+                break;
+            case "illustrate.VowHero":
+                result = await BuildVowHeroRetAsync(ctx, request);
+                break;
             case "buildship.BuildShipBox":
             case "buildship.BuildShipReward":
             default:
@@ -59,6 +67,45 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                 break;
         }
         return result;
+    }
+
+    /// <summary>
+    /// 处理 illustrate.VowHero：许愿获取舰娘。ChooseHeroList 为 ship_info_id（图鉴 id），
+    /// 取第一个并映射 templateId = ship_info_id * 10 + 1，创建同名新舰娘，返回 TVowHeroRet。
+    /// </summary>
+    private async Task<ModuleResult> BuildVowHeroRetAsync(GameContext ctx, TRequest request)
+    {
+        if (request.Args is null) return ModuleResult.Empty;
+        List<int> heroList = ProtocolDecoder.DecodeChooseHeroList(request.Args);
+        if (heroList.Count == 0) return ModuleResult.Empty;
+
+        int shipInfoId = heroList[0];
+        int templateId = shipInfoId * 10 + 1;
+
+        var account = await ctx.GetAccountAsync();
+        int now = ctx.Now;
+        uint heroId = services.NextHeroId();
+        account = services.AddShip(account, heroId, templateId, now);
+        await services.SaveAccountAsync(account, ctx.Ct);
+
+        byte[] ret = ProtocolEncoder.EncodeVowHeroRet(GameServices.GoodsTypeShip, templateId, 1, (int)heroId);
+
+        var updatedAccount = await ctx.GetAccountAsync();
+        var heroes = updatedAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
+        var heroPush = TMessageCodec.EncodeResponse(new TResponse(
+            Method: "hero.UpdateHeroBagData",
+            Ret: PlayerDataCodec.Encode(new HeroBag(heroes, updatedAccount.Dock.BagSize)),
+            Time: (uint)ctx.Now));
+        var illustratePush = TMessageCodec.EncodeResponse(new TResponse(
+            Method: "illustrate.IllustrateInfo",
+            Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
+                IllustrateList: updatedAccount.Dock.Heroes
+                    .Where(h => h.HeroId == heroId)
+                    .Select(h => new IllustrateInfo((h.TemplateId - 1) / 10, ctx.Now, 0, false, null, 0))
+                    .ToList(),
+                IllustrateEquipList: [new IllustrateEquipInfo()])),
+            Time: (uint)ctx.Now));
+        return new ModuleResult { Ret = ret, PrePushes = [heroPush, illustratePush] };
     }
 
 }

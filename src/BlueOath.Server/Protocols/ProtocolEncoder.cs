@@ -63,6 +63,17 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 TVowHeroRet: Type(1)/ConfigId(2)/Num(3)/Id(4)，均为 int32。</summary>
+    internal static byte[] EncodeVowHeroRet(int type, int configId, int num, int id)
+    {
+        ProtocolPackage output = new();
+        output.Write(0x08, unchecked((ulong)type));     // Type
+        output.Write(0x10, unchecked((ulong)configId)); // ConfigId
+        output.Write(0x18, unchecked((ulong)num));      // Num
+        output.Write(0x20, unchecked((ulong)id));       // Id
+        return output.ToArray();
+    }
+
     /// <summary>编码 TEquipDismantleRet: ItemInfo(1, repeated TCommonReward)。</summary>
     internal static byte[] EncodeEquipDismantleRet(IReadOnlyList<CommonReward> rewards)
     {
@@ -516,8 +527,9 @@ internal static class ProtocolEncoder
                     es.Write(0x12, ab);
                 }
 
-                // PSkill (3) — List<int>，至少一个元素使列表非空
-                es.Write(0x18, 1UL);
+                // PSkill (3) — 留空：敌舰真实技能由客户端从 config_ship_enemy.pskill_id_array
+                // 自动生成。此前硬编码 [1] 会让每艘敌舰注册真实被动组1（杂兵也带、首领叠加），
+                // 属确定性错误，改发空列表。
                 byte[] esb = es.ToArray();
                 ef.Write(0x1A, esb);
             }

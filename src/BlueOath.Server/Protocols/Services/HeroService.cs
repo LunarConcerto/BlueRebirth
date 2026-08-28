@@ -37,6 +37,12 @@ internal sealed class HeroService(GameServices services)
         bool Changed,
         string Error);
 
+    internal sealed record AdvanceResult(
+        byte[] Ret,
+        Hero? UpdatedHero,
+        IReadOnlyList<uint> ConsumedHeroIds,
+        bool Changed);
+
     internal async Task<byte[]> BuildChangeEquipRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null)
@@ -396,9 +402,9 @@ internal sealed class HeroService(GameServices services)
     }
 
     /// <summary>处理 hero.HeroAdvance：突破升星。消耗材料英雄，扣除金币，Advance+1，TemplateId+1。</summary>
-    internal async Task<byte[]> BuildAdvanceRetAsync(TRequest request, string profileId, CancellationToken ct)
+    internal async Task<AdvanceResult> BuildAdvanceRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
-        if (request.Args is null) return [];
+        if (request.Args is null) return new([], null, [], false);
         var (heroId, consumedHeros, consumeItems) = ProtocolDecoder.DecodeAdvanceArg(request.Args);
 
         using var _ = await services.LockAccountAsync(profileId, ct);
@@ -407,18 +413,23 @@ internal sealed class HeroService(GameServices services)
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
         int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
-        if (heroIdx < 0) return [];
+        if (heroIdx < 0) return new([], null, [], false);
 
         Hero hero = heroList[heroIdx];
         int newAdvance = hero.Advance + 1;
         int newTemplateId = hero.TemplateId + 1;
 
-        // 移除消耗的英雄
+        // 移除消耗的英雄（记录被移除的实例 ID，用于客户端删除标记推送）。
+        List<uint> consumedIds = new();
         foreach (uint consumedId in consumedHeros)
-            heroList.RemoveAll(h => h.HeroId == consumedId);
+        {
+            if (heroList.RemoveAll(h => h.HeroId == consumedId) > 0)
+                consumedIds.Add(consumedId);
+        }
 
         // 更新主英雄
-        heroList[heroIdx] = hero with { Advance = newAdvance, TemplateId = newTemplateId };
+        Hero updatedHero = hero with { Advance = newAdvance, TemplateId = newTemplateId };
+        heroList[heroIdx] = updatedHero;
 
         account = account with { Dock = dock with { Heroes = heroList } };
 
@@ -430,7 +441,7 @@ internal sealed class HeroService(GameServices services)
         account = GameServices.AddCurrency(account, 1, -10000);
 
         await services.SaveAccountAsync(account, ct);
-        return [];
+        return new([], updatedHero, consumedIds, true);
     }
 
     /// <summary>处理 hero.StudySkill：技能升级。SkillId 对应 PSkillId，Level 递增。</summary>

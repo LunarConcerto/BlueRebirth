@@ -219,6 +219,17 @@ internal static class ProtocolDecoder
         return consumeIds;
     }
 
+    /// <summary>解码 repeated int32 单字段（field 1），用于 illustrate.ModiVowHeroList / VowHero 的 ChooseHeroList。</summary>
+    internal static List<int> DecodeChooseHeroList(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        List<int> heroList = [];
+        while (reader.TryReadField(out int field, out int wire))
+            if (field == 1 && wire == 0) heroList.Add(checked((int)reader.ReadVarint()));
+            else reader.Skip(wire);
+        return heroList;
+    }
+
     /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>
     internal static (uint HeroId, int SkillId) DecodeStudySkillArg(byte[] args)
     {

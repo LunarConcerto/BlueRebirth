@@ -176,16 +176,39 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                 result = ModuleResult.Ok(await hero.BuildSetHerosTacticAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "hero.HeroAdvance":
+                HeroService.AdvanceResult advance =
+                    await hero.BuildAdvanceRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (!advance.Changed || advance.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = advance.Ret,
+                        Err = 1,
+                        ErrMsg = "advance failed",
+                    };
+                    break;
+                }
+                PlayerAccount advanceAccount = await ctx.GetAccountAsync();
+                uint advanceNow = (uint)ctx.Now;
+                // 突破会消耗素材舰娘。HeroData.SetData 只按增量合并，TemplateId=0 才是删除标记，
+                // 不能只推送剩余全量；需为每个被消耗舰娘推送删除标记 + 更新后的主舰娘。
+                List<HeroGrid> advanceHeroGrids =
+                [
+                    GameServices.ToHeroGrid(advance.UpdatedHero),
+                    .. advance.ConsumedHeroIds.Select(id => new HeroGrid(HeroId: id, TemplateId: 0)),
+                ];
                 result = new ModuleResult
                 {
-                    Ret = await hero.BuildAdvanceRetAsync(request, ctx.ProfileId, ctx.Ct),
-                };
-                var advAccount = await ctx.GetAccountAsync();
-                var advHeroes = advAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
-                result = new ModuleResult
-                {
-                    Ret = result.Ret,
-                    PrePushes = BuildHeroBagPushes(advAccount, advHeroes, (uint)ctx.Now),
+                    Ret = advance.Ret,
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(advanceHeroGrids, advanceAccount.Dock.BagSize)),
+                            Time: advanceNow)),
+                        services.BuildBagPush(advanceAccount, advanceNow),
+                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, advanceNow, ctx.Ct),
+                    ],
                 };
                 break;
             case "hero.StudySkill":

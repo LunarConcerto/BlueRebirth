@@ -461,7 +461,7 @@ internal static class CopyBattleLoader{
                     doc.RootElement.TryGetProperty("ship_info_id", out var sid) ? sid.GetInt32() : 0,
                     doc.RootElement.TryGetProperty("hit", out var hit) ? hit.GetInt32() : 100,
                     doc.RootElement.TryGetProperty("dodge", out var dodge) ? dodge.GetInt32() : 0,
-                    doc.RootElement.TryGetProperty("torpedo_attack", out var ta) ? ta.GetInt32() : 0,
+                    doc.RootElement.TryGetProperty("torpedo", out var ta) ? ta.GetInt32() : 0, // config_ship_enemy 实际字段是 torpedo（此前误用 torpedo_attack 恒为 0）
                     doc.RootElement.TryGetProperty("torpedo_defense", out var td) ? td.GetInt32() : 0);
             });
         }
