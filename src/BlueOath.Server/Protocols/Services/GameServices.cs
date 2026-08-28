@@ -205,6 +205,8 @@ internal sealed class GameServices
             await SaveAccountAsync(account, ct);
         }
         var heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
+        var illustrateBehaviour = (account.Illustrate?.Entries ?? [])
+            .ToDictionary(e => e.IllustrateId, e => e.BehaviourList);
 
         return
         [
@@ -292,7 +294,12 @@ internal sealed class GameServices
                 Method: "illustrate.IllustrateInfo",
                 Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
                     IllustrateList: account.Dock.Heroes
-                        .Select(h => new IllustrateInfo(ToIllustrateId(h.TemplateId), now, 0, false, null, 0))
+                        .Select(h =>
+                        {
+                            int siId = ToIllustrateId(h.TemplateId);
+                            illustrateBehaviour.TryGetValue(siId, out var behaviour);
+                            return new IllustrateInfo(siId, now, 0, false, behaviour, 0);
+                        })
                         .ToList(),
                     IllustrateEquipList: [new IllustrateEquipInfo()],
                     HeroMemoryList: CharacterStoryLoader.AllMemories)),

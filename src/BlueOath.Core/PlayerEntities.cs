@@ -112,6 +112,15 @@ public sealed record BagItem(int TemplateId, int Num);
 /// <summary>玩家仓库（道具/材料等）。对应 bag.GetBagInfo / bag.UpdateBagData 的 TBagInfoRet。</summary>
 public sealed record PlayerBag(IReadOnlyList<BagItem> Items, int BagSize = 100);
 
+/// <summary>图鉴条目（含已解锁动作）。IllustrateId = ship_info_id。</summary>
+public sealed record IllustrateEntry(
+    int IllustrateId,
+    IReadOnlyList<int>? BehaviourList = null);
+
+/// <summary>玩家图鉴（已解锁条目及动作）。对应 illustrate.AddBehaviour 持久化。</summary>
+public sealed record PlayerIllustrate(
+    IReadOnlyList<IllustrateEntry> Entries);
+
 /// <summary>时装解锁项（TFashionInfo：船型 SfId + 已解锁时装列表）。</summary>
 public sealed record FashionEntry(int SfId, IReadOnlyList<int> FashionTids);
 
@@ -192,7 +201,8 @@ public sealed record PlayerAccount(
     PlayerBath? Bath = null,
     PlayerConstruction? Construction = null,
     PlayerBuilding? Building = null,
-    string? ProfileDisplayName = null);
+    string? ProfileDisplayName = null,
+    PlayerIllustrate? Illustrate = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。

@@ -230,6 +230,33 @@ internal static class ProtocolDecoder
         return heroList;
     }
 
+    /// <summary>解码 illustrate.AddBehaviour 参数：BehaviourItem(1, repeated TIllustrateBehaviourItem
+    /// {IllustrateId=1, BehaviourId=2 repeated int32})。</summary>
+    internal static List<(int IllustrateId, List<int> BehaviourIds)> DecodeAddBehaviourArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        List<(int, List<int>)> result = [];
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 2)
+            {
+                ProtoReader item = new(reader.ReadBytes());
+                int illustrateId = 0;
+                List<int> behaviourIds = [];
+                while (item.TryReadField(out int ifield, out int iwire))
+                {
+                    if (ifield == 1 && iwire == 0) illustrateId = checked((int)item.ReadVarint());
+                    else if (ifield == 2 && iwire == 0) behaviourIds.Add(checked((int)item.ReadVarint()));
+                    else item.Skip(iwire);
+                }
+                if (illustrateId != 0)
+                    result.Add((illustrateId, behaviourIds));
+            }
+            else reader.Skip(wire);
+        }
+        return result;
+    }
+
     /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>
     internal static (uint HeroId, int SkillId) DecodeStudySkillArg(byte[] args)
     {

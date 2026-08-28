@@ -60,6 +60,9 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
             case "illustrate.VowHero":
                 result = await BuildVowHeroRetAsync(ctx, request);
                 break;
+            case "illustrate.AddBehaviour":
+                result = ModuleResult.Ok(await buildShip.BuildAddBehaviourRetAsync(request, ctx.ProfileId, ctx.Ct));
+                break;
             case "buildship.BuildShipBox":
             case "buildship.BuildShipReward":
             default:
