@@ -41,7 +41,27 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
-    /// <summary>构建头像解锁列表推送（TNewHeadUnlockedList），包含船坞中所有舰娘的 sf_id。</summary>
+    /// <summary>
+    /// 编码 TBuildShipInfo：为指定卡池（config_extract_ship id）设置 CloseTime（field 10, repeated
+    /// TBuildShipCloseTime{Id(1), CloseTime(2)}）。客户端 CheckActIsOpen 优先读该字段，
+    /// 只要 CloseTime &gt; 当前时间即判定卡池开启，从而绕过已过期的 new_period 限制。
+    /// </summary>
+    internal static byte[] EncodeBuildShipInfo(IEnumerable<int> enabledPoolIds, uint now)
+    {
+        ProtocolPackage output = new();
+        // 取未来 365 天作为关闭时间，保证长期有效。
+        uint closeTime = now + 365 * 24 * 60 * 60;
+        foreach (int poolId in enabledPoolIds)
+        {
+            ProtocolPackage entry = new();
+            entry.Write(0x08, unchecked((ulong)poolId)); // Id(1)
+            entry.Write(0x10, closeTime);                // CloseTime(2)
+            byte[] body = entry.ToArray();
+            output.Write(0x52, body);                    // field 10, wire 2
+        }
+        return output.ToArray();
+    }
+
     internal static byte[] BuildHeadUnlockedListPush(PlayerAccount account)
     {
         // 收集船坞中所有舰娘的 sf_id（ship_info_id = (TemplateId - 1) / 10）

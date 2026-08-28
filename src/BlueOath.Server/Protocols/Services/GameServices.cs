@@ -40,6 +40,7 @@ internal sealed class GameServices
     private readonly Dictionary<int, int> _expNeeded;
     private readonly Dictionary<int, List<RandomFactorEntry>> _copyRandomFactors;
     private readonly Random _rng = new();
+    private readonly BuildPoolsConfig _buildPoolsConfig = BuildPoolsConfigLoader.Load();
 
     public GameServices(SqliteGameRepository repo, ServerOptions options, ILoggerFactory loggerFactory)
     {
@@ -320,6 +321,13 @@ internal sealed class GameServices
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "recharge.RechargeInfo",
                 Ret: new byte[] { 0x1A, 0x00 },
+                Time: now)),
+
+            // 卡池信息推送（buildship.BuildShipInfo）：为配置中启用的卡池设置未来的 CloseTime，
+            // 客户端 CheckActIsOpen 据此判定这些限时卡池为开启状态。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "buildship.BuildShipInfo",
+                Ret: ProtocolEncoder.EncodeBuildShipInfo(_buildPoolsConfig.EnabledPoolIds, now),
                 Time: now)),
 
             // 仓库数据推送（道具）。

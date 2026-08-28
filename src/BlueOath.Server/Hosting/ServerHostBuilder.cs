@@ -36,6 +36,7 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<ServerEndpoints>();
         builder.Services.AddSingleton(_ => AnnouncementConfigLoader.Load());
+        builder.Services.AddSingleton(_ => BuildPoolsConfigLoader.Load());
         builder.Services.AddSingleton<SqliteGameRepository>(sp =>
             new SqliteGameRepository(sp.GetRequiredService<ServerOptions>().DataRoot));
         builder.Services.AddSingleton<GameService>(sp =>

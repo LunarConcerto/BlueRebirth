@@ -18,5 +18,6 @@
     <EmbeddedResource Include="announcements.json" />
     <EmbeddedResource Include="gm-goods.json" />
     <EmbeddedResource Include="gm-mails.json" />
+    <EmbeddedResource Include="build-pools.json" />
   </ItemGroup>
 </Project>
