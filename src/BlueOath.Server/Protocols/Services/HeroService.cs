@@ -1,6 +1,7 @@
 using BlueOath.Core;
 using BlueOath.Protocol;
 using BlueOath.Server.Configs;
+using System.Text.Json;
 
 namespace BlueOath.Server.Protocols;
 
@@ -401,7 +402,7 @@ internal sealed class HeroService(GameServices services)
         return PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize));
     }
 
-    /// <summary>处理 hero.HeroAdvance：突破升星。消耗材料英雄，扣除金币，Advance+1，TemplateId+1。</summary>
+    /// <summary>处理 hero.HeroAdvance：按 config_ship_break 校验并执行突破。</summary>
     internal async Task<AdvanceResult> BuildAdvanceRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return new([], null, [], false);
@@ -413,35 +414,179 @@ internal sealed class HeroService(GameServices services)
         HeroDock dock = account.Dock;
         List<Hero> heroList = dock.Heroes.ToList();
         int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
-        if (heroIdx < 0) return new([], null, [], false);
+        if (heroIdx < 0 || heroList.Count(h => h.HeroId == heroId) != 1)
+            return new([], null, [], false);
 
         Hero hero = heroList[heroIdx];
-        int newAdvance = hero.Advance + 1;
-        int newTemplateId = hero.TemplateId + 1;
+        ConfigShipBreak? config = ShipBreakLoader.Get(hero.TemplateId);
+        if (config is null || hero.Level < config.MinLevel ||
+            !int.TryParse(config.BreakTo, out int newTemplateId) || newTemplateId <= 0 ||
+            !TryGetAdvanceRequirements(config, out HashSet<int> allowedHeroTemplates,
+                out HashSet<int> allowedHeroQualities, out int requiredHeroCount,
+                out HashSet<int> allowedItemTemplates, out int requiredItemCount,
+                out int currencyId, out int currencyCost))
+            return new([], null, [], false);
 
-        // 移除消耗的英雄（记录被移除的实例 ID，用于客户端删除标记推送）。
-        List<uint> consumedIds = new();
-        foreach (uint consumedId in consumedHeros)
+        // 请求只能选择配置允许且实际存在的素材；零值、重复实例、额外素材与缺失素材均拒绝。
+        if (consumedHeros.Any(id => id == 0) || consumedHeros.Distinct().Count() != consumedHeros.Count ||
+            consumedHeros.Count != requiredHeroCount || consumedHeros.Contains(heroId))
+            return new([], null, [], false);
+        HashSet<uint> consumedIdSet = consumedHeros.ToHashSet();
+        List<Hero> consumedHeroes = heroList.Where(h => consumedIdSet.Contains(h.HeroId)).ToList();
+        if (consumedHeroes.Count != requiredHeroCount ||
+            consumedHeroes.Any(material => material.Lock ||
+                !IsAllowedAdvanceMaterial(material, allowedHeroTemplates, allowedHeroQualities) ||
+                IsHeroInUse(account, material.HeroId)))
+            return new([], null, [], false);
+
+        // 道具列表按“每个实例一个模板 ID”编码，必须与配置数量完全一致。
+        if (consumeItems.Any(id => id == 0 || id > int.MaxValue) ||
+            consumeItems.Count != requiredItemCount ||
+            consumeItems.Any(id => !allowedItemTemplates.Contains((int)id)))
+            return new([], null, [], false);
+        Dictionary<int, int> requestedItems = consumeItems
+            .GroupBy(id => (int)id)
+            .ToDictionary(group => group.Key, group => group.Count());
+        foreach ((int templateId, int count) in requestedItems)
         {
-            if (heroList.RemoveAll(h => h.HeroId == consumedId) > 0)
-                consumedIds.Add(consumedId);
+            int owned = account.Bag?.Items.FirstOrDefault(item => item.TemplateId == templateId)?.Num ?? 0;
+            if (owned < count) return new([], null, [], false);
         }
+        if (currencyId != 1 || currencyCost < 0 || account.Character.Gold < currencyCost)
+            return new([], null, [], false);
 
-        // 更新主英雄
+        int newAdvance = hero.Advance + 1;
+        List<uint> consumedIds = consumedHeroes.Select(h => h.HeroId).ToList();
+        heroList.RemoveAll(h => consumedIdSet.Contains(h.HeroId));
+
+        // 删除素材会改变列表下标，必须按实例 ID 重新定位主英雄。使用删除前的 heroIdx
+        // 会在素材位于主英雄之前时覆盖相邻舰娘，并留下两个相同 HeroId 的主英雄副本。
         Hero updatedHero = hero with { Advance = newAdvance, TemplateId = newTemplateId };
-        heroList[heroIdx] = updatedHero;
+        int updatedHeroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (updatedHeroIdx < 0)
+            return new([], null, [], false);
+        heroList[updatedHeroIdx] = updatedHero;
 
-        account = account with { Dock = dock with { Heroes = heroList } };
+        // 素材舰娘可能携带抽卡时发放的默认装备。消耗舰娘时保留装备实例并安全卸下，
+        // 避免 EquipItem.HeroId 指向已经不存在的舰娘。
+        PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
+        List<EquipItem> equipItems = equip.Items.Select(item =>
+            consumedIdSet.Contains(item.HeroId) ? item with { HeroId = 0 } : item).ToList();
 
-        // 扣除消耗的道具
-        foreach (uint itemId in consumeItems)
-            account = GameServices.AddBagItem(account, (int)itemId, -1);
+        account = account with
+        {
+            Dock = dock with { Heroes = heroList },
+            Equip = equip with { Items = equipItems },
+        };
 
-        // 扣除金币（config_ship_break.break_cost 默认约 10000）
-        account = GameServices.AddCurrency(account, 1, -10000);
+        foreach ((int templateId, int count) in requestedItems)
+            account = GameServices.AddBagItem(account, templateId, -count);
+        account = GameServices.AddCurrency(account, currencyId, -currencyCost);
 
         await services.SaveAccountAsync(account, ct);
         return new([], updatedHero, consumedIds, true);
+    }
+
+    private static bool TryGetAdvanceRequirements(
+        ConfigShipBreak config,
+        out HashSet<int> allowedHeroTemplates,
+        out HashSet<int> allowedHeroQualities,
+        out int requiredHeroCount,
+        out HashSet<int> allowedItemTemplates,
+        out int requiredItemCount,
+        out int currencyId,
+        out int currencyCost)
+    {
+        allowedHeroTemplates = [];
+        allowedHeroQualities = [];
+        requiredHeroCount = 0;
+        allowedItemTemplates = [];
+        requiredItemCount = 0;
+        currencyId = 0;
+        currencyCost = 0;
+
+        if (config.BreakItem is { Count: > 0 } heroRequirement)
+        {
+            if (heroRequirement.Count != 2 ||
+                !TryReadIntList(heroRequirement[0], out allowedHeroTemplates) ||
+                !TryReadInt(heroRequirement[1], out requiredHeroCount) ||
+                allowedHeroTemplates.Count == 0 || requiredHeroCount <= 0)
+                return false;
+        }
+
+        // 特殊第七次突破的 break_item_optional 是允许作为单个素材的舰娘品质列表
+        // （当前配置为 4=SR / 5=SSR），而不是实例 ID 或消耗数量。
+        if (config.BreakItemOptional is { Count: > 0 } optionalQualities)
+        {
+            if (requiredHeroCount != 0 || optionalQualities.Any(quality => quality <= 0 || quality > int.MaxValue))
+                return false;
+            allowedHeroQualities.UnionWith(optionalQualities.Select(quality => (int)quality));
+            requiredHeroCount = 1;
+        }
+
+        if (config.BreakItemMub is { Count: > 0 } itemRequirement)
+        {
+            if (itemRequirement.Count != 2 || itemRequirement[0] <= 0 || itemRequirement[1] <= 0 ||
+                itemRequirement[0] > int.MaxValue || itemRequirement[1] > int.MaxValue)
+                return false;
+            allowedItemTemplates.Add((int)itemRequirement[0]);
+            foreach (long usableItemId in config.BreakUsableitemMub ?? [])
+            {
+                if (usableItemId <= 0 || usableItemId > int.MaxValue) return false;
+                allowedItemTemplates.Add((int)usableItemId);
+            }
+            requiredItemCount = (int)itemRequirement[1];
+        }
+
+        if (config.CurrencyCost is not { Count: 3 } currency ||
+            currency[0] != GameServices.GoodsTypeCurrency || currency[1] <= 0 || currency[1] > int.MaxValue ||
+            currency[2] < 0 || currency[2] > int.MaxValue)
+            return false;
+        currencyId = (int)currency[1];
+        currencyCost = (int)currency[2];
+        return true;
+    }
+
+    private bool IsAllowedAdvanceMaterial(
+        Hero material,
+        IReadOnlySet<int> allowedTemplates,
+        IReadOnlySet<int> allowedQualities)
+    {
+        if (allowedTemplates.Contains(material.TemplateId)) return true;
+        if (allowedQualities.Count == 0) return false;
+        ConfigShipMain? ship = ShipMainLoader.Get(material.TemplateId);
+        return ship is not null && ship.ShipInfoId > 0 && ship.ShipInfoId <= int.MaxValue &&
+            services.ShipInfos.TryGetValue((int)ship.ShipInfoId, out ConfigShipInfo? info) &&
+            info.Quality > 0 && info.Quality <= int.MaxValue && allowedQualities.Contains((int)info.Quality);
+    }
+
+    private static bool TryReadInt(object value, out int result)
+    {
+        if (value is JsonElement json && json.TryGetInt32(out result)) return true;
+        return int.TryParse(Convert.ToString(value), out result);
+    }
+
+    private static bool TryReadIntList(object value, out HashSet<int> values)
+    {
+        values = [];
+        if (value is not JsonElement { ValueKind: JsonValueKind.Array } json) return false;
+        foreach (JsonElement item in json.EnumerateArray())
+        {
+            if (!item.TryGetInt32(out int templateId) || templateId <= 0) return false;
+            values.Add(templateId);
+        }
+        return values.Count > 0;
+    }
+
+    private static bool IsHeroInUse(PlayerAccount account, uint heroId)
+    {
+        if (account.Character.SecretaryId == heroId) return true;
+        if (account.Fleet?.Tactics.Any(entry =>
+                (entry.HeroInfo?.Any(id => id > 0 && (uint)id == heroId) ?? false) ||
+                (entry.ExHeroInfo?.Any(id => id > 0 && (uint)id == heroId) ?? false)) == true)
+            return true;
+        if (account.Bath?.HeroList.Any(hero => hero.HeroId == heroId) == true) return true;
+        return account.Building?.Buildings.Any(building => building.HeroIds.Contains(heroId)) == true;
     }
 
     /// <summary>处理 hero.StudySkill：技能升级。SkillId 对应 PSkillId，Level 递增。</summary>

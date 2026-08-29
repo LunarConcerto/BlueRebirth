@@ -788,6 +788,11 @@ internal static class ProtocolEncoder
             baseInfo.Write(0x20, 0UL); // IsRunningFight(4)=0
             baseInfo.Write(0x28, 0UL); // LBPoint(5)=0
             baseInfo.Write(0x30, unchecked((ulong)firstPassTime)); // FirstPassTime(6)
+            // 海域安全度字段不能省略：客户端 proto2 解码后，缺失的 optional 字段为 nil。
+            // SeaCopyPage 会直接用 SfLv 查询 config_safearea，并用 SfLvChoose 初始化难度选项。
+            baseInfo.Write(0x40, 1UL); // SfLv(8)=1，初始安全度
+            baseInfo.WriteFixed32(0x4D, 0U); // SfPoint(9)=0.0f
+            baseInfo.Write(0x60, 1UL); // SfLvChoose(12)=1
             byte[] body = baseInfo.ToArray();
             ms.Write(0x0A, body);
         }

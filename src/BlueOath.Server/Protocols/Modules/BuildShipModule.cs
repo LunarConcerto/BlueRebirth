@@ -38,7 +38,8 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                             Method: "illustrate.IllustrateInfo",
                             Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
                                 IllustrateList: newHeroes
-                                    .Select(h => new IllustrateInfo((h.TemplateId - 1) / 10, now, 0, false, null, 0))
+                                    .Select(h => GameServices.BuildUnlockedIllustrateInfo(
+                                        GameServices.ToIllustrateId(h.TemplateId), now))
                                     .ToList(),
                                 IllustrateEquipList: [new IllustrateEquipInfo()])),
                             Time: now)));
@@ -104,7 +105,8 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
             Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
                 IllustrateList: updatedAccount.Dock.Heroes
                     .Where(h => h.HeroId == heroId)
-                    .Select(h => new IllustrateInfo((h.TemplateId - 1) / 10, ctx.Now, 0, false, null, 0))
+                    .Select(h => GameServices.BuildUnlockedIllustrateInfo(
+                        GameServices.ToIllustrateId(h.TemplateId), ctx.Now))
                     .ToList(),
                 IllustrateEquipList: [new IllustrateEquipInfo()])),
             Time: (uint)ctx.Now));

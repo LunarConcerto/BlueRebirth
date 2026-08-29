@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 
 namespace BlueOath.Protocol;
@@ -20,6 +21,16 @@ public sealed class ProtocolPackage
     {
         WriteVarint(_buffer, unchecked((uint)key));
         WriteVarint(_buffer, value);
+        return this;
+    }
+
+    /// <summary>写 varint key + little-endian fixed32 value（wire type 5）。</summary>
+    public ProtocolPackage WriteFixed32(int key, uint value)
+    {
+        WriteVarint(_buffer, unchecked((uint)key));
+        Span<byte> bytes = stackalloc byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
+        _buffer.Write(bytes);
         return this;
     }
 
