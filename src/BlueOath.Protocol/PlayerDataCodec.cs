@@ -34,6 +34,36 @@ public sealed record BuildProject(IReadOnlyList<BuildItem>? Items = null, int Go
 /// <summary>A single ship-building formula (building / builded / waiting).</summary>
 public sealed record BuildFormula(long EndTime = 0, BuildProject? Project = null, int HeroId = 0);
 
+/// <summary>建造配方墙单条记录（buildnotes.GetNotesList）。</summary>
+public sealed record NotesInfo(
+    string Name = "",
+    BuildFormula? BuildedInfo = null,
+    int Count = 0,
+    int Head = 0,
+    ulong Uid = 0);
+
+/// <summary>建造配方墙（buildnotes.GetNotesList / GiveLike 响应）。</summary>
+public sealed record NotesListRet(IReadOnlyList<NotesInfo>? List = null);
+
+/// <summary>图鉴评价单条评论（discuss_pb.TMsgInfo）。</summary>
+public sealed record DiscussMsgInfo(
+    string Name = "",
+    string Msg = "",
+    int LikeNum = 0,
+    int MsgID = 0,
+    long LikeTime = 0,
+    long IsLiked = 0,
+    long IsDisLiked = 0,
+    int Level = 0);
+
+/// <summary>图鉴评价数据（discuss_pb.TGetDiscussRet）。</summary>
+public sealed record DiscussRet(
+    int DisLikeNum = 0,
+    long DisLikeTime = 0,
+    long MsgTime = 0,
+    int HeroLikeNum = 0,
+    IReadOnlyList<DiscussMsgInfo>? MsgInfo = null);
+
 /// <summary>Payload for the <c>build.BuildsInfo</c> server message.</summary>
 public sealed record BuildsInfoRet(
     IReadOnlyList<BuildFormula>? BuildedList = null,
@@ -218,6 +248,57 @@ public static class PlayerDataCodec
         WriteVarintField(output, 1, unchecked((ulong)value.EndTime));
         if (value.Project is not null) WriteMessage(output, 2, Encode(value.Project));
         if (value.HeroId != 0) WriteVarintField(output, 3, unchecked((ulong)value.HeroId));
+        return output.ToArray();
+    }
+
+    /// <summary>编码 buildnotes.GetNotesList 响应（TNotesListRet: List(1, repeated TNotesInfo)）。</summary>
+    public static byte[] Encode(NotesListRet value)
+    {
+        using var output = new MemoryStream();
+        if (value.List is not null)
+            foreach (NotesInfo note in value.List) WriteMessage(output, 1, Encode(note));
+        return output.ToArray();
+    }
+
+    /// <summary>编码单条配方墙记录（TNotesInfo: Name(1)/BuildedInfo(2)/Count(3)/Head(4)/Uid(5)）。
+    /// Count/Head/Uid 必须无条件编码：客户端 _LoadNotes 里 math.modf(Count) 对 nil 会崩。</summary>
+    public static byte[] Encode(NotesInfo value)
+    {
+        using var output = new MemoryStream();
+        if (!string.IsNullOrEmpty(value.Name)) WriteStringField(output, 1, value.Name);
+        if (value.BuildedInfo is not null) WriteMessage(output, 2, Encode(value.BuildedInfo));
+        WriteVarintField(output, 3, unchecked((ulong)value.Count));
+        WriteVarintField(output, 4, unchecked((ulong)value.Head));
+        WriteVarintField(output, 5, value.Uid);
+        return output.ToArray();
+    }
+
+    /// <summary>编码图鉴评价响应（TGetDiscussRet: DisLikeNum(1)/DisLikeTime(2)/MsgTime(3)/HeroLikeNum(4)/MsgInfo(5)）。</summary>
+    public static byte[] Encode(DiscussRet value)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)value.DisLikeNum));
+        WriteVarintField(output, 2, unchecked((ulong)value.DisLikeTime));
+        WriteVarintField(output, 3, unchecked((ulong)value.MsgTime));
+        WriteVarintField(output, 4, unchecked((ulong)value.HeroLikeNum));
+        if (value.MsgInfo is not null)
+            foreach (DiscussMsgInfo m in value.MsgInfo) WriteMessage(output, 5, Encode(m));
+        return output.ToArray();
+    }
+
+    /// <summary>编码单条评论（TMsgInfo: Name(1)/Msg(2)/LikeNum(3)/MsgID(4)/LikeTime(5)/IsLiked(6)/IsDisLiked(7)/Level(8)）。
+    /// 数值字段全部无条件编码，客户端 _getUILikeNum/IsLiked 比较对 nil 会崩。</summary>
+    public static byte[] Encode(DiscussMsgInfo value)
+    {
+        using var output = new MemoryStream();
+        if (!string.IsNullOrEmpty(value.Name)) WriteStringField(output, 1, value.Name);
+        if (!string.IsNullOrEmpty(value.Msg)) WriteStringField(output, 2, value.Msg);
+        WriteVarintField(output, 3, unchecked((ulong)value.LikeNum));
+        WriteVarintField(output, 4, unchecked((ulong)value.MsgID));
+        WriteVarintField(output, 5, unchecked((ulong)value.LikeTime));
+        WriteVarintField(output, 6, unchecked((ulong)value.IsLiked));
+        WriteVarintField(output, 7, unchecked((ulong)value.IsDisLiked));
+        WriteVarintField(output, 8, unchecked((ulong)value.Level));
         return output.ToArray();
     }
 

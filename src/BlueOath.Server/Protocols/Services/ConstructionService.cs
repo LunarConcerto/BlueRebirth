@@ -29,6 +29,40 @@ internal sealed class ConstructionService(GameServices services)
         return EncodeInfo(refreshed.Construction);
     }
 
+    /// <summary>处理 buildnotes.GetNotesList：返回全部舰船的固定建造公式。</summary>
+    internal byte[] GetNotesList(int now)
+    {
+        var notes = new List<NotesInfo>();
+        foreach (int templateId in BuildFormulaCatalog.AllTemplateIds)
+        {
+            if (BuildFormulaCatalog.GetFormula(templateId) is not { } formula) continue;
+            var project = new BuildProject(
+                [new BuildItem(MaterialSteel, formula.Steel), new BuildItem(MaterialAluminium, formula.Aluminium)],
+                formula.Gold);
+            // EndTime 用固定历史时间戳，避免客户端 formatTimeToYMDHM(0) 解析异常。
+            var builded = new BuildFormula(EndTime: now, Project: project, HeroId: templateId);
+            string name = ShipHandbookLoader.GetShipName(templateId);
+            notes.Add(new NotesInfo(Name: name, BuildedInfo: builded, Count: 0, Head: 0, Uid: (ulong)templateId));
+        }
+        return PlayerDataCodec.Encode(new NotesListRet(notes));
+    }
+
+    /// <summary>处理 discuss.GetDiscuss：在图鉴评价区返回对应船只的固定建造配方。</summary>
+    internal byte[] GetDiscuss(int htid)
+    {
+        int templateId = BuildFormulaCatalog.TryGetTemplateByHtid(htid);
+        if (templateId <= 0 || BuildFormulaCatalog.GetFormula(templateId) is not { } formula)
+            return PlayerDataCodec.Encode(new DiscussRet());
+        string shipName = ShipHandbookLoader.GetShipName(templateId);
+        string msg = $"固定建造配方\n金币：{formula.Gold} 钢材：{formula.Steel} 铝材：{formula.Aluminium}";
+        Console.WriteLine(msg);
+        var comments = new List<DiscussMsgInfo>
+        {
+            new(Name: shipName, Msg: msg, LikeNum: 0, MsgID: 0, LikeTime: 0, IsLiked: 0, IsDisLiked: 0, Level: 0),
+        };
+        return PlayerDataCodec.Encode(new DiscussRet(MsgInfo: comments));
+    }
+
     internal async Task<MutationResult> StartAsync(
         TRequest request, string profileId, int now, CancellationToken ct)
     {
@@ -264,6 +298,12 @@ internal sealed class ConstructionService(GameServices services)
     {
         int steel = GetItemCount(project, MaterialSteel);
         int aluminium = GetItemCount(project, MaterialAluminium);
+
+        // 优先精确命中固定公式：命中则必出对应船只。
+        int fixedTemplate = BuildFormulaCatalog.TryGetTemplate(project.Gold, steel, aluminium);
+        if (fixedTemplate > 0)
+            return fixedTemplate;
+
         ConfigBuildFormula? formula = ConstructionConfigLoader.Formulas.Values.FirstOrDefault(value =>
             InRange(project.Gold, value.Res1) && InRange(steel, value.Res2) && InRange(aluminium, value.Res3));
         IReadOnlyList<long> qualityWeights;

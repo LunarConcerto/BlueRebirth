@@ -77,6 +77,7 @@ internal sealed class GameServices
         EquipLoader.Load(configDir, equipmentMods.Equipment);
         AffectionItemLoader.Load(configDir);
         ShipHandbookLoader.Load(configDir);
+        BuildFormulaCatalog.Load(_shipInfos);
         PlotTriggerLoader.Load(configDir);
         CharacterStoryLoader.Load(configDir);
         RemouldConfigLoader.Load(configDir);

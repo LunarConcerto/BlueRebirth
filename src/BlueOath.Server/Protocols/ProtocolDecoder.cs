@@ -273,6 +273,18 @@ internal static class ProtocolDecoder
         return (heroId, skillId);
     }
 
+    /// <summary>解码 discuss.GetDiscuss / discuss.HeroLike 请求的 Htid（field 1, int32）。</summary>
+    internal static int DecodeDiscussHtid(byte[]? args)
+    {
+        if (args is null) return 0;
+        ProtoReader reader = new(args);
+        int htid = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            if (field == 1 && wire == 0) htid = checked((int)reader.ReadVarint());
+            else reader.Skip(wire);
+        return htid;
+    }
+
     /// <summary>解码 copy.StartBase 请求的 CopyId（仅 field 2）。</summary>
     internal static int DecodeStartBaseCopyId(byte[] args)
     {

@@ -950,6 +950,9 @@ internal static class ShipHandbookLoader
     public static ConfigShipHandbook? Get(int shipInfoId)
         => _handbooks.TryGetValue(shipInfoId, out var cfg) ? cfg : null;
 
+    /// <summary>全部图鉴条目（ship_info_id → ConfigShipHandbook）。</summary>
+    public static IReadOnlyDictionary<int, ConfigShipHandbook> All => _handbooks;
+
     public static string GetShipName(int templateId)
     {
         int shipInfoId = (templateId - 1) / 10;
