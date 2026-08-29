@@ -207,6 +207,7 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                             Ret: PlayerDataCodec.Encode(new HeroBag(advanceHeroGrids, advanceAccount.Dock.BagSize)),
                             Time: advanceNow)),
                         services.BuildBagPush(advanceAccount, advanceNow),
+                        services.BuildEquipPush(advanceAccount, advanceNow),
                         await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, advanceNow, ctx.Ct),
                     ],
                 };

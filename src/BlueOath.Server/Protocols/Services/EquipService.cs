@@ -117,16 +117,32 @@ internal sealed class EquipService(GameServices services)
             addedExp += item.Exp * material.ItemNum;
         }
         int level = current.EnhanceLv;
-        long exp = current.EnhanceExp + addedExp;
+        long completedLevelExp = 0;
+        for (int completedLevel = 1; completedLevel <= level; completedLevel++)
+        {
+            ConfigEquipEnhanceLevelExp? completed = services.GetEquipEnhanceLevelExp(completedLevel);
+            if (completed is null)
+                return ([], false, "equipment enhancement experience configuration was not found");
+            completedLevelExp = checked(completedLevelExp + completed.Exp);
+        }
+
+        // EnhanceExp is cumulative in the client: at level N it already contains the
+        // experience for levels 1..N. Older server builds persisted only the remainder;
+        // normalize those saves before applying the newly selected materials.
+        long exp = current.EnhanceExp;
+        if (exp < completedLevelExp)
+            exp = checked(completedLevelExp + Math.Max(0, exp));
+        exp = checked(exp + addedExp);
         int maxLevel = checked((int)config.EnhanceLevelMax);
         while (level < maxLevel)
         {
-            ConfigEquipEnhanceLevel? next = services.GetEquipEnhanceLevel(level + 1);
+            ConfigEquipEnhanceLevelExp? next = services.GetEquipEnhanceLevelExp(level + 1);
             if (next is null)
-                return ([], false, "equipment enhancement configuration was not found");
-            if (exp < next.Exp)
+                return ([], false, "equipment enhancement experience configuration was not found");
+            long nextLevelExp = checked(completedLevelExp + next.Exp);
+            if (exp < nextLevelExp)
                 break;
-            exp -= next.Exp;
+            completedLevelExp = nextLevelExp;
             level++;
         }
         if (level == current.EnhanceLv)

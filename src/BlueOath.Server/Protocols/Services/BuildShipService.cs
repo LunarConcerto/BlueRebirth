@@ -8,7 +8,8 @@ namespace BlueOath.Server.Protocols;
 internal sealed class BuildShipService(GameServices services)
 {
     /// <summary>
-    /// 处理 illustrate.AddBehaviour：把图鉴已解锁动作（BehaviourList）持久化到账号。
+    /// 处理 illustrate.AddBehaviour：保留客户端上报兼容性，但将对应图鉴条目直接扩展为
+    /// 客户端配置中的全部动作，并持久化到账号。
     /// 返回 TILLUSTRATELIST（field 1 = 更新后的 IllustrateList），客户端据此刷新图鉴。
     /// </summary>
     internal async Task<byte[]> BuildAddBehaviourRetAsync(TRequest request, string profileId, CancellationToken ct)
@@ -22,24 +23,23 @@ internal sealed class BuildShipService(GameServices services)
 
         var illustrate = account.Illustrate ?? new PlayerIllustrate([]);
         List<IllustrateEntry> entries = illustrate.Entries.ToList();
+        IReadOnlyList<int> allBehaviourIds = HandbookBehaviourLoader.AllBehaviourIds;
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 
         foreach (var (illustrateId, behaviourIds) in items)
         {
             if (behaviourIds.Count == 0) continue;
             int idx = entries.FindIndex(e => e.IllustrateId == illustrateId);
-            List<int> merged;
+            IReadOnlyList<int> unlocked = allBehaviourIds.Count > 0
+                ? allBehaviourIds
+                : behaviourIds.Distinct().OrderBy(id => id).ToList();
             if (idx >= 0)
             {
-                merged = entries[idx].BehaviourList?.ToList() ?? new List<int>();
-                foreach (int bid in behaviourIds)
-                    if (!merged.Contains(bid)) merged.Add(bid);
-                entries[idx] = entries[idx] with { BehaviourList = merged };
+                entries[idx] = entries[idx] with { BehaviourList = unlocked };
             }
             else
             {
-                merged = behaviourIds.Distinct().ToList();
-                entries.Add(new IllustrateEntry(illustrateId, merged));
+                entries.Add(new IllustrateEntry(illustrateId, unlocked));
             }
         }
 
@@ -49,7 +49,7 @@ internal sealed class BuildShipService(GameServices services)
         // 构建 TILLUSTRATELIST：仅 IllustrateList（field 1）。Encode(IllustrateInfoRet)
         // 在 HeroMemoryList/IllustrateEquipList 为 null 时只写 field 1，正好匹配。
         var infoList = entries
-            .Select(e => new IllustrateInfo(e.IllustrateId, now, 0, false, e.BehaviourList, 0))
+            .Select(e => GameServices.BuildUnlockedIllustrateInfo(e.IllustrateId, now))
             .ToList();
         return PlayerDataCodec.Encode(new IllustrateInfoRet(IllustrateList: infoList));
     }

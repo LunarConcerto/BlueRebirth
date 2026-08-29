@@ -24,11 +24,14 @@ var tests = new (string Name, Func<Task> Run)[]
     ("equipment renovation request decodes consumed equipment ids", EquipRiseStarArgsCodecTest),
     ("zero-count bag entries encode an explicit deletion marker", BagDeletionMarkerCodecTest),
     ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
+    ("hero advance preserves neighbors and unbinds consumed equipment", HeroAdvanceStateTest),
     ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
     ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
     ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
     ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
+    ("illustrate entries unlock every configured behaviour", IllustrateBehaviourUnlockTest),
     ("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest),
+    ("sea-copy entries include non-nil safe-area state", SeaCopySafeAreaCodecTest),
     ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
     ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
@@ -74,6 +77,8 @@ if (args.Contains("--fashion-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("fashion synchronization and shops use configured catalog", FashionUnlockIntegrationTest)];
 if (args.Contains("--treasure-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipment treasure consumes its box and persists a new equipment instance", TreasureIntegrationTest)];
+if (args.Contains("--hero-advance", StringComparer.OrdinalIgnoreCase))
+    tests = [("hero advance preserves neighbors and unbinds consumed equipment", HeroAdvanceStateTest)];
 if (args.Contains("--buildship-codec", StringComparer.OrdinalIgnoreCase))
     tests = [("build ship response omits empty special rewards", BuildShipRewardCodecTest)];
 if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
@@ -83,6 +88,8 @@ if (args.Contains("--story-unlock", StringComparer.OrdinalIgnoreCase))
         ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
         ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest)
     ];
+if (args.Contains("--illustrate-behaviour", StringComparer.OrdinalIgnoreCase))
+    tests = [("illustrate entries unlock every configured behaviour", IllustrateBehaviourUnlockTest)];
 if (args.Contains("--remould-integration", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
@@ -104,6 +111,8 @@ if (args.Contains("--login-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("protobuf login server creates a local profile", GameLoginIntegrationTest)];
 if (args.Contains("--mubar-battle-codec", StringComparer.OrdinalIgnoreCase))
     tests = [("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest)];
+if (args.Contains("--sea-safe-codec", StringComparer.OrdinalIgnoreCase))
+    tests = [("sea-copy entries include non-nil safe-area state", SeaCopySafeAreaCodecTest)];
 if (args.Contains("--account-profile", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest),
@@ -116,6 +125,164 @@ foreach (var (name, run) in tests)
     catch (Exception e) { failed++; Console.Error.WriteLine($"FAIL {name}: {e.Message}"); }
 }
 return failed;
+
+static async Task HeroAdvanceStateTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-hero-advance-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "hero-advance-state";
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        PlayerAccount account = PlayerAccountFactory.CreateDefault(profileId, 1) with
+        {
+            Character = PlayerAccountFactory.CreateDefault(profileId, 1).Character with
+            {
+                SecretaryId = 70,
+                Gold = 200_000,
+            },
+            Dock = new HeroDock(
+            [
+                new Hero(10, 10210511, 5, EquipSlots: [101, 0, 0, 0, 0, 0]),
+                new Hero(20, 10210512, 15, EquipSlots: [102, 0, 0, 0, 0, 0]),
+                new Hero(30, 10330111, 5, EquipSlots: [103, 0, 0, 0, 0, 0]),
+                new Hero(40, 10210513, 25),
+                new Hero(50, 10210514, 40),
+                new Hero(60, 10210515, 60),
+                new Hero(70, 10210511, 5),
+                new Hero(80, 10210511, 5, Lock: true),
+                new Hero(90, 12550112, 15),
+            ]),
+            Bag = new PlayerBag([new BagItem(120004, 15), new BagItem(17512, 15)]),
+            Equip = new PlayerEquip(
+            [
+                new EquipItem(101, 30151, HeroId: 10),
+                new EquipItem(102, 30141, HeroId: 20),
+                new EquipItem(103, 30421, HeroId: 30),
+            ], 2000),
+            Building = new PlayerBuilding(
+                [new PlayerBuildingEntry(1, 2, 2, [40])],
+                [new PlayerBuildingLand(1, 1)]),
+            Fleet = new PlayerFleet([new FleetEntry(1, HeroInfo: [50])]),
+            Bath = new PlayerBath([new BathHero(60)]),
+        };
+        await repo.SaveAccountAsync(account);
+
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot,
+             "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
+             "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var heroService = new HeroService(services);
+
+        byte[] emptyArgs = new ProtocolPackage().Write(0x08, 20UL).ToArray();
+        HeroService.AdvanceResult emptyRejected = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", emptyArgs), profileId, CancellationToken.None);
+        Assert(!emptyRejected.Changed, "hero advance ignored its configured material requirement");
+
+        byte[] nonexistentArgs = new ProtocolPackage()
+            .Write(0x08, 20UL)
+            .Write(0x10, 999UL)
+            .ToArray();
+        HeroService.AdvanceResult nonexistentRejected = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", nonexistentArgs), profileId, CancellationToken.None);
+        Assert(!nonexistentRejected.Changed, "hero advance accepted a nonexistent material hero");
+
+        byte[] assignedArgs = new ProtocolPackage()
+            .Write(0x08, 20UL)
+            .Write(0x10, 40UL)
+            .ToArray();
+        HeroService.AdvanceResult assignedRejected = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", assignedArgs), profileId, CancellationToken.None);
+        Assert(!assignedRejected.Changed, "hero advance consumed a hero assigned to a building");
+
+        foreach (var (materialId, reason) in new[]
+                 {
+                     (50UL, "fleet"),
+                     (60UL, "bath"),
+                     (70UL, "secretary"),
+                     (80UL, "lock"),
+                 })
+        {
+            byte[] protectedArgs = new ProtocolPackage()
+                .Write(0x08, 20UL)
+                .Write(0x10, materialId)
+                .ToArray();
+            HeroService.AdvanceResult protectedRejected = await heroService.BuildAdvanceRetAsync(
+                new TRequest("hero.HeroAdvance", protectedArgs), profileId, CancellationToken.None);
+            Assert(!protectedRejected.Changed, $"hero advance consumed a material protected by {reason}");
+        }
+
+        PlayerAccount loaded = await services.GetOrCreateAccountAsync(profileId, CancellationToken.None);
+        PlayerAccount poor = loaded with { Character = loaded.Character with { Gold = 19_999 } };
+        await services.SaveAccountAsync(poor, CancellationToken.None);
+        byte[] args = new ProtocolPackage()
+            .Write(0x08, 20UL)
+            .Write(0x10, 10UL)
+            .ToArray();
+        HeroService.AdvanceResult poorRejected = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", args), profileId, CancellationToken.None);
+        Assert(!poorRejected.Changed, "hero advance allowed a negative currency balance");
+        await services.SaveAccountAsync(
+            poor with { Character = poor.Character with { Gold = 200_000 } }, CancellationToken.None);
+
+        HeroService.AdvanceResult result = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", args), profileId, CancellationToken.None);
+        Assert(result.Changed && result.ConsumedHeroIds.SequenceEqual([10U]),
+            "valid hero advance did not consume its material hero");
+
+        PlayerAccount saved = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("advanced account disappeared");
+        Assert(saved.Dock.Heroes.Select(h => h.HeroId).SequenceEqual([20U, 30U, 40U, 50U, 60U, 70U, 80U, 90U]) &&
+               saved.Dock.Heroes.Select(h => h.HeroId).Distinct().Count() == saved.Dock.Heroes.Count,
+            "hero advance duplicated its target or overwrote the neighboring hero");
+        Hero advanced = saved.Dock.Heroes.Single(h => h.HeroId == 20);
+        Assert(advanced.TemplateId == 10210513 && advanced.Advance == 1,
+            "hero advance did not persist the upgraded target");
+        Assert(saved.Character.Gold == 180_000,
+            "hero advance did not deduct the configured currency cost");
+        Assert(saved.Equip!.Items.Single(e => e.EquipId == 101).HeroId == 0 &&
+               saved.Equip.Items.Single(e => e.EquipId == 102).HeroId == 20 &&
+               saved.Equip.Items.Single(e => e.EquipId == 103).HeroId == 30,
+            "hero advance left orphan equipment or changed a surviving hero's equipment");
+
+        var insufficientItemArgs = new ProtocolPackage().Write(0x08, 90UL);
+        for (int i = 0; i < 15; i++) insufficientItemArgs.Write(0x18, 120004UL);
+        for (int i = 0; i < 14; i++) insufficientItemArgs.Write(0x18, 17512UL);
+        HeroService.AdvanceResult itemRejected = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", insufficientItemArgs.ToArray()), profileId, CancellationToken.None);
+        Assert(!itemRejected.Changed, "hero advance ignored its configured item quantity");
+
+        var itemArgs = new ProtocolPackage().Write(0x08, 90UL);
+        for (int i = 0; i < 15; i++) itemArgs.Write(0x18, 120004UL);
+        for (int i = 0; i < 15; i++) itemArgs.Write(0x18, 17512UL);
+        HeroService.AdvanceResult itemResult = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", itemArgs.ToArray()), profileId, CancellationToken.None);
+        Assert(itemResult.Changed && itemResult.UpdatedHero?.TemplateId == 12550113,
+            "configured item-based hero advance was rejected");
+        PlayerAccount itemSaved = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("item-advanced account disappeared");
+        Assert(itemSaved.Bag!.Items.Single(i => i.TemplateId == 120004).Num == 0 &&
+               itemSaved.Bag.Items.Single(i => i.TemplateId == 17512).Num == 0 &&
+               itemSaved.Character.Gold == 100_000,
+            "item-based hero advance deducted the wrong inventory or currency amount");
+
+        byte[] selfConsumeArgs = new ProtocolPackage()
+            .Write(0x08, 20UL)
+            .Write(0x10, 20UL)
+            .ToArray();
+        HeroService.AdvanceResult rejected = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", selfConsumeArgs), profileId, CancellationToken.None);
+        Assert(!rejected.Changed,
+            "hero advance allowed the target hero to consume itself");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
 
 static async Task FrameCodecTest()
 {
@@ -308,6 +475,22 @@ static Task StoryUnlockConfigTest()
     return Task.CompletedTask;
 }
 
+static Task IllustrateBehaviourUnlockTest()
+{
+    HandbookBehaviourLoader.Load(FindClientConfigDir());
+    IReadOnlyList<int> expected = HandbookBehaviourLoader.AllBehaviourIds;
+    Assert(expected.Count >= 60, "handbook behaviour index was not fully loaded");
+    Assert(expected.SequenceEqual(expected.OrderBy(id => id)) && expected.Distinct().Count() == expected.Count,
+        "handbook behaviour ids must be unique and deterministic");
+
+    IllustrateInfo info = GameServices.BuildUnlockedIllustrateInfo(102105, 123456);
+    Assert(info.IllustrateId == 102105 && info.GetTime == 123456,
+        "unlocked illustrate entry lost its identity or timestamp");
+    Assert(info.BehaviourList is not null && info.BehaviourList.SequenceEqual(expected),
+        "unlocked illustrate entry did not include every configured behaviour");
+    return Task.CompletedTask;
+}
+
 static Task HeroMemoryCodecTest()
 {
     var memory = new HeroMemory(2064011, 1001);
@@ -487,7 +670,6 @@ static async Task AccountStorageTest()
     Assert(reloaded.Dock.Heroes.Count == 2 && reloaded.Dock.BagSize == 200, "dock update not persisted");
     Assert(reloaded.Building?.Buildings.Single(x => x.Id == 2).HeroIds.SequenceEqual(new uint[] { 1 }) == true,
         "building assignment not persisted");
-
     // Reset 应同时清除档案与账号。
     await repo.ResetAsync("hero");
     Assert(await repo.LoadAsync("hero") is null, "reset did not remove profile");
@@ -1346,7 +1528,10 @@ static async Task EquipEnhanceIntegrationTest()
     const uint normalEquipId = 77;
     const uint heroPageEquipId = 78;
     const uint boundEquipId = 79;
+    const uint goldEquipId = 80;
+    const uint legacyGoldEquipId = 81;
     const int urEquipTemplateId = 100106;
+    const int goldEquipTemplateId = 100101;
 
     var repo = new SqliteGameRepository(data);
     await repo.CreateAsync(profileId, profileId);
@@ -1366,10 +1551,13 @@ static async Task EquipEnhanceIntegrationTest()
             new EquipItem(normalEquipId, urEquipTemplateId, EnhanceLv: 1, HeroId: hero.HeroId),
             new EquipItem(heroPageEquipId, urEquipTemplateId, EnhanceLv: 1, HeroId: hero.HeroId),
             new EquipItem(boundEquipId, urEquipTemplateId, EnhanceLv: 35, HeroId: hero.HeroId),
+            new EquipItem(goldEquipId, goldEquipTemplateId),
+            // Older builds stored only the remainder instead of cumulative EnhanceExp.
+            new EquipItem(legacyGoldEquipId, goldEquipTemplateId, EnhanceLv: 3, EnhanceExp: 0),
         ], 2000),
         Bag = new PlayerBag(
         [
-            new BagItem(60000, 10),
+            new BagItem(60000, 30),
             new BagItem(10029, 200),
             new BagItem(10030, 200),
             new BagItem(60003, 15),
@@ -1390,6 +1578,8 @@ static async Task EquipEnhanceIntegrationTest()
     startInfo.ArgumentList.Add("--game-login-port=0");
     startInfo.ArgumentList.Add("--region=jp");
     startInfo.ArgumentList.Add("--data=" + data);
+    startInfo.ArgumentList.Add("--profile-id=" + profileId);
+    startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -1436,7 +1626,7 @@ static async Task EquipEnhanceIntegrationTest()
         var (normalResponse, normalPushes) = await RoundTrip("equip.Enhance", EnhanceArgs(normalEquipId,
             (60000, 5), (10029, 100), (10030, 100)));
         Assert(normalResponse.Err == 0 && normalResponse.Ret is { Length: > 0 },
-            "equipped UR normal enhancement was rejected");
+            $"equipped UR normal enhancement was rejected: {normalResponse.ErrMsg}");
         Assert(normalPushes.Any(p => p.Method == "bag.UpdateBagData") &&
             normalPushes.Any(p => p.Method == "equip.UpdateEquipBagData"),
             "equipped UR normal enhancement did not refresh bag and equipment data");
@@ -1444,7 +1634,7 @@ static async Task EquipEnhanceIntegrationTest()
             ?? throw new InvalidDataException("normal enhancement account disappeared");
         Assert(normallyEnhanced.Equip!.Items.Single(e => e.EquipId == normalEquipId).EnhanceLv == 2,
             "equipped UR normal enhancement did not persist level 2");
-        Assert(normallyEnhanced.Bag!.Items.Single(i => i.TemplateId == 60000).Num == 5 &&
+        Assert(normallyEnhanced.Bag!.Items.Single(i => i.TemplateId == 60000).Num == 25 &&
             normallyEnhanced.Bag.Items.Single(i => i.TemplateId == 10029).Num == 100 &&
             normallyEnhanced.Bag.Items.Single(i => i.TemplateId == 10030).Num == 100,
             "equipped UR normal enhancement consumed the wrong material amount");
@@ -1460,8 +1650,31 @@ static async Task EquipEnhanceIntegrationTest()
             ?? throw new InvalidDataException("hero-page enhancement account disappeared");
         Assert(heroPageEnhanced.Equip!.Items.Single(e => e.EquipId == heroPageEquipId).EnhanceLv == 2,
             "hero-page UR enhancement did not persist level 2");
-        Assert(!heroPageEnhanced.Bag!.Items.Any(i => i.TemplateId is 60000 or 10029 or 10030),
+        Assert(heroPageEnhanced.Bag!.Items.Single(i => i.TemplateId == 60000).Num == 20 &&
+               !heroPageEnhanced.Bag.Items.Any(i => i.TemplateId is 10029 or 10030),
             "hero-page UR enhancement did not consume its configured materials");
+
+        for (int expectedLevel = 1; expectedLevel <= 4; expectedLevel++)
+        {
+            var (goldResponse, _) = await RoundTrip("equip.Enhance", EnhanceArgs(goldEquipId, (60000, 2)));
+            Assert(goldResponse.Err == 0 && goldResponse.Ret is { Length: > 0 },
+                $"gold equipment enhancement {expectedLevel} was rejected");
+            PlayerAccount goldEnhanced = await repo.LoadAccountAsync(profileId)
+                ?? throw new InvalidDataException("gold enhancement account disappeared");
+            EquipItem gold = goldEnhanced.Equip!.Items.Single(e => e.EquipId == goldEquipId);
+            Assert(gold.EnhanceLv == expectedLevel && gold.EnhanceExp == expectedLevel * 200,
+                $"gold equipment enhancement {expectedLevel} did not persist cumulative experience");
+        }
+
+        var (legacyGoldResponse, _) =
+            await RoundTrip("equip.Enhance", EnhanceArgs(legacyGoldEquipId, (60000, 2)));
+        Assert(legacyGoldResponse.Err == 0 && legacyGoldResponse.Ret is { Length: > 0 },
+            "legacy gold equipment enhancement was rejected after level 3");
+        PlayerAccount legacyGoldEnhanced = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("legacy gold enhancement account disappeared");
+        EquipItem legacyGold = legacyGoldEnhanced.Equip!.Items.Single(e => e.EquipId == legacyGoldEquipId);
+        Assert(legacyGold.EnhanceLv == 4 && legacyGold.EnhanceExp == 800,
+            "legacy remainder experience was not normalized to cumulative experience");
 
         var (boundResponse, boundPushes) = await RoundTrip("equip.EnhanceBind", EnhanceArgs(boundEquipId));
         Assert(boundResponse.Err == 0 && boundResponse.Ret is { Length: > 0 },
@@ -2255,6 +2468,65 @@ static Task MubarBattleStartCodecTest()
     Assert(skipsEnemyVcr, "search_3d Mubar battle did not skip blocking fleet VCR sequences");
     Assert(CopyBattleLoader.GetFleetIdList(copyId).Count > 0,
         "Mubar activity copy has no enemy fleet data");
+    return Task.CompletedTask;
+}
+
+static Task SeaCopySafeAreaCodecTest()
+{
+    ChapterCopyLoader.Load(FindClientConfigDir());
+    byte[] payload = ProtocolEncoder.EncodeSeaCopyInfo();
+    bool foundSafeAreaCopy = false;
+
+    ProtocolDecoder.ProtoReader response = new(payload);
+    while (response.TryReadField(out int field, out int wire))
+    {
+        if (field != 1 || wire != 2)
+        {
+            response.Skip(wire);
+            continue;
+        }
+
+        int baseId = 0;
+        int safeLevel = 0;
+        int selectedSafeLevel = 0;
+        bool hasSafePoint = false;
+        uint safePointBits = uint.MaxValue;
+        ProtocolDecoder.ProtoReader baseInfo = new(response.ReadBytes());
+        while (baseInfo.TryReadField(out int baseField, out int baseWire))
+        {
+            switch (baseField)
+            {
+                case 1 when baseWire == 0:
+                    baseId = checked((int)baseInfo.ReadVarint());
+                    break;
+                case 8 when baseWire == 0:
+                    safeLevel = checked((int)baseInfo.ReadVarint());
+                    break;
+                case 9 when baseWire == 5:
+                    hasSafePoint = true;
+                    safePointBits = baseInfo.ReadFixed32();
+                    break;
+                case 12 when baseWire == 0:
+                    selectedSafeLevel = checked((int)baseInfo.ReadVarint());
+                    break;
+                default:
+                    baseInfo.Skip(baseWire);
+                    break;
+            }
+        }
+
+        if (baseId != 5011) continue;
+        foundSafeAreaCopy = true;
+        Assert(safeLevel == 1,
+            "sea-copy TBaseInfo omitted SfLv, causing config_safearea strId:nil");
+        Assert(hasSafePoint && safePointBits == 0,
+            "sea-copy TBaseInfo omitted the initial SfPoint float");
+        Assert(selectedSafeLevel == 1,
+            "sea-copy TBaseInfo omitted SfLvChoose used by SafeInfoPage");
+        break;
+    }
+
+    Assert(foundSafeAreaCopy, "sea-copy synchronization did not include safe-area copy 5011");
     return Task.CompletedTask;
 }
 
