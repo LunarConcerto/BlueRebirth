@@ -80,7 +80,7 @@ internal sealed class BuildModule(ConstructionService construction, GameServices
                     pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
                         Method: "illustrate.IllustrateInfo",
                         Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
-                            IllustrateList: added.Select(hero => new IllustrateInfo(
+                            IllustrateList: added.Select(hero => GameServices.BuildUnlockedIllustrateInfo(
                                 GameServices.ToIllustrateId(hero.TemplateId), now)).ToList(),
                             IllustrateEquipList: [new IllustrateEquipInfo()])),
                         Time: now)));

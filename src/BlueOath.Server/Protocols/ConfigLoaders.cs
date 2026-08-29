@@ -624,6 +624,33 @@ internal static class ShipMainLoader
         => baseValue + levelup * Math.Max(0, level - 1);
 }
 
+/// <summary>舰娘突破阶段配置。</summary>
+internal static class ShipBreakLoader
+{
+    private static readonly Dictionary<int, ConfigShipBreak> _stages = new();
+    private static bool _loaded;
+
+    internal static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _stages.Clear();
+            foreach (var (id, config) in ConfigDbLoader.LoadAll<ConfigShipBreak>(
+                         configDir, "config_ship_break.db"))
+                _stages[id] = config;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ShipBreak] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    internal static ConfigShipBreak? Get(int templateId) =>
+        _stages.TryGetValue(templateId, out ConfigShipBreak? config) ? config : null;
+}
+
 internal static class AssistShipLoader
 {
     private static readonly Dictionary<int, ConfigAssistShipInfo> _ships = new();
@@ -650,7 +677,7 @@ internal static class EquipLoader
 {
     private static readonly Dictionary<int, ConfigEquip> _equips = new();
     private static readonly Dictionary<int, ConfigEquipEnhanceItem> _enhanceItems = new();
-    private static readonly Dictionary<int, ConfigEquipEnhanceLevel> _enhanceLevels = new();
+    private static readonly Dictionary<int, ConfigEquipEnhanceLevelExp> _enhanceLevelExps = new();
     private static readonly Dictionary<int, ConfigEquipEnhanceLevelUr> _enhanceLevelsUr = new();
     private static readonly Dictionary<int, ConfigEquipLevelbreakItem> _levelbreakItems = new();
     private static readonly Dictionary<int, ConfigEquipEnhanceRenovate> _renovateLevels = new();
@@ -668,8 +695,8 @@ internal static class EquipLoader
                 _equips[id] = cfg;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceItem>(configDir, "config_equip_enhance_item.db"))
                 _enhanceItems[id] = cfg;
-            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceLevel>(configDir, "config_equip_enhance_level.db"))
-                _enhanceLevels[id] = cfg;
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceLevelExp>(configDir, "config_equip_enhance_level_exp.db"))
+                _enhanceLevelExps[id] = cfg;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipEnhanceLevelUr>(configDir, "config_equip_enhance_level_ur.db"))
                 _enhanceLevelsUr[checked((int)cfg.EnchanceLevel)] = cfg;
             foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigEquipLevelbreakItem>(configDir, "config_equip_levelbreak_item.db"))
@@ -701,8 +728,8 @@ internal static class EquipLoader
         => _equips.TryGetValue(id, out var cfg) ? cfg : null;
     public static ConfigEquipEnhanceItem? GetEnhanceItem(int id)
         => _enhanceItems.TryGetValue(id, out var cfg) ? cfg : null;
-    public static ConfigEquipEnhanceLevel? GetEnhanceLevel(int level)
-        => _enhanceLevels.TryGetValue(level, out var cfg) ? cfg : null;
+    public static ConfigEquipEnhanceLevelExp? GetEnhanceLevelExp(int level)
+        => _enhanceLevelExps.TryGetValue(level, out var cfg) ? cfg : null;
     public static ConfigEquipEnhanceLevelUr? GetEnhanceLevelUr(int level)
         => _enhanceLevelsUr.TryGetValue(level, out var cfg) ? cfg : null;
     public static ConfigEquipLevelbreakItem? GetLevelbreakItem(int type)
@@ -981,6 +1008,39 @@ internal static class ExpandItemLoader
 
     public static ConfigExpandItem? Get(int itemTemplateId)
         => _items.TryGetValue(itemTemplateId, out var cfg) ? cfg : null;
+}
+
+/// <summary>
+/// 从图鉴动作索引加载客户端支持的完整动作 ID 集合。
+/// 图鉴页只按服务端下发的 BehaviourList 判断动作是否解锁，因此登录与新增舰娘推送
+/// 必须使用这份配置驱动的全量列表，不能依赖客户端逐次上报 AddBehaviour。
+/// </summary>
+internal static class HandbookBehaviourLoader
+{
+    private static readonly List<int> _allBehaviourIds = [];
+    private static bool _loaded;
+
+    public static IReadOnlyList<int> AllBehaviourIds => _allBehaviourIds;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _allBehaviourIds.Clear();
+            _allBehaviourIds.AddRange(
+                ConfigDbLoader.LoadAll<ConfigHandbookBehaviourIndex>(
+                        configDir, "config_handbook_behaviour_index.db")
+                    .Keys
+                    .Where(id => id > 0)
+                    .OrderBy(id => id));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[HandbookBehaviour] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
 }
 
 /// <summary>

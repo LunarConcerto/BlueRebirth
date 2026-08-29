@@ -10,6 +10,8 @@ public class ConfigShipBreak
 {
     [JsonPropertyName("break_item")]
     public List<object>? BreakItem { get; set; }
+    [JsonPropertyName("break_item_optional")]
+    public List<long>? BreakItemOptional { get; set; }
     [JsonPropertyName("break_item_mub")]
     public List<long>? BreakItemMub { get; set; }
     [JsonPropertyName("break_to")]

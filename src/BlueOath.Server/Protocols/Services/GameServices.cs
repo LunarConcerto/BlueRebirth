@@ -78,6 +78,7 @@ internal sealed class GameServices
         ExpandItemLoader.Load(configDir);
         AffectionItemLoader.Load(configDir);
         ShipHandbookLoader.Load(configDir);
+        HandbookBehaviourLoader.Load(configDir);
         BuildFormulaCatalog.Load(_shipInfos);
         PlotTriggerLoader.Load(configDir);
         CharacterStoryLoader.Load(configDir);
@@ -130,7 +131,7 @@ internal sealed class GameServices
     /// <summary>升级所需经验表（供 HeroService）。</summary>
     internal IReadOnlyDictionary<int, int> ExpNeeded => _expNeeded;
     internal ConfigEquipEnhanceItem? GetEquipEnhanceItem(int id) => EquipLoader.GetEnhanceItem(id);
-    internal ConfigEquipEnhanceLevel? GetEquipEnhanceLevel(int level) => EquipLoader.GetEnhanceLevel(level);
+    internal ConfigEquipEnhanceLevelExp? GetEquipEnhanceLevelExp(int level) => EquipLoader.GetEnhanceLevelExp(level);
     internal ConfigEquipEnhanceLevelUr? GetEquipEnhanceLevelUr(int level) => EquipLoader.GetEnhanceLevelUr(level);
     internal ConfigEquipLevelbreakItem? GetEquipLevelbreakItem(int type) => EquipLoader.GetLevelbreakItem(type);
     internal ConfigEquipEnhanceRenovate? GetEquipRenovateLevel(int level) => EquipLoader.GetRenovateLevel(level);
@@ -208,9 +209,6 @@ internal sealed class GameServices
             await SaveAccountAsync(account, ct);
         }
         var heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
-        var illustrateBehaviour = (account.Illustrate?.Entries ?? [])
-            .ToDictionary(e => e.IllustrateId, e => e.BehaviourList);
-
         return
         [
             // 登录时间推送，填充 userdata.loginTime/loginTimePre，防止
@@ -289,7 +287,8 @@ internal sealed class GameServices
                 Ret: ProtocolEncoder.EncodeMubarCopyInfo(),
                 Time: now)),
 
-            // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目
+            // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目，
+            // 每个条目同时下发客户端配置中的全部动作 ID，使图鉴动作直接全部解锁。
             // （IllustrateId = config_ship_handbook 的 key = ship_info_id）；未列出的条目
             // 由 IllustrateData:UpdateHero 从 config_ship_handbook 生成 LOCK 状态。
             // IllustrateList/IllustrateEquipList 两个 repeated 字段必须非 nil（否则 ipairs(nil) 崩溃）。
@@ -297,12 +296,7 @@ internal sealed class GameServices
                 Method: "illustrate.IllustrateInfo",
                 Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
                     IllustrateList: account.Dock.Heroes
-                        .Select(h =>
-                        {
-                            int siId = ToIllustrateId(h.TemplateId);
-                            illustrateBehaviour.TryGetValue(siId, out var behaviour);
-                            return new IllustrateInfo(siId, now, 0, false, behaviour, 0);
-                        })
+                        .Select(h => BuildUnlockedIllustrateInfo(ToIllustrateId(h.TemplateId), now))
                         .ToList(),
                     IllustrateEquipList: [new IllustrateEquipInfo()],
                     HeroMemoryList: CharacterStoryLoader.AllMemories)),
@@ -534,6 +528,10 @@ internal sealed class GameServices
     /// （config_ship_handbook 的 key = ship_info_id）。数据规范 ship_main_id = ship_info_id * 10 + 1。
     /// </summary>
     internal static int ToIllustrateId(int templateId) => (templateId - 1) / 10;
+
+    /// <summary>构建已解锁全部图鉴动作的舰娘图鉴条目。</summary>
+    internal static IllustrateInfo BuildUnlockedIllustrateInfo(int illustrateId, long now)
+        => new(illustrateId, now, 0, false, HandbookBehaviourLoader.AllBehaviourIds, 0);
 
     /// <summary>引导系统所有 stage id（guideStageConfig.lua 顶层 stages 的 id）。</summary>
     private static readonly string[] DoneGuideStages =
