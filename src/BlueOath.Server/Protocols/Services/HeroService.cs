@@ -422,7 +422,8 @@ internal sealed class HeroService(GameServices services)
         if (config is null || hero.Level < config.MinLevel ||
             !int.TryParse(config.BreakTo, out int newTemplateId) || newTemplateId <= 0 ||
             !TryGetAdvanceRequirements(config, out HashSet<int> allowedHeroTemplates,
-                out int requiredHeroCount, out HashSet<int> allowedItemTemplates, out int requiredItemCount,
+                out HashSet<int> allowedHeroQualities, out int requiredHeroCount,
+                out HashSet<int> allowedItemTemplates, out int requiredItemCount,
                 out int currencyId, out int currencyCost))
             return new([], null, [], false);
 
@@ -434,7 +435,8 @@ internal sealed class HeroService(GameServices services)
         List<Hero> consumedHeroes = heroList.Where(h => consumedIdSet.Contains(h.HeroId)).ToList();
         if (consumedHeroes.Count != requiredHeroCount ||
             consumedHeroes.Any(material => material.Lock ||
-                !allowedHeroTemplates.Contains(material.TemplateId) || IsHeroInUse(account, material.HeroId)))
+                !IsAllowedAdvanceMaterial(material, allowedHeroTemplates, allowedHeroQualities) ||
+                IsHeroInUse(account, material.HeroId)))
             return new([], null, [], false);
 
         // 道具列表按“每个实例一个模板 ID”编码，必须与配置数量完全一致。
@@ -488,6 +490,7 @@ internal sealed class HeroService(GameServices services)
     private static bool TryGetAdvanceRequirements(
         ConfigShipBreak config,
         out HashSet<int> allowedHeroTemplates,
+        out HashSet<int> allowedHeroQualities,
         out int requiredHeroCount,
         out HashSet<int> allowedItemTemplates,
         out int requiredItemCount,
@@ -495,14 +498,12 @@ internal sealed class HeroService(GameServices services)
         out int currencyCost)
     {
         allowedHeroTemplates = [];
+        allowedHeroQualities = [];
         requiredHeroCount = 0;
         allowedItemTemplates = [];
         requiredItemCount = 0;
         currencyId = 0;
         currencyCost = 0;
-
-        // break_item_optional 的语义不是实例 ID 列表；在实现相应选择规则前拒绝，避免免费突破。
-        if (config.BreakItemOptional is { Count: > 0 }) return false;
 
         if (config.BreakItem is { Count: > 0 } heroRequirement)
         {
@@ -511,6 +512,16 @@ internal sealed class HeroService(GameServices services)
                 !TryReadInt(heroRequirement[1], out requiredHeroCount) ||
                 allowedHeroTemplates.Count == 0 || requiredHeroCount <= 0)
                 return false;
+        }
+
+        // 特殊第七次突破的 break_item_optional 是允许作为单个素材的舰娘品质列表
+        // （当前配置为 4=SR / 5=SSR），而不是实例 ID 或消耗数量。
+        if (config.BreakItemOptional is { Count: > 0 } optionalQualities)
+        {
+            if (requiredHeroCount != 0 || optionalQualities.Any(quality => quality <= 0 || quality > int.MaxValue))
+                return false;
+            allowedHeroQualities.UnionWith(optionalQualities.Select(quality => (int)quality));
+            requiredHeroCount = 1;
         }
 
         if (config.BreakItemMub is { Count: > 0 } itemRequirement)
@@ -534,6 +545,19 @@ internal sealed class HeroService(GameServices services)
         currencyId = (int)currency[1];
         currencyCost = (int)currency[2];
         return true;
+    }
+
+    private bool IsAllowedAdvanceMaterial(
+        Hero material,
+        IReadOnlySet<int> allowedTemplates,
+        IReadOnlySet<int> allowedQualities)
+    {
+        if (allowedTemplates.Contains(material.TemplateId)) return true;
+        if (allowedQualities.Count == 0) return false;
+        ConfigShipMain? ship = ShipMainLoader.Get(material.TemplateId);
+        return ship is not null && ship.ShipInfoId > 0 && ship.ShipInfoId <= int.MaxValue &&
+            services.ShipInfos.TryGetValue((int)ship.ShipInfoId, out ConfigShipInfo? info) &&
+            info.Quality > 0 && info.Quality <= int.MaxValue && allowedQualities.Contains((int)info.Quality);
     }
 
     private static bool TryReadInt(object value, out int result)

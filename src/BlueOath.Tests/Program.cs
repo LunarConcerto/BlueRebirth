@@ -139,7 +139,7 @@ static async Task HeroAdvanceStateTest()
             Character = PlayerAccountFactory.CreateDefault(profileId, 1).Character with
             {
                 SecretaryId = 70,
-                Gold = 200_000,
+                Gold = 1_600_000,
             },
             Dock = new HeroDock(
             [
@@ -152,6 +152,11 @@ static async Task HeroAdvanceStateTest()
                 new Hero(70, 10210511, 5),
                 new Hero(80, 10210511, 5, Lock: true),
                 new Hero(90, 12550112, 15),
+                new Hero(100, 10240316, 80),
+                new Hero(110, 10540111, 1),
+                new Hero(120, 10210511, 5),
+                new Hero(130, 10240326, 80),
+                new Hero(140, 12850111, 1),
             ]),
             Bag = new PlayerBag([new BagItem(120004, 15), new BagItem(17512, 15)]),
             Equip = new PlayerEquip(
@@ -226,7 +231,7 @@ static async Task HeroAdvanceStateTest()
             new TRequest("hero.HeroAdvance", args), profileId, CancellationToken.None);
         Assert(!poorRejected.Changed, "hero advance allowed a negative currency balance");
         await services.SaveAccountAsync(
-            poor with { Character = poor.Character with { Gold = 200_000 } }, CancellationToken.None);
+            poor with { Character = poor.Character with { Gold = 1_600_000 } }, CancellationToken.None);
 
         HeroService.AdvanceResult result = await heroService.BuildAdvanceRetAsync(
             new TRequest("hero.HeroAdvance", args), profileId, CancellationToken.None);
@@ -235,13 +240,14 @@ static async Task HeroAdvanceStateTest()
 
         PlayerAccount saved = await repo.LoadAccountAsync(profileId)
             ?? throw new InvalidDataException("advanced account disappeared");
-        Assert(saved.Dock.Heroes.Select(h => h.HeroId).SequenceEqual([20U, 30U, 40U, 50U, 60U, 70U, 80U, 90U]) &&
+        Assert(saved.Dock.Heroes.Select(h => h.HeroId).SequenceEqual(
+                   [20U, 30U, 40U, 50U, 60U, 70U, 80U, 90U, 100U, 110U, 120U, 130U, 140U]) &&
                saved.Dock.Heroes.Select(h => h.HeroId).Distinct().Count() == saved.Dock.Heroes.Count,
             "hero advance duplicated its target or overwrote the neighboring hero");
         Hero advanced = saved.Dock.Heroes.Single(h => h.HeroId == 20);
         Assert(advanced.TemplateId == 10210513 && advanced.Advance == 1,
             "hero advance did not persist the upgraded target");
-        Assert(saved.Character.Gold == 180_000,
+        Assert(saved.Character.Gold == 1_580_000,
             "hero advance did not deduct the configured currency cost");
         Assert(saved.Equip!.Items.Single(e => e.EquipId == 101).HeroId == 0 &&
                saved.Equip.Items.Single(e => e.EquipId == 102).HeroId == 20 &&
@@ -266,8 +272,47 @@ static async Task HeroAdvanceStateTest()
             ?? throw new InvalidDataException("item-advanced account disappeared");
         Assert(itemSaved.Bag!.Items.Single(i => i.TemplateId == 120004).Num == 0 &&
                itemSaved.Bag.Items.Single(i => i.TemplateId == 17512).Num == 0 &&
-               itemSaved.Character.Gold == 100_000,
+               itemSaved.Character.Gold == 1_500_000,
             "item-based hero advance deducted the wrong inventory or currency amount");
+
+        byte[] invalidQualityArgs = new ProtocolPackage()
+            .Write(0x08, 100UL)
+            .Write(0x10, 120UL)
+            .ToArray();
+        HeroService.AdvanceResult invalidQualityRejected = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", invalidQualityArgs), profileId, CancellationToken.None);
+        Assert(!invalidQualityRejected.Changed,
+            "optional hero advance accepted a material below configured quality 4");
+
+        byte[] optionalArgs = new ProtocolPackage()
+            .Write(0x08, 100UL)
+            .Write(0x10, 110UL)
+            .ToArray();
+        HeroService.AdvanceResult optionalResult = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", optionalArgs), profileId, CancellationToken.None);
+        Assert(optionalResult.Changed && optionalResult.ConsumedHeroIds.SequenceEqual([110U]) &&
+               optionalResult.UpdatedHero?.TemplateId == 10240317,
+            "configured quality-4 optional hero advance was rejected");
+        PlayerAccount optionalSaved = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("optional-advanced account disappeared");
+        Assert(optionalSaved.Dock.Heroes.All(hero => hero.HeroId != 110) &&
+               optionalSaved.Character.Gold == 1_000_000,
+            "optional hero advance consumed the wrong hero or currency amount");
+
+        byte[] ssrOptionalArgs = new ProtocolPackage()
+            .Write(0x08, 130UL)
+            .Write(0x10, 140UL)
+            .ToArray();
+        HeroService.AdvanceResult ssrOptionalResult = await heroService.BuildAdvanceRetAsync(
+            new TRequest("hero.HeroAdvance", ssrOptionalArgs), profileId, CancellationToken.None);
+        Assert(ssrOptionalResult.Changed && ssrOptionalResult.ConsumedHeroIds.SequenceEqual([140U]) &&
+               ssrOptionalResult.UpdatedHero?.TemplateId == 10240327,
+            "configured quality-5 optional hero advance was rejected");
+        PlayerAccount ssrOptionalSaved = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("SSR optional-advanced account disappeared");
+        Assert(ssrOptionalSaved.Dock.Heroes.All(hero => hero.HeroId != 140) &&
+               ssrOptionalSaved.Character.Gold == 500_000,
+            "SSR optional hero advance consumed the wrong hero or currency amount");
 
         byte[] selfConsumeArgs = new ProtocolPackage()
             .Write(0x08, 20UL)
