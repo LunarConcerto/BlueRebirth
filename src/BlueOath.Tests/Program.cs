@@ -50,6 +50,8 @@ if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.
     ("building construction and hero assignment persist and refresh the client", BuildingAssignmentIntegrationTest),
     ("hero remould consumes costs and persists its node", HeroRemouldIntegrationTest),
     ("hero gift, lock/unlock and retirement synchronize client state", HeroMutationIntegrationTest)];
+if (args.Contains("--tcp-integration", StringComparer.OrdinalIgnoreCase))
+    tests = [("tcp server pins legacy login ids to the selected launcher profile", TcpIntegrationTest)];
 if (args.Contains("--equip-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("equipped UR equipment supports normal and bound enhancement", EquipEnhanceIntegrationTest)];
 if (args.Contains("--equipment-mod", StringComparer.OrdinalIgnoreCase))
@@ -654,6 +656,8 @@ static async Task TcpIntegrationTest()
     var startInfo = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
     startInfo.ArgumentList.Add(serverDll); startInfo.ArgumentList.Add("--port=0"); startInfo.ArgumentList.Add("--region=jp"); startInfo.ArgumentList.Add("--data=" + data);
     startInfo.ArgumentList.Add("--client-path=" + Path.Combine(root, "blueoath", "blueoath"));
+    startInfo.ArgumentList.Add("--profile-id=local-player");
+    startInfo.ArgumentList.Add("--profile-name=默认账号");
     using var process = new Process { StartInfo = startInfo };
     try
     {
@@ -663,11 +667,21 @@ static async Task TcpIntegrationTest()
         var port = ready.RootElement.GetProperty("port").GetInt32();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var client = new LocalGameClient(); await client.ConnectAsync("127.0.0.1", port, timeout.Token);
-        await client.SendAsync<JsonElement>(MessageTypes.Login, new { profileId = "tcp", name = "TCP" }, timeout.Token);
-        var state = await client.SendAsync<PlayerState>(MessageTypes.State, new { profileId = "tcp" }, timeout.Token); Assert(state.Fuel == 100, "initial state mismatch");
-        await client.SendAsync<PlayerState>(MessageTypes.SetFormation, new { profileId = "tcp", shipIds = new[] { 1001, 1002 } }, timeout.Token);
-        await client.SendAsync<Stage>(MessageTypes.EnterStage, new { profileId = "tcp", stageId = 1 }, timeout.Token);
-        var outcome = await client.SendAsync<JsonElement>(MessageTypes.BattleResult, new { profileId = "tcp", stageId = 1, win = true }, timeout.Token); Assert(outcome.GetProperty("outcome").GetProperty("victory").GetBoolean(), "battle response mismatch");
+        JsonElement login = await client.SendAsync<JsonElement>(MessageTypes.Login,
+            new { profileId = "local_player", name = "local_player" }, timeout.Token);
+        Assert(login.GetProperty("profileId").GetString() == "local-player",
+            "legacy login did not return the launcher-selected profile");
+        var state = await client.SendAsync<PlayerState>(MessageTypes.State, new { profileId = "local_player" }, timeout.Token); Assert(state.Fuel == 100, "initial state mismatch");
+        await client.SendAsync<PlayerState>(MessageTypes.SetFormation, new { profileId = "local_player", shipIds = new[] { 1001, 1002 } }, timeout.Token);
+        await client.SendAsync<Stage>(MessageTypes.EnterStage, new { profileId = "local_player", stageId = 1 }, timeout.Token);
+        var outcome = await client.SendAsync<JsonElement>(MessageTypes.BattleResult, new { profileId = "local_player", stageId = 1, win = true }, timeout.Token); Assert(outcome.GetProperty("outcome").GetProperty("victory").GetBoolean(), "battle response mismatch");
+
+        var repo = new SqliteGameRepository(data);
+        Assert((await repo.ListProfilesAsync()).SequenceEqual(["local-player"]),
+            "legacy login created a second profile from the client-supplied id");
+        Assert(await repo.LoadAccountAsync("local-player") is not null &&
+               await repo.LoadAccountAsync("local_player") is null,
+            "legacy login created a second account from the client-supplied id");
     }
     finally
     {

@@ -10,10 +10,16 @@ namespace BlueOath.Server.Sessions;
 /// 本地 JSON 帧游戏协议的每个连接处理器（<see cref="LocalGameClient"/> 与启动器使用的
 /// 临时长度前缀 wire 格式）。
 /// </summary>
-internal sealed class JsonGameSession(GameService game, SqliteGameRepository repo, ILogger<JsonGameSession> logger)
+internal sealed class JsonGameSession(
+    GameService game,
+    SqliteGameRepository repo,
+    ServerOptions options,
+    ILogger<JsonGameSession> logger)
 {
     private readonly GameService _game = game;
     private readonly SqliteGameRepository _repo = repo;
+    private readonly string _profileId = options.ProfileId;
+    private readonly string _profileName = options.ProfileName;
     private readonly ILogger<JsonGameSession> _logger = logger;
 
     /// <summary>在单个连接上循环读取并分发 JSON 帧请求。</summary>
@@ -67,38 +73,36 @@ internal sealed class JsonGameSession(GameService game, SqliteGameRepository rep
 
     private async Task<object> LoginAsync(JsonElement payload, CancellationToken ct)
     {
-        var id = payload.GetProperty("profileId").GetString()!;
-        if (await _repo.LoadAsync(id, ct) is null)
-        {
-            var name = payload.TryGetProperty("name", out var rawName)
-                ? rawName.GetString() ?? id
-                : id;
-            await _repo.CreateAsync(id, name, ct);
-        }
+        // The server process is scoped to the account selected in the launcher. The client can
+        // retain a legacy/cached spelling (for example local_player), so accepting its profileId
+        // here would create a second account alongside the selected local-player profile.
+        _ = payload;
+        if (await _repo.LoadAsync(_profileId, ct) is null)
+            await _repo.CreateAsync(_profileId, _profileName, ct);
 
-        return new { profileId = id, version = _game.Profile.ClientVersion };
+        return new { profileId = _profileId, version = _game.Profile.ClientVersion };
     }
 
     private async Task<object> StateAsync(JsonElement payload, CancellationToken ct) =>
-        await _game.GetStateAsync(payload.GetProperty("profileId").GetString()!, ct) ??
+        await _game.GetStateAsync(_profileId, ct) ??
         throw new KeyNotFoundException("Profile not found");
 
     private async Task<object> FormationAsync(JsonElement payload, CancellationToken ct) =>
         await _game.SetFormationAsync(
-            payload.GetProperty("profileId").GetString()!,
+            _profileId,
             payload.GetProperty("shipIds").EnumerateArray().Select(x => x.GetInt32()).ToArray(),
             ct);
 
     private async Task<object> EnterAsync(JsonElement payload, CancellationToken ct) =>
         await _game.EnterStageAsync(
-            payload.GetProperty("profileId").GetString()!,
+            _profileId,
             payload.GetProperty("stageId").GetInt32(),
             ct);
 
     private async Task<object> BattleAsync(JsonElement payload, CancellationToken ct)
     {
         var result = await _game.ResolveBattleAsync(
-            payload.GetProperty("profileId").GetString()!,
+            _profileId,
             payload.GetProperty("stageId").GetInt32(),
             payload.GetProperty("win").GetBoolean(),
             ct);
