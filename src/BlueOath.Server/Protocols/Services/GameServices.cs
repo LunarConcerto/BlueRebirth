@@ -75,6 +75,7 @@ internal sealed class GameServices
         ShipMainLoader.Load(configDir);
         AssistShipLoader.Load(configDir);
         EquipLoader.Load(configDir, equipmentMods.Equipment);
+        ExpandItemLoader.Load(configDir);
         AffectionItemLoader.Load(configDir);
         ShipHandbookLoader.Load(configDir);
         BuildFormulaCatalog.Load(_shipInfos);
@@ -1043,7 +1044,25 @@ internal sealed class GameServices
             items[idx] = items[idx] with { Num = items[idx].Num + num };
         else
             items.Add(new BagItem(templateId, num));
-        return account with { Bag = bag with { Items = items } };
+        account = account with { Bag = bag with { Items = items } };
+
+        // 扩容道具：入库即生效，容量 +expand_num。type 1=船坞，2=装备仓库。
+        if (num > 0 && ExpandItemLoader.Get(templateId) is { } expandCfg)
+        {
+            long add = Math.Max(1, expandCfg.ExpandNum);
+            if (expandCfg.Type == 1)
+            {
+                var dock = account.Dock;
+                account = account with { Dock = dock with { BagSize = dock.BagSize + (int)add * num} };
+            }
+            else if (expandCfg.Type == 2)
+            {
+                var equip = account.Equip ?? new PlayerEquip([], 2000);
+                account = account with { Equip = equip with { EquipBagSize = equip.EquipBagSize + (int)add * num} };
+            }
+        }
+
+        return account;
     }
 
     /// <summary>仓库数据推送（bag.UpdateBagData）。<paramref name="removedTemplateIds"/> 为本次

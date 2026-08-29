@@ -960,6 +960,29 @@ internal static class ShipHandbookLoader
     }
 }
 
+/// <summary>从 config_expand_item 加载扩容道具配置（itemId → type/expandNum）。type: 1=船坞, 2=装备仓库。</summary>
+internal static class ExpandItemLoader
+{
+    private static readonly Dictionary<int, ConfigExpandItem> _items = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _items.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigExpandItem>(configDir, "config_expand_item.db"))
+                _items[id] = cfg;
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigExpandItem? Get(int itemTemplateId)
+        => _items.TryGetValue(itemTemplateId, out var cfg) ? cfg : null;
+}
+
 /// <summary>
 /// 从游戏客户端 config_fashion.db 加载全部时装，按 <c>belong_to_ship</c>（即
 /// config_ship_info.sf_id）分组为 <see cref="FashionEntry"/>（SfId → FashionTid 列表）。
