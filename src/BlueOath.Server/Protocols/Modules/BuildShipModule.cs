@@ -4,7 +4,7 @@ using BlueOath.Protocol;
 namespace BlueOath.Server.Protocols;
 
 /// <summary>抽卡模块：buildship.*（BuildShip 等）+ 许愿池 illustrate.ModiVowHeroList / VowHero。</summary>
-internal sealed class BuildShipModule(BuildShipService buildShip, GameServices services) : IGameModule
+internal sealed class BuildShipModule(BuildShipService buildShip, GameServices services, BuildPoolsConfig buildPoolsConfig) : IGameModule
 {
     public IReadOnlyList<string> Prefixes => ["buildship", "illustrate"];
 
@@ -46,6 +46,11 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                     // 新舰娘自带默认装备（config_ship_info.equip1..equip6），纯装备抽卡也会新增
                     // EquipItem，推送完整装备仓库让客户端 equipdata 拿到新增装备。
                     pre.Add(services.BuildEquipPush(account, now));
+                    // 推送最新累计抽数/领奖状态，客户端累计奖励 UI 无需重登即可刷新。
+                    pre.Add(TMessageCodec.EncodeResponse(new TResponse(
+                        Method: "buildship.BuildShipInfo",
+                        Ret: ProtocolEncoder.EncodeBuildShipInfo(buildPoolsConfig.EnabledPoolIds, now, account.BuildState),
+                        Time: now)));
                 }
                 result = new ModuleResult { Ret = ret, PrePushes = pre };
                 break;
@@ -64,7 +69,13 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                 result = ModuleResult.Ok(await buildShip.BuildAddBehaviourRetAsync(request, ctx.ProfileId, ctx.Ct));
                 break;
             case "buildship.BuildShipBox":
+                result = ModuleResult.Ok(await buildShip.BuildBuildShipBoxRetAsync(request, ctx.ProfileId, ctx.Ct));
+                result = await AttachBuildRewardPushesAsync(result, ctx);
+                break;
             case "buildship.BuildShipReward":
+                result = ModuleResult.Ok(await buildShip.BuildBuildShipRewardRetAsync(request, ctx.ProfileId, ctx.Ct));
+                result = await AttachBuildRewardPushesAsync(result, ctx);
+                break;
             default:
                 result = ModuleResult.Empty;
                 break;
@@ -109,6 +120,45 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                 IllustrateEquipList: [new IllustrateEquipInfo()])),
             Time: (uint)ctx.Now));
         return new ModuleResult { Ret = ret, PrePushes = [heroPush, illustratePush] };
+    }
+
+    /// <summary>领奖后附加推送：新舰娘（抽卡宝箱可能出船）推船坞/图鉴/装备，并推送累计奖状态。</summary>
+    private async Task<ModuleResult> AttachBuildRewardPushesAsync(ModuleResult result, GameContext ctx)
+    {
+        if (result.Ret.Length == 0) return result;
+
+        var account = await ctx.GetAccountAsync();
+        var now = (uint)ctx.Now;
+        var newIds = services.GetLastBuildHeroIds();
+        var newHeroes = account.Dock.Heroes
+            .Where(h => newIds.Contains(h.HeroId))
+            .Select(GameServices.ToHeroGrid)
+            .ToList();
+
+        var pushes = new List<byte[]>();
+        if (newHeroes.Count > 0)
+        {
+            pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
+                Method: "hero.UpdateHeroBagData",
+                Ret: PlayerDataCodec.Encode(new HeroBag(newHeroes, account.Dock.BagSize)),
+                Time: now)));
+            pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
+                Method: "illustrate.IllustrateInfo",
+                Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
+                    IllustrateList: newHeroes
+                        .Select(h => new IllustrateInfo((h.TemplateId - 1) / 10, now, 0, false, null, 0))
+                        .ToList(),
+                    IllustrateEquipList: [new IllustrateEquipInfo()])),
+                Time: now)));
+        }
+        pushes.Add(services.BuildEquipPush(account, now));
+        // 推送最新累计抽数/领奖状态。
+        pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
+            Method: "buildship.BuildShipInfo",
+            Ret: ProtocolEncoder.EncodeBuildShipInfo(buildPoolsConfig.EnabledPoolIds, now, account.BuildState),
+            Time: now)));
+
+        return new ModuleResult { Ret = result.Ret, PrePushes = pushes };
     }
 
 }

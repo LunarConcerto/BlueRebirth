@@ -82,7 +82,7 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
 
         using var _ = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
         PlayerAccount account = await ctx.GetAccountAsync();
-        GoodsGrant grant = ApplyGoods(account, arg.GoodId, arg.BuyNum);
+        GoodsGrant grant = ApplyGoods(account, arg.GoodId, arg.BuyNum, ctx.Now);
         if (grant.Reward.Type == 0) return new([], false, "shop goods could not be granted");
         await services.SaveAccountAsync(grant.Account, ctx.Ct);
 
@@ -104,7 +104,7 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
             if (!services.GmGoodsMap.TryGetValue(goodId, out GmGoodConfig? goods) ||
                 goods.ShopId != arg.ShopId)
                 continue;
-            var grant = ApplyGoods(account, goodId, 1);
+            var grant = ApplyGoods(account, goodId, 1, ctx.Now);
             if (grant.Reward.Type == 0) continue;
             account = grant.Account;
             rewards.Add(grant.Reward);
@@ -116,7 +116,7 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
     }
 
     /// <summary>发放单个 GM 商品，返回更新后的账号和奖励。无效商品返回 Type=0 的空奖励。</summary>
-    private GoodsGrant ApplyGoods(PlayerAccount account, int goodId, int buyNum)
+    private GoodsGrant ApplyGoods(PlayerAccount account, int goodId, int buyNum, int now)
     {
         if (!services.GmGoodsMap.TryGetValue(goodId, out var goods))
             return new GoodsGrant(account, new CommonReward());
@@ -130,6 +130,19 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
         else if (goods.Type == GameServices.GoodsTypeFashion)
         {
             account = AddFashion(account, goods.ItemId);
+        }
+        else if (goods.Type == GameServices.GoodsTypeShip)
+        {
+            // 舰娘购买 → 加入船坞（HeroDock），不能进背包（baglogic 按 config_table_index
+            // 解析模板会崩溃）。reward.Id 携带最后一个生成的 HeroId 供客户端渲染。
+            uint lastHeroId = 0;
+            for (var i = 0; i < totalNum; i++)
+            {
+                uint heroId = services.NextHeroId();
+                account = services.AddShip(account, heroId, goods.ItemId, now);
+                lastHeroId = heroId;
+            }
+            return new GoodsGrant(account, new CommonReward(goods.Type, goods.ItemId, 1, checked((int)lastHeroId)));
         }
         else if (goods.Type == GameServices.GoodsTypeEquip)
         {

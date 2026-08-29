@@ -42,11 +42,13 @@ internal static class ProtocolEncoder
     }
 
     /// <summary>
-    /// 编码 TBuildShipInfo：为指定卡池（config_extract_ship id）设置 CloseTime（field 10, repeated
-    /// TBuildShipCloseTime{Id(1), CloseTime(2)}）。客户端 CheckActIsOpen 优先读该字段，
-    /// 只要 CloseTime &gt; 当前时间即判定卡池开启，从而绕过已过期的 new_period 限制。
+    /// 编码 TBuildShipInfo：
+    ///  - CloseTime(field 10)：为配置中启用的卡池设置未来关闭时间，客户端 CheckActIsOpen 据此判定开启。
+    ///  - TotalCount(field 4)：各池累计抽数（TBuildShipCount{Id(1), Count(2)}）。
+    ///  - UsedBoxInfo(field 6)：已领取的 20 连宝箱档位（TBuildShipTimesReward{Id(1), Count[](2)}）。
+    ///  - UsedRewardInfo(field 7)：已领取的累计次奖励档位（TBuildShipTimesReward）。
     /// </summary>
-    internal static byte[] EncodeBuildShipInfo(IEnumerable<int> enabledPoolIds, uint now)
+    internal static byte[] EncodeBuildShipInfo(IEnumerable<int> enabledPoolIds, uint now, PlayerBuildState? buildState = null)
     {
         ProtocolPackage output = new();
         // 取未来 365 天作为关闭时间，保证长期有效。
@@ -59,6 +61,42 @@ internal static class ProtocolEncoder
             byte[] body = entry.ToArray();
             output.Write(0x52, body);                    // field 10, wire 2
         }
+
+        if (buildState is not null)
+        {
+            // TotalCount (field 4, repeated TBuildShipCount)
+            foreach (var (poolId, count) in buildState.DrawCount)
+            {
+                ProtocolPackage entry = new();
+                entry.Write(0x08, unchecked((ulong)poolId)); // Id(1)
+                entry.Write(0x10, unchecked((ulong)count));  // Count(2)
+                byte[] body = entry.ToArray();
+                output.Write(0x22, body);                    // field 4, wire 2
+            }
+
+            // UsedBoxInfo (field 6, repeated TBuildShipTimesReward)
+            foreach (var (poolId, counts) in buildState.UsedBoxInfo)
+            {
+                if (counts.Count == 0) continue;
+                ProtocolPackage entry = new();
+                entry.Write(0x08, unchecked((ulong)poolId)); // Id(1)
+                foreach (int c in counts) entry.Write(0x10, unchecked((ulong)c)); // Count(2, repeated)
+                byte[] body = entry.ToArray();
+                output.Write(0x32, body);                    // field 6, wire 2
+            }
+
+            // UsedRewardInfo (field 7, repeated TBuildShipTimesReward)
+            foreach (var (poolId, counts) in buildState.UsedRewardInfo)
+            {
+                if (counts.Count == 0) continue;
+                ProtocolPackage entry = new();
+                entry.Write(0x08, unchecked((ulong)poolId)); // Id(1)
+                foreach (int c in counts) entry.Write(0x10, unchecked((ulong)c)); // Count(2, repeated)
+                byte[] body = entry.ToArray();
+                output.Write(0x3A, body);                    // field 7, wire 2
+            }
+        }
+
         return output.ToArray();
     }
 

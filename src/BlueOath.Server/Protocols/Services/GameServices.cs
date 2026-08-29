@@ -324,10 +324,10 @@ internal sealed class GameServices
                 Time: now)),
 
             // 卡池信息推送（buildship.BuildShipInfo）：为配置中启用的卡池设置未来的 CloseTime，
-            // 客户端 CheckActIsOpen 据此判定这些限时卡池为开启状态。
+            // 客户端 CheckActIsOpen 据此判定这些限时卡池为开启状态。同时下发抽数/已领奖励状态。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "buildship.BuildShipInfo",
-                Ret: ProtocolEncoder.EncodeBuildShipInfo(_buildPoolsConfig.EnabledPoolIds, now),
+                Ret: ProtocolEncoder.EncodeBuildShipInfo(_buildPoolsConfig.EnabledPoolIds, now, account.BuildState),
                 Time: now)),
 
             // 仓库数据推送（道具）。
@@ -440,12 +440,29 @@ internal sealed class GameServices
         PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
         bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
         account = profileNameReady;
+        PlayerAccount bagReady = CleanupPollutedBagShips(account);
+        bool bagMigrated = !ReferenceEquals(bagReady, account);
+        account = bagReady;
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
-        if (affectionMigrated || buildingMigrated || buildingMaterialsMigrated || profileNameMigrated)
+        if (affectionMigrated || buildingMigrated || buildingMaterialsMigrated || profileNameMigrated || bagMigrated)
             await _repo.SaveAccountAsync(account, ct);
         return account;
+    }
+
+    /// <summary>迁移修复：清除误入仓库的舰娘模板。早期商店购买舰娘错误地走 AddBagItem
+    /// 写入背包，客户端 baglogic 按 config_table_index 解析模板时崩溃。舰娘模板
+    /// （config_ship_main）不属于背包，应移除以恢复存档。</summary>
+    private static PlayerAccount CleanupPollutedBagShips(PlayerAccount account)
+    {
+        var bag = account.Bag;
+        if (bag is null || bag.Items.Count == 0) return account;
+        List<BagItem> cleaned = bag.Items
+            .Where(item => ShipMainLoader.Get(item.TemplateId) is null)
+            .ToList();
+        if (cleaned.Count == bag.Items.Count) return account;
+        return account with { Bag = bag with { Items = cleaned } };
     }
 
     private string GetProfileDisplayName(string profileId) =>
@@ -1075,9 +1092,15 @@ internal sealed class GameServices
         IReadOnlyList<int>? removedBagTemplateIds = null)
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
+        List<HeroGrid> heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
         return
         [
             await BuildUpdateUserInfoPushAsync(profileId, now, ct),
+            // 购买舰娘后刷新船坞（hero.UpdateHeroBagData），使新船立即出现在船坞。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "hero.UpdateHeroBagData",
+                Ret: PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize)),
+                Time: now)),
             BuildBagPush(account, now, removedBagTemplateIds),
             BuildFashionPush(account, now),
             BuildEquipPush(account, now),
