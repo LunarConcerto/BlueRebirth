@@ -1,10 +1,103 @@
-# 苍蓝誓约本地复原
+<div align="center">
 
-这是一个面向本地离线复原的 .NET 8 工程骨架。原始日服和国服客户端目录保持不变。
+# BlueOath Rebirth
 
-当前分阶段目标和完成门槛见 [项目 Roadmap](docs/ROADMAP.zh-CN.md)。
+**某款已关服 Unity 手游的本地离线复原工程** — 从日服/国服客户端还原出可一键启动的本地服务端与 Mod 环境。
 
-协议、IL2CPP 类型与配置知识库可重复生成：
+![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?style=for-the-badge&logo=dotnet)
+![Platform](https://img.shields.io/badge/Platform-Windows-x86-blue?style=for-the-badge&logo=windows)
+![Lang](https://img.shields.io/badge/C%23%20%2B%20Lua-2E8B57?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-%E6%9C%AC%E5%9C%B0%E5%A4%8D%E5%8E%9F%E4%B8%AD-yellowgreen?style=for-the-badge)
+
+</div>
+
+---
+
+## 项目简介
+
+苍蓝誓约是一款基于 **Unity IL2CPP**（C# 已编译不可读）与 **Lua 热更**（逻辑近乎明文）的手游，目前已关服。本项目通过逆向还原其网络协议、配置数据与客户端逻辑，搭建一套本地离线服务端，让游戏能够**脱离官方服务器一键运行**，并在此之上提供 **Mod 支持**（xLua 运行时执行外部 Lua 代码），目标在日服与国服客户端之间通用。
+
+原始日服与国服客户端目录保持不变；协议、IL2CPP 类型与配置知识库均由工具**可重复生成**。
+
+## 特性
+
+- ✅ **本地离线服务端** — `BlueOath.Server`：HTTP 引导 + 游戏登录（TCP 与 KCP/UDP）双端点，SQLite 存档，仅监听 `127.0.0.1`
+- ✅ **真实传输协议还原** — 11 字节应用层头 + protobuf 信封；KCP over UDP（`KcpCodec` + ARQ 可靠性）
+- ✅ **客户端注入与重定向** — x86 注入 DLL（xinput 劫持）：SDK 登录绕过、DNS/connect/TLS 重定向、UnityTLS 证书信任补丁、引导系统跳过
+- ✅ **配置数据库双向转换** — 解密 `config_*.db`（XOR 0x55）⇄ Excel ⇄ C# 强类型类，一键脚本导出/反导
+- ✅ **协议/类型/配置知识库** — `BlueOath.Tools` 只读分析生成 `docs/*-catalog`，含 `.proto` 草案与 wire 证据
+- ✅ **WPF 图形化启动器** — 公告面板、进程守护、日志控制台、一键完整启动流程
+- ✅ **Mod 支持（实验）** — xLua Mod Loader：Payload 内钩取 `lua_pcallk`，从游戏 Lua 线程执行 `Mods/bootstrap.lua`，支持内容覆盖与追加（新增章节/装备/舰船）
+
+## 目录
+
+- [快速开始](#快速开始)
+- [构建与测试](#构建与测试)
+- [使用方式](#使用方式)
+- [项目结构](#项目结构)
+- [当前进度](#当前进度)
+- [文档](#文档)
+- [Roadmap 与更新日志](#roadmap-与更新日志)
+- [免责声明](#免责声明)
+
+## 快速开始
+
+### 方式一：WPF 图形化启动器（推荐）
+
+双击项目根目录的 `BlueOath.Launcher.lnk`，或运行：
+
+```powershell
+dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
+```
+
+启动器会执行完整流程：清理残留进程 → TLS 证书生成 → 启动服务器 → 启动代理 → 注入游戏，并实时显示各进程状态与日志。
+
+### 方式二：命令行脚本
+
+```powershell
+.\run-game.bat          # 全流程：server + proxy + 注入 + 看日志
+.\start-client.bat      # 调试：仅 proxy + 客户端，连接已运行服务器
+```
+
+### 手动运行本地服务
+
+```powershell
+# 本地服务（HTTP 引导 + TCP 游戏登录）
+dotnet run --project .\src\BlueOath.Server\BlueOath.Server.csproj -- --port=0 --region=jp --data=.\runtime\jp
+
+# KCP over UDP 登录端点（真实传输）
+dotnet run --project .\src\BlueOath.Server\BlueOath.Server.csproj -- --port=0 --kcp-game-login-port=0 --region=jp --data=.\runtime\jp
+```
+
+服务只监听 `127.0.0.1`，启动时输出 JSON 健康信息与实际端口。
+
+## 构建与测试
+
+```powershell
+dotnet restore .\BlueOath.Local.sln
+dotnet build .\BlueOath.Local.sln --no-restore          # 必须 0 警告 0 错误
+dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj --no-build
+dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj --no-build -- --integration
+
+# 构建原生注入组件（payload + injector）
+powershell -File .\tools\build-native.ps1
+```
+
+## 使用方式
+
+### 客户端配置数据库 ⇄ Excel ⇄ C#
+
+游戏配置存储于 SQLite `config_*.db`，`jsonbytes` 为明文 JSON 逐字节 `XOR 0x55`（可逆）。
+
+```powershell
+.\export-config.bat [jp|cn]    # 导出所有 config_*.db -> <仓库>\excel
+.\import-config.bat [jp|cn]    # 反导回配置数据库（自动备份）
+.\generate-config-cs.bat [jp|cn]  # 生成 C# 强类型类 -> src\BlueOath.Server\configs
+```
+
+底层命令与完整格式说明见 [配置工具链](docs/config-catalog/tooling.zh-CN.md)。
+
+### 协议 / 类型 / 配置知识库生成
 
 ```powershell
 dotnet run --project .\src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-il2cpp
@@ -13,218 +106,78 @@ dotnet run --project .\src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-pro
 dotnet run --project .\src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-config
 ```
 
-协议分析会在 `docs\protocol-catalog` 生成机器可读目录及 `jp-1.4.0.proto`、`cn-1.5.20.proto` 草案。草案中的 tag 具有 `ProtoMemberAttribute` 和严格属性顺序证据，但在提取到 attribute 构造参数或真实 wire fixture 前仍标为推断。
+### 数据驱动的 GM / 玩法配置
 
-## Protobuf 登录验证
+| 文件 | 作用 |
+| --- | --- |
+| `runtime/jp/gm-goods.json` | GM 商店商品（货币/道具/时装） |
+| `runtime/jp/gm-mails.json` | 邮件（无限领取的货币邮件） |
+| `runtime/jp/build-pools.json` | 建造卡池（按权重抽取） |
 
-服务端已支持独立的回环 protobuf 登录验证端口：
+### Mod
 
-```powershell
-dotnet run --project .\src\BlueOath.Server\BlueOath.Server.csproj -- --port=0 --game-login-port=0 --region=jp --data=.\runtime\jp
-```
+`tools/baseline.ps1` 生成 `baseline.json`（两服版本、架构与关键文件 SHA-256）。示例 Mod：
 
-该端口已实现 `TArgLogin -> SQLite 档案创建/加载 -> TRetLogin`，并使用静态逆向确认的客户端 wire 布局：C2S 请求为 `channel:u8 + operation:u8 + sessionId:i64-le + state:u8 + protobuf`；登录操作码为 `2`。S2C 响应使用 handler `5`，protobuf 信封为 `TAckPack -> TNetOperation { opCode=2, data=TRetLogin }`。JP/CN 对应函数结构一致，证据输出在 `docs/il2cpp-catalog/wire-analysis.json`。
+- `Mods/example.mod` — 普通明文 Lua 进入客户端运行时
+- `Mods/future-chapter.mod` — JP 1.4.0 主线新增「未来編」大章节
+- `Mods/custom-equipment.mod` — 克隆现有装备资源，加入试验装备
 
-## KCP 登录端点（真实传输）
+xLua Mod Loader 为实验功能，只接受基线中已验证的 `xlua.dll` SHA-256；未知版本会记录 `hook refused` 并保持客户端不变。调试日志见 `native/bin-x86/BlueOath.Payload.log`。
 
-游戏逻辑 socket 实际走 **KCP over UDP**（不是 TCP），服务端提供对应的 UDP 端点：
-
-```powershell
-dotnet run --project .\src\BlueOath.Server\BlueOath.Server.csproj -- --port=0 --kcp-game-login-port=0 --region=jp --data=.\runtime\jp
-```
-
-`BlueOath.Protocol/KcpCodec.cs` 提供 KCP 包层编解码（24 字节头，LE 端序），`KcpConnection.cs` 提供 ARQ 可靠性（累计 ACK、超时重传、死链检测）。端点已通过回环集成测试（假客户端 UDP 分片发登录、收 KCP 响应、解回 `TRetLogin`）。应用层仍复用上述 11 字节头 + protobuf 布局。
-
-## 构建
-
-```powershell
-dotnet restore .\BlueOath.Local.sln
-dotnet build .\BlueOath.Local.sln --no-restore
-dotnet run --project .\src\BlueOath.Tests\BlueOath.Tests.csproj --no-build
-```
-
-The optional process-level TCP test can be run with `--integration`; the default suite does not spawn child processes.
-
-## 本地服务
-
-```powershell
-dotnet run --project .\src\BlueOath.Server\BlueOath.Server.csproj -- --port=0 --region=jp --data=.\runtime\jp
-```
-
-服务只监听 `127.0.0.1`，启动时输出 JSON 健康信息和实际端口。协议当前使用长度前缀 JSON 作为可测试的临时 wire format；`ProtocolProfile` 为替换为真实 protobuf/KCP 适配器预留边界。
-
-## WPF 图形化启动器
-
-`src/BlueOath.Launcher.Wpf` 提供了一个可视化的 WPF 启动器，替代原有的 `run-game.bat` 和 `start-client.bat` 脚本。
-
-### 快速启动
-
-双击项目根目录下的 `BlueOath.Launcher.lnk` 快捷方式，或运行：
-
-```powershell
-dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
-```
-
-### 功能
-
-| 功能 | 说明 |
-|------|------|
-| 启动页 | 公告面板（数据驱动 `announcements.json`）+ 启动按钮 |
-| 正常启动 | 完整流程：清理残留进程 → TLS 证书 → 服务器 → 代理 → 注入游戏 |
-| 调试启动 | 仅启动代理 + 客户端，连接已运行的服务器（默认端口 7080） |
-| 进程守护 | 实时显示服务器/代理/游戏客户端进程状态（绿点/红点） |
-| 日志控制台 | 4 个子分页：服务器 / 代理 / 客户端 / 系统 |
-| 自动滚动 | 日志新增时自动滚动到最新行 |
-| WMI 进程清理 | 通过 WMI 查询命令行，精确匹配并清理残留的 `BlueOath.Server.dll` 进程 |
-| 游戏图标 | 嵌入游戏原始图标 `uipic_ui_common_im_icon_100.png` |
-
-### 架构
+## 项目结构
 
 ```
-src/BlueOath.Launcher.Wpf/
-├── Models/          # Announcement, LogEntry, LaunchConfig
-├── ViewModels/      # MainViewModel, LaunchViewModel, GuardianViewModel
-├── Views/           # MainWindow, LaunchPage, GuardianPage + Styles
-├── Services/        # ProcessManager (核心), AnnouncementService
-├── Converters/      # BooleanToVisibility, BooleanInvert
-└── Resources/       # announcements.json, app.ico
+.
+├── src/
+│   ├── BlueOath.Server/          # 本地服务器（Generic Host 分层架构）
+│   ├── BlueOath.Protocol/        # wire 协议：protobuf 信封 / KCP 编解码 / 玩家数据
+│   ├── BlueOath.Core/            # 领域实体（PlayerCharacter / Hero / 存档）
+│   ├── BlueOath.Storage/         # SQLite 仓储
+│   ├── BlueOath.Tools/           # IL2CPP/协议/配置分析工具
+│   ├── BlueOath.Launcher/        # 命令行客户端启动器
+│   ├── BlueOath.Launcher.Wpf/    # WPF 图形化启动器
+│   ├── BlueOath.Mods/            # Mod 清单/依赖/加载顺序发现
+│   ├── BlueOath.Publisher/       # 发布打包（launcher-settings、自动更新清单）
+│   ├── BlueOath.Tests/           # 单元 + 进程级集成测试
+│   └── BlueOath.Bootstrap/       # 引导
+├── native/                       # x86 注入 Payload / Injector（xinput 劫持）
+├── lua_tools/                    # 国服/日服反编译 Lua 源码（交叉验证）
+├── runtime/                      # 本地运行时数据（存档、GM 配置、TLS 材料）
+├── tools/                        # 辅助脚本（debug-game / build-native / 提取反编译…）
+├── docs/                         # 文档中心（见下文）
+├── blueoath/  苍蓝誓约/           # 原始日服 / 国服客户端（保持不变）
+└── BlueOath.Local.sln
 ```
 
-样式集中定义在 `App.xaml` 的 `Application.Resources` 中，后续替换样式只需编辑该文件。
+## 当前进度
 
-### 技术栈
+| 系统 | 状态 |
+| --- | --- |
+| SDK 登录 / 服务器列表 / 选服 | ✅ |
+| 游戏登录（TCP + KCP）与主界面 HomePage | ✅ |
+| 3D 看板船娘加载 | ✅ |
+| 船坞 / 船娘详情 / 图鉴 | ✅ |
+| 商店（GM 免费购买）/ 邮件 / 装备 / 抽卡 / 个人资料 / 舰娘升级 | ✅ |
+| 编队 / 战斗进入 / 伤害结算（主炮·鱼雷·空袭·副炮） | ✅ |
+| 海域索敌（迷雾 / 巡逻 / 决斗） | 🔄 持续修复中 |
+| 公会 / 好友 / 聊天 / 活动等多人与活动系统 | ⬜ 离线占位响应 |
 
-- **WPF on .NET 8.0**（`net8.0-windows`）
-- **MVVM** 模式（手写基类，无额外 NuGet 依赖）
-- `System.Management`（WMI 进程清理）
-- `System.Diagnostics.Process`（进程生命周期管理）
+## 文档
 
-## 客户端启动（控制台）
+全部文档索引见 [docs/README.md](docs/README.md)，主要入口：
 
-```powershell
-dotnet run --project .\src\BlueOath.Launcher\BlueOath.Launcher.csproj -- --region=jp --original
-```
+| 分类 | 文档 |
+| --- | --- |
+| 总体规划 | [项目概述](docs/project-overview.md) · [Roadmap](docs/roadmap.zh-CN.md) · [复盘总结](docs/retrospective.md) |
+| 开发与发布 | [development/](docs/development/README.md)（代码规范 · 协议覆盖 · 启动器发布/自动更新） |
+| 逆向研究 | [battle/](docs/research/battle/battle-system.md)（战斗系统 · 攻击 MISS · 自律） · [sea/](docs/research/sea/sea-battle.md)（海域玩法） · [transport](docs/research/transport.md) |
+| 生成知识库 | [protocol-catalog](docs/protocol-catalog/README.zh-CN.md) · [config-catalog](docs/config-catalog/README.zh-CN.md) · [il2cpp-catalog](docs/il2cpp-catalog/README.zh-CN.md) · [lua-catalog](docs/lua-catalog/README.md) |
 
-没有经过运行时验证的 x86 注入点会被启动器拒绝，避免对客户端执行未知补丁。
+## Roadmap 与更新日志
 
-## 基线与 Mod
+- 分阶段目标与完成门槛：**[docs/roadmap.zh-CN.md](docs/roadmap.zh-CN.md)**
+- 版本更新记录：**[CHANGELOG.md](CHANGELOG.md)**
 
-`tools/baseline.ps1` 生成 `baseline.json`，记录两服版本、架构和关键文件 SHA-256。示例 Mod 位于 `Mods/example.mod`；`Mods/future-chapter.mod` 会在 JP 1.4.0 主线新增第三个大章节“未来編”，其中包含一个不可进入的 `0/0` 占位篇章；`Mods/custom-equipment.mod` 会克隆现有装备资源，加入试验装备“未来試作砲”，并同步扩展客户端配置、服务端装备目录和 GM 装备商店。`BlueOath.Mods` 负责清单、目标版本、依赖和加载顺序发现，并将事件排队给后续 xLua runtime handoff。
+## 免责声明
 
-### xLua Mod Loader（JP 1.4.0 实验版）
-
-Payload 会等待已知版本的 `xlua.dll` 加载，在一次正常 `lua_pcallk` 返回后从游戏 Lua
-线程执行 `Mods/bootstrap.lua`。实验版只接受基线中的 JP 1.4.0 `xlua.dll` SHA-256；
-未知版本会记录 `hook refused` 并保持客户端代码不变。
-如需紧急回退，可用 `tools/build-native.ps1 -DisableLuaMods` 构建不含 Loader 的主 Payload；
-隔离 Probe 仍会保留，便于继续诊断。
-
-首次验证时查看 `native/bin-x86/BlueOath.Payload.log`：
-
-```text
-[LuaModLoader] lua_pcallk hook installed; waiting for Lua environment
-[LuaModLoader] lua: [BlueOath.Mods] future-chapter.mod/main.lua: configManager hooks installed
-[LuaModLoader] lua: [BlueOath.Mods] future-chapter.mod/main.lua: added main-story part 3: 未来編
-[LuaModLoader] lua: [BlueOath.Mods] future-chapter.mod/main.lua: CopyLogic empty-chapter guards installed
-[LuaModLoader] lua: [BlueOath.Mods] example.mod/main.lua: example.mod bootstrap active
-[LuaModLoader] lua: [BlueOath.Mods] bootstrap complete; loaded 2 mod(s)
-[LuaModLoader] bootstrap executed successfully: ...\\Mods\\bootstrap.lua
-```
-
-`bootstrap.lua` 当前通过一个显式入口列表加载 `future-chapter.mod/main.lua` 和
-`example.mod/main.lua`。前者验证客户端配置与逻辑方法可以安全覆盖，后者验证普通明文 Lua
-文件能够进入客户端运行时。通用的 `mod.json` 依赖排序、生命周期事件和模块覆盖仍属于后续工作。
-
-若完整 Payload 还受其它版本相关 hook 影响，可使用构建产物
-`native/bin-x86/BlueOath.LuaLoaderProbe.dll` 隔离验证 Loader；该 Probe 不包含网络、SDK、
-战斗或 UI hook，也不会被发布器打进正式包。
-
-## 客户端配置数据库
-
-游戏客户端的 SQLite 配置表以 JSON 为数据单元，已知表结构为
-`DBObject(id, indexid, jsonbytes)`。其中 `jsonbytes` 不是明文 JSON：读取其原始比特流后，
-需要将每个字节与 `0x55` 进行异或，才能还原数据：
-
-```text
-decoded[i] = encoded[i] XOR 0x55
-```
-
-异或运算可逆，因此重新编码时使用相同操作：
-
-```text
-encoded[i] = decoded[i] XOR 0x55
-```
-
-当前将此规则作为已知的配置解码线索。解码后的文本编码、是否还有压缩层，以及不同表或客户端版本是否采用完全相同的处理流程，仍需通过样本和客户端调用点验证。
-
-### 配置 <-> Excel 双向转换
-
-一键脚本（导出到 `<仓库>\excel`，反导时自动备份原配置）：
-
-```powershell
-.\export-config.bat [jp|cn]   # 导出：所有 config_*.db -> <仓库>\excel
-.\import-config.bat [jp|cn]   # 反导：<仓库>\excel -> 配置数据库（自动备份）
-```
-
-脚本底层调用 `BlueOath.Tools` 的 `--config-excel` 子命令，把加密的 `config_*.db` 导出为可编辑的
-`.xlsx`，也能把编辑后的 Excel 反导回配置数据库。每个表一个 `.xlsx` 文件（`config_<表>.xlsx`），
-JSON 已展开为表头列，内含三个工作表：
-
-- `data`：业务行。前两列为数据库键 `_id` / `_indexid`，其余每列对应一个 JSON 字段（列名即原字段名）。
-  整数/浮点存为数字单元格、字符串存为文本（空字符串写作 `""`）、布尔存 `true`/`false`、
-  数组/嵌套结构存 JSON 文本（如 `[1,2,3]`、`[[1,2],[3]]`）、字段缺失为空单元格。
-- `_schema`：字段类型说明（`header` / `field` / `type`），导入时据此把单元格还原为正确的 JSON 类型。
-- `_meta`：元数据行（`id = nill` 的整表校验哈希，`jsonbytes_base64` 为已解密字节，一般无需改动）。
-
-> 旧版单列 `json` 格式（`id`/`indexid`/`json` 三列）导出的 Excel 仍可导入。
-
-导出：
-
-```powershell
-dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel --region=jp [--output=<目录>]
-```
-
-默认输出到 `<仓库>\config-excel\<region>`，并生成 `_manifest.json` 记录每张表源库 SHA-256。
-`--region` 支持 `jp` / `cn`，也可用 `--config-root=<目录>` 直接指定任意 config 目录。
-
-反导回数据库（默认原位写回，写回前自动备份被覆盖的 `.db`）：
-
-```powershell
-dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel-import --region=jp --input=<目录或单个.xlsx>
-```
-
-- `--input` 可指向整个导出目录，或单个 `config_*.xlsx`（表名取自文件名）。
-- 默认写回原 config 目录；如需先落到暂存目录验证，加 `--output=<目录>`。
-- 反导前自动把将被覆盖的 `.db` 备份到 config 目录旁的 `config-backup\<时间戳>\`；用 `--no-backup` 可关闭。
-
-整目录快照备份（一次性保护原始配置）：
-
-```powershell
-dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel-backup --region=jp [--output=<目录>]
-```
-
-自检（临时目录内完成一次导出/反导字节级回环验证）：
-
-```powershell
-dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel-self-test
-```
-
-### 配置 -> C# 强类型类（仅结构）
-
-解析每张表的 JSON 结构（跨全部业务行推断字段类型），生成仅含结构的 C# DTO 类，供本地服反序列化配置使用：
-
-```powershell
-.\generate-config-cs.bat [jp|cn]   # 生成到 src\BlueOath.Server\configs
-```
-
-底层命令：
-
-```powershell
-dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-cs --region=jp --output=src\BlueOath.Server\configs [--namespace=BlueOath.Server.Configs]
-```
-
-- 每张表一个 `Config<表名>.cs`，命名空间 `BlueOath.Server.Configs`。
-- 字段名转 PascalCase，并带 `[JsonPropertyName("原字段名")]` 保证 JSON 双向映射。
-- 类型推断：整数 -> `long`，浮点/整浮混用 -> `double`，字符串 -> `string`，布尔 -> `bool`，
-  数组 -> `List<T>`（支持 `List<List<T>>` 嵌套），类型混用/结构不明 -> `object`（可空）。
-- 生成目录会先清理旧的 `Config*.cs`，再整体重写，可安全重复运行。
+本项目**仅用于个人学习与研究目的**。游戏及其原始资产（客户端、配置、美术与音频等）版权归原作者所有；本仓库不包含官方服务器代码。请勿将本项目用于任何商业用途。

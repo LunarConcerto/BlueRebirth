@@ -15,10 +15,10 @@
         "version":  "1.5.20",
         "architecture":  "x86",
         "files":  {
-                      "E:\\逆向工程\\苍蓝誓约项目\\苍蓝誓约\\clsy\\GameAssembly.dll":  "AB1C009D1565F69B815703EAAE39F4FB4BD3533EF5FE823D620B355C62A1A9C0",
-                      "E:\\逆向工程\\苍蓝誓约项目\\苍蓝誓约\\clsy\\clsy_Data\\il2cpp_data\\Metadata\\global-metadata.dat":  "BC05B1828B8D26EEE1A39B8E18678BE7FA855DCB9528332937723425D5A7A325",
-                      "E:\\逆向工程\\苍蓝誓约项目\\苍蓝誓约\\clsy\\clsy.exe":  "482704B3DE6942C010A83529FC131802E4F85FF08357A18997E55CD74BB28273",
-                      "E:\\逆向工程\\苍蓝誓约项目\\苍蓝誓约\\clsy\\clsy_Data\\Plugins\\xlua.dll":  "E791FDC70D45FA5D1C86829DB6ED7F0A0064E2A768AFCCFD64F2BF8C59A4745C"
+                      "苍蓝誓约\\clsy\\GameAssembly.dll":  "AB1C009D1565F69B815703EAAE39F4FB4BD3533EF5FE823D620B355C62A1A9C0",
+                      "苍蓝誓约\\clsy\\clsy_Data\\il2cpp_data\\Metadata\\global-metadata.dat":  "BC05B1828B8D26EEE1A39B8E18678BE7FA855DCB9528332937723425D5A7A325",
+                      "苍蓝誓约\\clsy\\clsy.exe":  "482704B3DE6942C010A83529FC131802E4F85FF08357A18997E55CD74BB28273",
+                      "苍蓝誓约\\clsy\\clsy_Data\\Plugins\\xlua.dll":  "E791FDC70D45FA5D1C86829DB6ED7F0A0064E2A768AFCCFD64F2BF8C59A4745C"
                   }
     }
 ]

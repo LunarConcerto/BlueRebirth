@@ -1200,5 +1200,5 @@ pc_boss_a01，hp=9999999，attack=1，defense=0，level=1，hit=100，dodge=0，
 - config_fleet[907] 的 copy_attacheds=[908,909,910] **不是附加舰队**（用户纠正，勿据此展开）。
 - HpCoefficient=100 亿（PlayerAccountFactory.ln）是 **HP 比例**（防浮点转整数精度丢失），实际 HP 由配置决定。
 
-## 未解决（另见 docs/攻击MISS.md）
-- 进入战斗后攻击显示 MISS、无伤害。__IsHit(100,0)=true，伤害疑似=0。详见 docs/攻击MISS.md。
+## 未解决（另见 docs/research/battle/attack-miss.md）
+- 进入战斗后攻击显示 MISS、无伤害。__IsHit(100,0)=true，伤害疑似=0。详见 docs/research/battle/attack-miss.md。

@@ -2,7 +2,7 @@
 
 > 状态：**资料收集完成（2026-08-25）**。本文档逆向自 il2cpp Windows 版（JP 1.4.0），覆盖 `config_fleet.battlefield_info` 从配置到战斗中敌/玩家舰队落位的**完整数据流**，作为海域"非 1-A 决斗后敌舰队离很远、玩家无法操作"问题的资料库，避免后续重复读汇编。
 >
-> 相关文档：`docs/海域索敌机制.md`（索敌阶段出生点/迷雾/巡逻）、`docs/海域战斗.md`（索敌→战斗 FSM / 战斗限时）。
+> 相关文档：`docs/research/sea/sea-search.md`（索敌阶段出生点/迷雾/巡逻）、`docs/research/sea/sea-battle.md`（索敌→战斗 FSM / 战斗限时）。
 >
 > 结论一句话：**`battlefield_info` 只在索敌→决斗转换时决定用哪套"进场位置工具（EBPKit）"：`-1` 走 `NormalPos`（按当前舰队几何中心落位，正常）；非 `-1` 走 `SceneConfigPos`（按 `config_battlefield_info` 里另一张地图的场景出生点坐标落位）。海域非 1-A 舰队配的 `battlefield_info` 指向的是 1600900/1610300/1620100 等**别的地图**的坐标，落入当前海域场景（1600100）后全部偏移到错误位置 → 敌舰远、操作失效。**
 
