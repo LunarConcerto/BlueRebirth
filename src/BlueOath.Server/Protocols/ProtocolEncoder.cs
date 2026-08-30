@@ -616,9 +616,17 @@ internal static class ProtocolEncoder
         return ms.ToArray();
     }
 
-    internal static byte[] EncodePassBaseRet(int copyId = 0, int grade = 3, int firstPass = 1, int passTime = 60)
+    internal static byte[] EncodePassBaseRet(
+        int copyId = 0,
+        int grade = 3,
+        int firstPass = 1,
+        int passTime = 60,
+        IReadOnlyList<CommonReward>? rewards = null)
     {
         ProtocolPackage ms = new();
+        if (rewards is not null)
+            foreach (CommonReward reward in rewards)
+                ms.Write(0x0A, PlayerDataCodec.Encode(reward)); // Reward(1)
         if (copyId != 0)
             ms.Write(0x60, unchecked((ulong)copyId));
         if (grade != 0)
@@ -861,6 +869,37 @@ internal static class ProtocolEncoder
 
         ms.Write(0x10, unchecked((ulong)ChapterCopyLoader.GetMubarLastCopyId())); // MaxCopyId(2)
         ms.Write(0x18, 33UL); // CopyType(3)=MubarCopy
+        return ms.ToArray();
+    }
+
+    /// <summary>编码每日副本（DailyCopy, CopyType=9）的关卡对象。
+    /// 所有关卡都必须存在于 BaseInfo，未通关关卡用 FirstPassTime=0 表示；否则
+    /// DailyCopyDetailPage 打开关卡详情时会拿到 nil 的 tabSerData。</summary>
+    public static byte[] EncodeDailyCopyInfo(PlayerDailyCopyProgress? progress = null)
+    {
+        HashSet<int> passed = progress?.Chapters?
+            .SelectMany(x => x.PassCopy ?? [])
+            .ToHashSet() ?? [];
+        List<int> levels = ChapterCopyLoader.GetDailyLevels();
+        ProtocolPackage ms = new();
+        int maxCopyId = 0;
+        foreach (int cid in levels)
+        {
+            bool isPassed = passed.Contains(cid);
+            ProtocolPackage baseInfo = new();
+            baseInfo.Write(0x08, unchecked((ulong)cid)); // BaseId(1)
+            baseInfo.Write(0x10, 0UL); // Rid(2)
+            baseInfo.Write(0x18, isPassed ? 7UL : 0UL); // StarLevel(3)
+            baseInfo.Write(0x20, 0UL); // IsRunningFight(4)
+            baseInfo.Write(0x28, 0UL); // LBPoint(5)
+            baseInfo.Write(0x30, isPassed ? 1UL : 0UL); // FirstPassTime(6)
+            ms.Write(0x0A, baseInfo.ToArray());
+            if (isPassed && cid > maxCopyId) maxCopyId = cid;
+        }
+
+        if (maxCopyId == 0 && levels.Count > 0) maxCopyId = levels[0];
+        ms.Write(0x10, unchecked((ulong)maxCopyId)); // MaxCopyId(2)
+        ms.Write(0x18, 9UL); // CopyType(3)=DailyCopy
         return ms.ToArray();
     }
 

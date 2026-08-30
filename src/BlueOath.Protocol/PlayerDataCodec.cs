@@ -172,6 +172,23 @@ public sealed record RetShopsInfo(
 /// <summary>通用奖励（TCommonReward）。Type 对应 GoodsType，ConfigId 对应物品/货币 id。</summary>
 public sealed record CommonReward(int Type = 0, int ConfigId = 0, int Num = 0, int Id = 0);
 
+/// <summary>每日副本单章节数据（dailycopy_pb.TDailyCopyInfo）。</summary>
+public sealed record DailyCopyInfo(
+    int ChapterId = 0,
+    int ChallengeTimes = 0,
+    IReadOnlyList<int>? PassCopy = null,
+    bool SelectEx = false,
+    int ExStar = 0);
+
+/// <summary>每日副本组计数（dailycopy_pb.TDailyGroupInfo）。</summary>
+public sealed record DailyCopyGroupInfo(int DailyGroupId = 0, int SuccessTimes = 0);
+
+/// <summary>每日副本完整快照（dailycopy_pb.TUserDailyCopyInfo）。</summary>
+public sealed record UserDailyCopyInfo(
+    IReadOnlyList<DailyCopyInfo>? ArrDailyCopyInfo = null,
+    IReadOnlyList<DailyCopyGroupInfo>? ArrDailyGroupInfo = null,
+    IReadOnlyList<DailyCopyGroupInfo>? ArrDailyUpGroupInfo = null);
+
 /// <summary>仓库格子（TGridInfo）。</summary>
 public sealed record BagGridInfo(int TemplateId = 0, int Num = 0);
 
@@ -227,6 +244,43 @@ public sealed record MailListRet(int MailNum = 0, int ExpireNum = 0,
 /// </summary>
 public static class PlayerDataCodec
 {
+    /// <summary>编码 dailycopy.UpdateDailyCopyData 的完整玩家快照。</summary>
+    public static byte[] Encode(UserDailyCopyInfo value)
+    {
+        using var output = new MemoryStream();
+        if (value.ArrDailyCopyInfo is not null)
+            foreach (DailyCopyInfo chapter in value.ArrDailyCopyInfo)
+                WriteMessage(output, 1, Encode(chapter));
+        if (value.ArrDailyGroupInfo is not null)
+            foreach (DailyCopyGroupInfo group in value.ArrDailyGroupInfo)
+                WriteMessage(output, 2, Encode(group));
+        if (value.ArrDailyUpGroupInfo is not null)
+            foreach (DailyCopyGroupInfo group in value.ArrDailyUpGroupInfo)
+                WriteMessage(output, 3, Encode(group));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(DailyCopyInfo value)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)value.ChapterId));
+        WriteVarintField(output, 2, unchecked((ulong)value.ChallengeTimes));
+        if (value.PassCopy is not null)
+            foreach (int copyId in value.PassCopy)
+                WriteVarintField(output, 3, unchecked((ulong)copyId));
+        WriteVarintField(output, 4, value.SelectEx ? 1UL : 0UL);
+        WriteVarintField(output, 5, unchecked((ulong)value.ExStar));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(DailyCopyGroupInfo value)
+    {
+        using var output = new MemoryStream();
+        WriteVarintField(output, 1, unchecked((ulong)value.DailyGroupId));
+        WriteVarintField(output, 2, unchecked((ulong)value.SuccessTimes));
+        return output.ToArray();
+    }
+
     public static byte[] Encode(BuildsInfoRet value)
     {
         using var output = new MemoryStream();

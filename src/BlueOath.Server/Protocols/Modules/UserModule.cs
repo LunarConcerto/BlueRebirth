@@ -38,6 +38,11 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                             Method: "copy.GetCopy",
                             Ret: ProtocolEncoder.EncodeMubarCopyInfo(),
                             Time: now)),
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "copy.GetCopy",
+                            Ret: ProtocolEncoder.EncodeDailyCopyInfo(loginAccount.DailyCopy),
+                            Time: now)),
+                        DailyCopyService.BuildUpdatePush(loginAccount.DailyCopy, now),
                     ],
                 };
                 break;

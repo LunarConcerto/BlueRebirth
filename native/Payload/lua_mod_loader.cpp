@@ -21,7 +21,12 @@ using LuaGetTop = int(__cdecl*)(LuaState);
 using LuaSetTop = void(__cdecl*)(LuaState, int);
 using LuaGetGlobal = int(__cdecl*)(LuaState, const char*);
 using LuaSetGlobal = void(__cdecl*)(LuaState, const char*);
+using LuaGetField = int(__cdecl*)(LuaState, int, const char*);
+using LuaSetField = void(__cdecl*)(LuaState, int, const char*);
 using LuaType = int(__cdecl*)(LuaState, int);
+using LuaPushValue = void(__cdecl*)(LuaState, int);
+using LuaPushBoolean = void(__cdecl*)(LuaState, int);
+using LuaToBoolean = int(__cdecl*)(LuaState, int);
 using LuaPushLString = const char*(__cdecl*)(LuaState, const char*, size_t);
 using LuaPushCClosure = void(__cdecl*)(LuaState, LuaCFunction, int);
 using LuaPushNil = void(__cdecl*)(LuaState);
@@ -33,6 +38,8 @@ constexpr char SupportedJpXluaSha256[] =
 constexpr size_t LuaPcallStolenLength = 14;
 constexpr int LuaTypeTable = 5;
 constexpr int LuaTypeFunction = 6;
+constexpr int LuaTypeNil = 0;
+constexpr int LuaFirstUpvalueIndex = -1001001;
 
 std::filesystem::path payloadDirectory;
 std::filesystem::path logPath;
@@ -48,13 +55,22 @@ LuaGetTop luaGetTop = nullptr;
 LuaSetTop luaSetTop = nullptr;
 LuaGetGlobal luaGetGlobal = nullptr;
 LuaSetGlobal luaSetGlobal = nullptr;
+LuaGetField showGirlGetField = nullptr;
+LuaSetField showGirlSetField = nullptr;
 LuaType luaType = nullptr;
+LuaPushValue showGirlPushValue = nullptr;
+LuaPushBoolean showGirlPushBoolean = nullptr;
+LuaToBoolean showGirlToBoolean = nullptr;
 LuaPushLString luaPushLString = nullptr;
 LuaPushCClosure luaPushCClosure = nullptr;
 LuaPushNil luaPushNil = nullptr;
 LuaToLString luaToLString = nullptr;
 LuaLoadBufferX luaLoadBufferX = nullptr;
 void* luaPcallTrampoline = nullptr;
+bool buildShipNewStatePatchApplied = false;
+bool showGirlNewStatePatchApplied = false;
+bool pendingBuildShipNewValid = false;
+bool pendingBuildShipIsNew = false;
 
 void Log(const std::string& message) noexcept {
     if (logPath.empty()) return;
@@ -66,6 +82,115 @@ void Log(const std::string& message) noexcept {
     DWORD written = 0;
     WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
     CloseHandle(file);
+}
+
+// BuildShipPage computes the correct per-card "new" state, including ships
+// owned before the draw and duplicates seen earlier in the same ten-pull, but
+// the shipped JP Lua bundle does not pass that boolean to ShowGirlPage. The
+// latter then falls back to an older illustrate snapshot and asks the player
+// to lock an already-owned ship. Keep this compatibility patch in the native
+// xLua bridge so it works even when no external Mods directory is present.
+int __cdecl BuildShipCheckShowMeetPatched(LuaState state) {
+    if (!state || !luaGetTop || !showGirlPushValue || !showGirlToBoolean ||
+        !luaSetTop || !originalLuaPcallK) {
+        return 0;
+    }
+
+    const int argumentCount = luaGetTop(state);
+    showGirlPushValue(state, LuaFirstUpvalueIndex);
+    for (int i = 1; i <= argumentCount; ++i) showGirlPushValue(state, i);
+    const int status = originalLuaPcallK(state, argumentCount, -1, 0, 0, nullptr);
+    if (status != 0) {
+        Log("BuildShipLogic.CheckShowMeet wrapper failed");
+        luaSetTop(state, argumentCount);
+        return 0;
+    }
+
+    const int resultCount = luaGetTop(state) - argumentCount;
+    if (resultCount > 0) {
+        pendingBuildShipIsNew = showGirlToBoolean(state, argumentCount + 1) != 0;
+        pendingBuildShipNewValid = true;
+    }
+    return resultCount;
+}
+
+int __cdecl ShowGirlUpdatePagePatched(LuaState state) {
+    if (!state || !luaGetTop || !luaSetTop || !showGirlGetField ||
+        !showGirlSetField || !showGirlPushValue || !showGirlPushBoolean ||
+        !originalLuaPcallK) {
+        return 0;
+    }
+
+    const int argumentCount = luaGetTop(state);
+    if (argumentCount < 1) return 0;
+
+    showGirlGetField(state, 1, "param");
+    if (luaType(state, -1) == LuaTypeTable) {
+        const int paramIndex = luaGetTop(state);
+        showGirlGetField(state, paramIndex, "buildNum");
+        const bool hasBuildNum = luaType(state, -1) != LuaTypeNil;
+        luaSetTop(state, paramIndex);
+        showGirlGetField(state, paramIndex, "getWay");
+        const bool hasGetWay = luaType(state, -1) != LuaTypeNil;
+        luaSetTop(state, paramIndex);
+
+        if (pendingBuildShipNewValid && hasBuildNum && !hasGetWay) {
+            showGirlPushBoolean(state, pendingBuildShipIsNew ? 1 : 0);
+            showGirlSetField(state, paramIndex, "bNew");
+            pendingBuildShipNewValid = false;
+        }
+    }
+    luaSetTop(state, argumentCount);
+
+    showGirlPushValue(state, LuaFirstUpvalueIndex);
+    for (int i = 1; i <= argumentCount; ++i) showGirlPushValue(state, i);
+    const int status = originalLuaPcallK(state, argumentCount, -1, 0, 0, nullptr);
+    if (status != 0) {
+        Log("ShowGirlPage._UpdatePage wrapper failed");
+        luaSetTop(state, argumentCount);
+        return 0;
+    }
+    return luaGetTop(state) - argumentCount;
+}
+
+void TryPatchBuildShipNewState(LuaState state) {
+    if (!state || (buildShipNewStatePatchApplied && showGirlNewStatePatchApplied) ||
+        !luaGetTop || !luaSetTop || !luaGetGlobal || !showGirlGetField ||
+        !showGirlSetField || !luaPushCClosure) {
+        return;
+    }
+
+    const int top = luaGetTop(state);
+    if (!buildShipNewStatePatchApplied) {
+        luaGetGlobal(state, "Logic");
+        if (luaType(state, -1) == LuaTypeTable) {
+            showGirlGetField(state, -1, "buildShipLogic");
+            if (luaType(state, -1) == LuaTypeTable) {
+                showGirlGetField(state, -1, "CheckShowMeet");
+                if (luaType(state, -1) == LuaTypeFunction) {
+                    luaPushCClosure(state, &BuildShipCheckShowMeetPatched, 1);
+                    showGirlSetField(state, -2, "CheckShowMeet");
+                    buildShipNewStatePatchApplied = true;
+                    Log("native BuildShipLogic new-state capture installed");
+                }
+            }
+        }
+        luaSetTop(state, top);
+    }
+
+    if (!showGirlNewStatePatchApplied) {
+        luaGetGlobal(state, "ShowGirlPage");
+        if (luaType(state, -1) == LuaTypeTable) {
+            showGirlGetField(state, -1, "_UpdatePage");
+            if (luaType(state, -1) == LuaTypeFunction) {
+                luaPushCClosure(state, &ShowGirlUpdatePagePatched, 1);
+                showGirlSetField(state, -2, "_UpdatePage");
+                showGirlNewStatePatchApplied = true;
+                Log("native ShowGirlPage new-state forwarding installed");
+            }
+        }
+        luaSetTop(state, top);
+    }
 }
 
 std::string WideToUtf8(const std::wstring& value) {
@@ -241,6 +366,10 @@ bool LuaEnvironmentReady(LuaState state) {
 
 void TryRunBootstrap(LuaState state) {
     if (bootstrapComplete.load(std::memory_order_acquire)) return;
+    if (bootstrapPath.empty()) {
+        bootstrapComplete.store(true, std::memory_order_release);
+        return;
+    }
     const auto now = GetTickCount64();
     if (now < nextBootstrapAttempt.load(std::memory_order_relaxed)) return;
     bool expected = false;
@@ -290,8 +419,10 @@ int __cdecl HookLuaPcallK(LuaState state, int argumentCount, int resultCount,
         errorFunction, context, continuation);
     if (status != 0)
         Log("lua_pcallk status=" + std::to_string(status) + " error=" + LuaError(state));
-    else
+    else {
         TryRunBootstrap(state);
+        TryPatchBuildShipNewState(state);
+    }
     return status;
 }
 
@@ -305,14 +436,21 @@ bool ResolveLuaApi(HMODULE xlua) {
     luaSetTop = Resolve<LuaSetTop>(xlua, "lua_settop");
     luaGetGlobal = Resolve<LuaGetGlobal>(xlua, "lua_getglobal");
     luaSetGlobal = Resolve<LuaSetGlobal>(xlua, "lua_setglobal");
+    showGirlGetField = Resolve<LuaGetField>(xlua, "lua_getfield");
+    showGirlSetField = Resolve<LuaSetField>(xlua, "lua_setfield");
     luaType = Resolve<LuaType>(xlua, "lua_type");
+    showGirlPushValue = Resolve<LuaPushValue>(xlua, "lua_pushvalue");
+    showGirlPushBoolean = Resolve<LuaPushBoolean>(xlua, "lua_pushboolean");
+    showGirlToBoolean = Resolve<LuaToBoolean>(xlua, "lua_toboolean");
     luaPushLString = Resolve<LuaPushLString>(xlua, "lua_pushlstring");
     luaPushCClosure = Resolve<LuaPushCClosure>(xlua, "lua_pushcclosure");
     luaPushNil = Resolve<LuaPushNil>(xlua, "lua_pushnil");
     luaToLString = Resolve<LuaToLString>(xlua, "lua_tolstring");
     luaLoadBufferX = Resolve<LuaLoadBufferX>(xlua, "luaL_loadbufferx");
-    return luaGetTop && luaSetTop && luaGetGlobal && luaSetGlobal && luaType &&
-           luaPushLString && luaPushCClosure && luaPushNil && luaToLString && luaLoadBufferX;
+    return luaGetTop && luaSetTop && luaGetGlobal && luaSetGlobal &&
+           showGirlGetField && showGirlSetField && luaType && showGirlPushValue &&
+           showGirlPushBoolean && showGirlToBoolean && luaPushLString &&
+           luaPushCClosure && luaPushNil && luaToLString && luaLoadBufferX;
 }
 
 bool InstallLuaPcallHook(HMODULE xlua) {
@@ -363,11 +501,11 @@ bool InstallLuaPcallHook(HMODULE xlua) {
 DWORD InstallerThreadCore() {
     modsRoot = FindModsRoot();
     if (modsRoot.empty()) {
-        Log("Mods/bootstrap.lua not found; loader disabled");
-        return 0;
+        Log("Mods/bootstrap.lua not found; continuing with built-in compatibility patches");
+    } else {
+        bootstrapPath = modsRoot / L"bootstrap.lua";
+        Log("mods root: " + WideToUtf8(modsRoot.wstring()));
     }
-    bootstrapPath = modsRoot / L"bootstrap.lua";
-    Log("mods root: " + WideToUtf8(modsRoot.wstring()));
 
     for (int attempt = 0; attempt < 6000; ++attempt) {
         const auto xlua = GetModuleHandleW(L"xlua.dll");

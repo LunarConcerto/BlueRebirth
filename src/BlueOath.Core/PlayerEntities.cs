@@ -164,6 +164,29 @@ public sealed record PlayerCopyProgress(
 public sealed record PlayerSeaCopyProgress(
     IReadOnlyList<CopyRecord> Records);
 
+/// <summary>每日副本单章节进度。ChapterId 对应 config_chapter（例如驱逐大作战为 20001）。</summary>
+public sealed record DailyCopyChapterProgress(
+    int ChapterId,
+    int ChallengeTimes = 0,
+    IReadOnlyList<int>? PassCopy = null,
+    bool SelectEx = false,
+    int ExStar = 0);
+
+/// <summary>每日副本组的当日成功次数。DailyGroupId 对应 config_daily_group。</summary>
+public sealed record DailyCopyGroupProgress(
+    int DailyGroupId,
+    int SuccessTimes = 0);
+
+/// <summary>
+/// 每日副本（DailyCopy）持久化状态。ResetDay 使用东八区自然日编号；跨日时只清空
+/// ChallengeTimes/SuccessTimes，永久通关记录与条约选择保持不变。
+/// </summary>
+public sealed record PlayerDailyCopyProgress(
+    IReadOnlyList<DailyCopyChapterProgress>? Chapters = null,
+    IReadOnlyList<DailyCopyGroupProgress>? Groups = null,
+    IReadOnlyList<DailyCopyGroupProgress>? ExtraGroups = null,
+    int ResetDay = 0);
+
 /// <summary>基地中的单栋建筑。Tid 对应 config_buildinginfo，Id 是存档内的建筑实例 ID。</summary>
 public sealed record PlayerBuildingEntry(
     int Id,
@@ -188,6 +211,24 @@ public sealed record PlayerBuilding(
     int FoodMax = 100,
     int ElectricMax = 100);
 
+/// <summary>单个任务的持久化状态。TaskType 对应客户端 constants.lua 的 TaskType。</summary>
+public sealed record PlayerTaskRecord(
+    int TaskType,
+    int TaskId,
+    int FinishTime,
+    int RewardTime = 0,
+    int Count = 0);
+
+/// <summary>
+/// 离线任务进度。日常/周常领奖记录分别按东八区自然日和自然周刷新；其余任务永久保留。
+/// TeachingPtRewardIds 记录已领取的教学履历阶段奖励。
+/// </summary>
+public sealed record PlayerTaskProgress(
+    IReadOnlyList<PlayerTaskRecord>? Records = null,
+    int DailyResetDay = 0,
+    int WeeklyResetWeek = 0,
+    IReadOnlyList<int>? TeachingPtRewardIds = null);
+
 /// <summary>
 /// 玩家账号聚合（角色 + 船坞 + 仓库 + 时装 + 关卡进度）。存档数据库中实际存在的实体根，
 /// 后续如需加入建造/浴室/建筑等玩家域数据，可在此扩展新的成员（保持向后兼容：
@@ -209,7 +250,9 @@ public sealed record PlayerAccount(
     PlayerBuilding? Building = null,
     string? ProfileDisplayName = null,
     PlayerIllustrate? Illustrate = null,
-    PlayerBuildState? BuildState = null);
+    PlayerBuildState? BuildState = null,
+    PlayerDailyCopyProgress? DailyCopy = null,
+    PlayerTaskProgress? Tasks = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。
@@ -237,6 +280,12 @@ public static class PlayerAccountFactory
     /// <summary>秘书舰默认时装（limit_type=0 -> ship_show "u_cl_oakland"）。</summary>
     public const int DefaultHeroFashioning = 1021051;
 
+    /// <summary>奥克兰 config_ship_info[1021051] 的第一槽默认主炮。</summary>
+    public const int DefaultHeroMainGunTemplateId = 30091;
+
+    /// <summary>奥克兰 config_ship_info[1021051] 的第三槽默认副炮。</summary>
+    public const int DefaultHeroSecondaryGunTemplateId = 30221;
+
     /// <summary>GM 默认金币（足量，避免时装等高金币商品置灰）。</summary>
     public const int DefaultGold = 99999999;
 
@@ -249,7 +298,7 @@ public static class PlayerAccountFactory
     /// <summary>HP 系数（shiplogic.lua HP_COEFFICIENT），CurHp 等于此值时满血。</summary>
     public const long HpCoefficient = 10000000000;
 
-    /// <summary>创建新档案的默认账号（角色 + 含一只秘书舰的船坞 + 空仓库/时装）。</summary>
+    /// <summary>创建新档案的默认账号（角色 + 已锁定并配装的秘书舰 + 基础仓库/时装）。</summary>
     public static PlayerAccount CreateDefault(string profileId, int nowSeconds, string? displayName = null)
     {
         string characterName = string.IsNullOrWhiteSpace(displayName) ? profileId : displayName.Trim();
@@ -268,11 +317,17 @@ public static class PlayerAccountFactory
             MarryTime: 0,
             CurHp: HpCoefficient,
             Mood: 100,
-            MarryType: 0);
+            MarryType: 0,
+            EquipSlots: [1, 0, 2, 0, 0, 0],
+            Lock: true);
         var dock = new HeroDock([hero], BagSize: 200);
         var bag = new PlayerBag([], BagSize: 100);
         var fashion = new PlayerFashion([]);
-        var equip = new PlayerEquip([], EquipBagSize: 2000);
+        var equip = new PlayerEquip(
+        [
+            new EquipItem(1, DefaultHeroMainGunTemplateId, HeroId: hero.HeroId),
+            new EquipItem(2, DefaultHeroSecondaryGunTemplateId, HeroId: hero.HeroId),
+        ], EquipBagSize: 2000);
         var fleet = DefaultFleet();
         return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet,
             Building: DefaultBuilding(nowSeconds), ProfileDisplayName: characterName);

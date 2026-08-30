@@ -70,6 +70,8 @@ internal sealed class GameServices
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
+        DailyCopyRewardCatalog.Load(configDir);
+        TaskConfigCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
         ShipBreakLoader.Load(configDir);
@@ -204,7 +206,9 @@ internal sealed class GameServices
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
         PlayerAccount refreshed = ConstructionService.RefreshQueue(account, now);
-        if (!ReferenceEquals(refreshed, account))
+        bool constructionChanged = !ReferenceEquals(refreshed, account);
+        (refreshed, bool tasksChanged) = TaskService.Normalize(refreshed, checked((int)now));
+        if (constructionChanged || tasksChanged)
         {
             account = refreshed;
             await SaveAccountAsync(account, ct);
@@ -252,6 +256,10 @@ internal sealed class GameServices
                 Ret: new byte[] { 0x08, 0x02 },
                 Time: now)),
 
+            // 任务页面不会主动请求基础 TaskInfo；登录同步必须先初始化日常/周常/
+            // 主线/成长/成就/教学任务，否则首页红点与 TaskPage 都读到空表。
+            TaskService.BuildTaskInfoPush(account, now),
+
             // 船坞数据来自存档实体。秘书舰 HeroId 必须与 Character.SecretaryId 一致。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "hero.UpdateHeroBagData",
@@ -287,6 +295,15 @@ internal sealed class GameServices
                 Method: "copy.GetCopy",
                 Ret: ProtocolEncoder.EncodeMubarCopyInfo(),
                 Time: now)),
+
+            // 每日副本（CopyType=9）与其独立次数/通关状态。活动入口会立即读取
+            // DailyCopy 的 BaseInfo；缺失时驱逐大作战关卡详情无法进入。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "copy.GetCopy",
+                Ret: ProtocolEncoder.EncodeDailyCopyInfo(account.DailyCopy),
+                Time: now)),
+
+            DailyCopyService.BuildUpdatePush(account.DailyCopy, now),
 
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目，
             // 每个条目同时下发客户端配置中的全部动作 ID，使图鉴动作直接全部解锁。
@@ -359,6 +376,9 @@ internal sealed class GameServices
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is not null)
         {
+            PlayerAccount heroReady = RepairDuplicateHeroIds(account);
+            bool heroMigrated = !ReferenceEquals(heroReady, account);
+            account = heroReady;
             EnsureEquipIdFromAccount(account);
             account = EnsureHeroPSkills(account);
             account = EnsureAllFashion(account);
@@ -379,11 +399,14 @@ internal sealed class GameServices
             PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
             bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
             account = profileNameReady;
+            PlayerAccount bagReady = CleanupPollutedBagShips(account);
+            bool bagMigrated = !ReferenceEquals(bagReady, account);
+            account = bagReady;
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
-            if (affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
-                profileNameMigrated)
+            if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
+                profileNameMigrated || bagMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
@@ -396,6 +419,7 @@ internal sealed class GameServices
         created = EnsureOathShopCurrency(created);
         created = EnsureConstructionItems(created);
         created = EnsureBuildingMaterials(created);
+        EnsureEquipIdFromAccount(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -418,8 +442,14 @@ internal sealed class GameServices
             account = EnsureAffectionGifts(account);
             account = EnsureOathShopCurrency(account);
             account = EnsureConstructionItems(account);
-            return EnsureBuildingMaterials(account);
+            account = EnsureBuildingMaterials(account);
+            EnsureEquipIdFromAccount(account);
+            return account;
         }
+        PlayerAccount heroReady = RepairDuplicateHeroIds(account);
+        bool heroMigrated = !ReferenceEquals(heroReady, account);
+        account = heroReady;
+        EnsureEquipIdFromAccount(account);
         account = EnsureHeroPSkills(account);
         account = EnsureAllFashion(account);
         PlayerAccount normalized = NormalizeAffection(account);
@@ -443,23 +473,70 @@ internal sealed class GameServices
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
-        if (affectionMigrated || buildingMigrated || buildingMaterialsMigrated || profileNameMigrated || bagMigrated)
+        if (heroMigrated || affectionMigrated || buildingMigrated || buildingMaterialsMigrated || profileNameMigrated || bagMigrated)
             await _repo.SaveAccountAsync(account, ct);
         return account;
     }
 
-    /// <summary>迁移修复：清除误入仓库的舰娘模板。早期商店购买舰娘错误地走 AddBagItem
-    /// 写入背包，客户端 baglogic 按 config_table_index 解析模板时崩溃。舰娘模板
-    /// （config_ship_main）不属于背包，应移除以恢复存档。</summary>
-    private static PlayerAccount CleanupPollutedBagShips(PlayerAccount account)
+    /// <summary>
+    /// 迁移修复：早期 HeroAdvance 在素材位于目标之前时会用删除前的下标写回，造成目标
+    /// HeroId 一旧一新两条记录。保留突破/改造进度最高的一条，并维持该 HeroId 首次出现的
+    /// 列表位置；装备、编队和秘书舰均按 HeroId 引用，因此不需要重写关联数据。
+    /// </summary>
+    internal static PlayerAccount RepairDuplicateHeroIds(PlayerAccount account)
+    {
+        IReadOnlyList<Hero> heroes = account.Dock.Heroes;
+        if (heroes.GroupBy(hero => hero.HeroId).All(group => group.Count() == 1))
+            return account;
+
+        List<Hero> repaired = [];
+        HashSet<uint> emitted = [];
+        foreach (Hero hero in heroes)
+        {
+            if (!emitted.Add(hero.HeroId))
+                continue;
+
+            Hero survivor = heroes
+                .Where(candidate => candidate.HeroId == hero.HeroId)
+                .OrderByDescending(candidate => candidate.Advance)
+                .ThenByDescending(candidate => candidate.AdvLv)
+                .ThenByDescending(candidate => candidate.Level)
+                .ThenByDescending(candidate => candidate.Exp)
+                .ThenByDescending(candidate => candidate.UpdateTime)
+                .ThenByDescending(candidate => candidate.TemplateId)
+                .First();
+            repaired.Add(survivor);
+        }
+
+        return account with { Dock = account.Dock with { Heroes = repaired } };
+    }
+
+    /// <summary>迁移修复：把误入道具仓库的舰娘模板恢复成真实舰娘实例。早期商店购买及
+    /// 累计抽数舰船奖励曾错误地走 AddBagItem，客户端 baglogic 会按道具配置解析舰船模板而崩溃；
+    /// 单纯删除污染项又会吞掉玩家已领取的舰娘，因此按堆叠数量补发实例后再清除背包项。</summary>
+    private PlayerAccount CleanupPollutedBagShips(PlayerAccount account)
     {
         var bag = account.Bag;
         if (bag is null || bag.Items.Count == 0) return account;
-        List<BagItem> cleaned = bag.Items
-            .Where(item => ShipMainLoader.Get(item.TemplateId) is null)
+        List<BagItem> polluted = bag.Items
+            .Where(item => ShipMainLoader.Get(item.TemplateId) is not null)
             .ToList();
-        if (cleaned.Count == bag.Items.Count) return account;
-        return account with { Bag = bag with { Items = cleaned } };
+        if (polluted.Count == 0) return account;
+
+        PlayerAccount recovered = account with
+        {
+            Bag = bag with
+            {
+                Items = bag.Items
+                    .Where(item => ShipMainLoader.Get(item.TemplateId) is null)
+                    .ToList(),
+            },
+        };
+        int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        foreach (BagItem item in polluted)
+            for (int i = 0; i < Math.Max(0, item.Num); i++)
+                recovered = AddShip(recovered, NextHeroId(), item.TemplateId, now);
+        return recovered;
     }
 
     private string GetProfileDisplayName(string profileId) =>
@@ -493,6 +570,13 @@ internal sealed class GameServices
         return UserInfoCodec.Encode(new TUserInfo(c.Uid, c.Name, c.Level, c.Class));
     }
 
+    /// <summary>
+    /// TRetGetUsers.ArrUser 是 field 1 的 repeated TUserInfo。已有存档必须在这里返回，
+    /// 否则客户端会把账号误判成新玩家并再次调用 player.CreateUser。
+    /// </summary>
+    internal static byte[] EncodeGetUsers(PlayerAccount account) =>
+        new ProtocolPackage().Write(0x0A, EncodeCreateUser(account)).ToArray();
+
     internal static byte[] EncodeGetUserInfo(PlayerAccount account)
     {
         var c = account.Character;
@@ -509,7 +593,8 @@ internal sealed class GameServices
             BattlePassExp: c.BattlePassExp, BattlePassGold: c.BattlePassGold, PvePt: c.PvePt,
             GuildCoinII: c.GuildCoinII, UrEquipCoin: c.UrEquipCoin, ActivityBattlePassExp: c.ActivityBattlePassExp,
             GetHeroCount: c.GetHeroCount, AttackCount: c.AttackCount, MarriedNum: c.MarriedNum,
-            Head: c.Head, HeadFrame: c.HeadFrame, Message: c.Message));
+            Head: c.Head, HeadFrame: c.HeadFrame, Message: c.Message,
+            AchievePoint: TaskConfigCatalog.GetAchievePoint(account)));
     }
 
     internal static BathHeroInfo ToBathHeroInfo(BathHero h) => new(h.HeroId, h.Pos, h.IsAuto, h.StartTime, h.BathTime, h.BuffId, h.BuffTime, h.Power);
@@ -1158,14 +1243,15 @@ internal sealed class GameServices
         ];
     }
 
-    public async Task<IReadOnlyList<byte[]>> BuildRiseStarPushesAsync(string profileId, uint now, CancellationToken ct)
+    public async Task<IReadOnlyList<byte[]>> BuildRiseStarPushesAsync(
+        string profileId, uint now, CancellationToken ct, IReadOnlyList<uint>? removedEquipIds = null)
     {
         PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
         return
         [
             await BuildUpdateUserInfoPushAsync(profileId, now, ct),
             BuildBagPush(account, now),
-            BuildEquipPush(account, now),
+            BuildEquipPush(account, now, removedEquipIds),
         ];
     }
 }

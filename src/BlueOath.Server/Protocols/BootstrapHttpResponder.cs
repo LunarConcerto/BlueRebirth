@@ -67,12 +67,14 @@ internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints, Announce
                 noticeBoardJson = JsonSerializer.Serialize(nb);
             }
             return new(200, "OK", "application/json; charset=utf-8",
-                "{\"errornu\":0,\"errordesc\":\"\",\"networkCheck\":\"1\"," +
+                // 线上事件 1007 的固定信封是 errornu/errordesc/data。抓包已确认 errornu
+                // 为字符串；把平台字段直接摊在根对象会让 SDK 走 111111 未知错误分支。
+                "{\"errornu\":\"0\",\"errordesc\":\"\",\"data\":{\"networkCheck\":\"1\"," +
                 "\"uuid\":\"00000000-0000-4000-8000-000000000001\",\"pid\":" + _profileIdJson + "," +
                 "\"serverId\":\"jp\",\"pl\":\"google_windows\",\"os\":\"android\",\"gn\":\"jpshipgirl\"," +
                 "\"sensorInfo\":\"\",\"localInfo\":\"\",\"timeZoneId\":\"\"," +
                 "\"screenWidth\":\"1920\",\"screenHeight\":\"1080\",\"dangerWidth\":\"0\",\"strDeviceInfo\":\"\"," +
-                "\"noticeBoard\":" + noticeBoardJson + "}");
+                "\"noticeBoard\":" + noticeBoardJson + "}}");
         }
 
         if (requestLine.Contains("/login?", StringComparison.OrdinalIgnoreCase))

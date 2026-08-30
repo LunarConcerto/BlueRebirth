@@ -26,6 +26,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("normal treasure request and equipment reward use client protobuf layout", TreasureCodecTest),
     ("hero advance preserves neighbors and unbinds consumed equipment", HeroAdvanceStateTest),
     ("build ship response omits empty special rewards", BuildShipRewardCodecTest),
+    ("120-draw ship reward creates a hero instance and heals legacy bag pollution", BuildShipHundredRewardIntegrationTest),
     ("traditional construction config, protocol and queue match the client", ConstructionConfigAndCodecTest),
     ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
     ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
@@ -81,6 +82,8 @@ if (args.Contains("--hero-advance", StringComparer.OrdinalIgnoreCase))
     tests = [("hero advance preserves neighbors and unbinds consumed equipment", HeroAdvanceStateTest)];
 if (args.Contains("--buildship-codec", StringComparer.OrdinalIgnoreCase))
     tests = [("build ship response omits empty special rewards", BuildShipRewardCodecTest)];
+if (args.Contains("--buildship-reward", StringComparer.OrdinalIgnoreCase))
+    tests = [("120-draw ship reward creates a hero instance and heals legacy bag pollution", BuildShipHundredRewardIntegrationTest)];
 if (args.Contains("--tactic-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("tactic SetHerosTactic persists formation", TacticIntegrationTest)];
 if (args.Contains("--story-unlock", StringComparer.OrdinalIgnoreCase))
@@ -605,6 +608,108 @@ static Task BuildShipRewardCodecTest()
         new byte[] { 0x0A, 0x08, 0x08, 0x01, 0x10, 0x02, 0x18, 0x01, 0x20, 0x03, 0x1A, 0x00 }),
         "build ship response must omit empty SpReward while retaining aligned TransReward");
     return Task.CompletedTask;
+}
+
+static async Task BuildShipHundredRewardIntegrationTest()
+{
+    string repositoryRoot = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-buildship-reward-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "hundred-reward-player";
+    const string legacyProfileId = "legacy-polluted-bag-player";
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        ServerOptions options = ServerOptions.Parse([
+            "--data=" + dataRoot,
+            "--client-path=" + Path.Combine(repositoryRoot, "blueoath", "blueoath"),
+            "--profile-id=" + profileId
+        ]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var buildShip = new BuildShipService(services);
+
+        int poolId = 0, limitCount = 0, shipTemplateId = 0, rewardCount = 0;
+        foreach (var (id, config) in services.ExtractShips)
+        {
+            foreach (var entry in config.HundredReward ?? [])
+            {
+                if (entry.Count >= 4 && entry[0] == 120 && entry[1] == GameServices.GoodsTypeShip &&
+                    ShipHandbookLoader.GetShipName(checked((int)entry[2])) == "朝日")
+                {
+                    poolId = id;
+                    limitCount = checked((int)entry[0]);
+                    shipTemplateId = checked((int)entry[2]);
+                    rewardCount = checked((int)entry[3]);
+                    break;
+                }
+            }
+            if (poolId != 0) break;
+        }
+        Assert(poolId != 0 && shipTemplateId != 0,
+            "real client config has no 120-draw Asahi ship reward to exercise");
+
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, CancellationToken.None);
+        var originalHeroIds = account.Dock.Heroes.Select(hero => hero.HeroId).ToHashSet();
+        var buildState = account.BuildState ?? new PlayerBuildState(
+            new Dictionary<int, int>(),
+            new Dictionary<int, IReadOnlyList<int>>(),
+            new Dictionary<int, IReadOnlyList<int>>());
+        var drawCount = buildState.DrawCount.ToDictionary(pair => pair.Key, pair => pair.Value);
+        drawCount[poolId] = limitCount;
+        account = account with { BuildState = buildState with { DrawCount = drawCount } };
+        await services.SaveAccountAsync(account, CancellationToken.None);
+
+        var requestArgs = new List<byte>();
+        AppendTestVarint(requestArgs, 1 << 3);
+        AppendTestVarint(requestArgs, checked((ulong)poolId));
+        AppendTestVarint(requestArgs, 2 << 3);
+        AppendTestVarint(requestArgs, checked((ulong)limitCount));
+        byte[] response = await buildShip.BuildBuildShipRewardRetAsync(
+            new TRequest("buildship.BuildShipReward", requestArgs.ToArray()), profileId, CancellationToken.None);
+
+        PlayerAccount claimed = await services.GetOrCreateAccountAsync(profileId, CancellationToken.None);
+        Hero granted = claimed.Dock.Heroes.Single(hero => !originalHeroIds.Contains(hero.HeroId));
+        Assert(granted.TemplateId == shipTemplateId,
+            "120-draw reward created the wrong ship template");
+        Assert(claimed.Bag?.Items.Any(item => item.TemplateId == shipTemplateId) != true,
+            "ship reward polluted the item bag");
+        byte[] expectedReward = PlayerDataCodec.Encode(new CommonReward(
+            GameServices.GoodsTypeShip, shipTemplateId, rewardCount, checked((int)granted.HeroId)));
+        Assert(ContainsSequence(response, expectedReward),
+            "ship reward response omitted the created hero instance id");
+        Assert(claimed.BuildState?.UsedRewardInfo.GetValueOrDefault(poolId)?.Contains(limitCount) == true,
+            "120-draw reward claim state was not persisted");
+
+        byte[] repeated = await buildShip.BuildBuildShipRewardRetAsync(
+            new TRequest("buildship.BuildShipReward", requestArgs.ToArray()), profileId, CancellationToken.None);
+        Assert(repeated.Length == 0 &&
+               (await services.GetOrCreateAccountAsync(profileId, CancellationToken.None)).Dock.Heroes.Count == claimed.Dock.Heroes.Count,
+            "repeated reward claim was not idempotent");
+
+        PlayerAccount legacy = PlayerAccountFactory.CreateDefault(
+            legacyProfileId, checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds()), legacyProfileId);
+        int legacyHeroCount = legacy.Dock.Heroes.Count;
+        legacy = GameServices.AddBagItem(legacy, shipTemplateId, 1);
+        await repo.SaveAccountAsync(legacy, CancellationToken.None);
+        var migrationServices = new GameServices(repo, options, loggerFactory);
+        PlayerAccount healed = await migrationServices.GetOrCreateAccountAsync(legacyProfileId, CancellationToken.None);
+        Assert(healed.Bag?.Items.Any(item => item.TemplateId == shipTemplateId) != true,
+            "GetOrCreateAccountAsync did not remove a ship template from the legacy item bag");
+        Assert(healed.Dock.Heroes.Count == legacyHeroCount + 1 &&
+               healed.Dock.Heroes.Count(hero => hero.TemplateId == shipTemplateId) == 1,
+            "legacy bag cleanup did not restore the claimed ship as a real hero instance");
+        PlayerAccount persisted = await repo.LoadAccountAsync(legacyProfileId, CancellationToken.None)
+            ?? throw new InvalidDataException("legacy profile disappeared after bag migration");
+        Assert(persisted.Bag?.Items.Any(item => item.TemplateId == shipTemplateId) != true,
+            "legacy bag cleanup was not persisted");
+        Assert(persisted.Dock.Heroes.Count(hero => hero.TemplateId == shipTemplateId) == 1,
+            "restored legacy ship instance was not persisted");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
 }
 
 static Task ClientLoginWireTest()

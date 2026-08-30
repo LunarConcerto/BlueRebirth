@@ -63,6 +63,20 @@ internal static class BuildFormulaCatalog
                 if (shipInfos.TryGetValue(shipInfoId, out var info) && info.SfId != 0)
                     SfIdToTemplate[checked((int)info.SfId)] = templateId;
             }
+
+            // 改造图鉴条目不会成为独立建造目标，但客户端从图鉴详情直接打开评价页时，
+            // 会把当前 config_ship_handbook.id 作为 Htid 发送。它们的 sf_id 指向基础舰船，
+            // 因此需要保留一层查询别名，否则同一艘船从船坞进入能看到公式、从改造图鉴
+            // 进入却会得到空响应。
+            foreach (var (shipInfoId, _) in ShipHandbookLoader.All)
+            {
+                if (ShipInfoToTemplate.ContainsKey(shipInfoId) ||
+                    !shipInfos.TryGetValue(shipInfoId, out var info) || info.SfId == 0)
+                    continue;
+                int canonicalShipInfoId = checked((int)info.SfId);
+                if (ShipInfoToTemplate.TryGetValue(canonicalShipInfoId, out int templateId))
+                    ShipInfoToTemplate[shipInfoId] = templateId;
+            }
         }
         catch { }
         _loaded = true;
