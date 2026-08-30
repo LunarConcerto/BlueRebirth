@@ -49,7 +49,7 @@
 
 ### 方式一：WPF 图形化启动器（推荐）
 
-双击项目根目录的 `BlueOath.Launcher.lnk`，或运行：
+请执行以下命令：
 
 ```powershell
 dotnet run --project src\BlueOath.Launcher.Wpf\BlueOath.Launcher.Wpf.csproj
