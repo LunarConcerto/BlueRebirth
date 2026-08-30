@@ -811,6 +811,7 @@ internal static class ChapterCopyLoader
     private static readonly Dictionary<int, List<int>> _seaChapterCopies = new();
     private static readonly Dictionary<int, List<int>> _mubarChapterCopies = new();
     private static readonly Dictionary<int, List<int>> _dailyChapterCopies = new();
+    private static readonly Dictionary<int, List<int>> _dailyTreatyCopies = new();
     private static readonly Dictionary<int, int> _dailyChapterByCopy = new();
     private static readonly Dictionary<int, int> _dailyGroupByChapter = new();
     private static readonly Dictionary<int, int> _dailyRelationByChapter = new();
@@ -889,13 +890,16 @@ internal static class ChapterCopyLoader
                     if (doc.RootElement.TryGetProperty("treaty_copy", out var treatyCopies) &&
                         treatyCopies.ValueKind == JsonValueKind.Array)
                     {
+                        List<int> treatyIds = [];
                         foreach (var treatyCopy in treatyCopies.EnumerateArray())
                         {
                             int cid = treatyCopy.GetInt32();
                             if (cid <= 0) continue;
+                            treatyIds.Add(cid);
                             _copyTypeMap[cid] = 9;
                             _dailyChapterByCopy[cid] = id;
                         }
+                        if (treatyIds.Count > 0) _dailyTreatyCopies[id] = treatyIds;
                     }
                 }
             });
@@ -955,7 +959,11 @@ internal static class ChapterCopyLoader
     {
         var result = new List<int>();
         foreach (var chapterId in _dailyChapterCopies.Keys.OrderBy(x => x))
+        {
             result.AddRange(_dailyChapterCopies[chapterId]);
+            if (_dailyTreatyCopies.TryGetValue(chapterId, out var treatyCopies))
+                result.AddRange(treatyCopies);
+        }
         return result;
     }
 
@@ -976,6 +984,12 @@ internal static class ChapterCopyLoader
 
     public static List<int> GetDailyCopyIds(int chapterId)
         => _dailyChapterCopies.TryGetValue(chapterId, out var copies) ? copies : [];
+
+    public static List<int> GetDailyTreatyCopyIds(int chapterId)
+        => _dailyTreatyCopies.TryGetValue(chapterId, out var copies) ? copies : [];
+
+    public static bool IsDailyTreatyCopy(int copyId)
+        => _dailyTreatyCopies.Values.Any(copies => copies.Contains(copyId));
 
     public static int GetCopyType(int copyId)
         => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;

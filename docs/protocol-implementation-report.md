@@ -13,7 +13,7 @@
 | Shop/Equip/Bag/Fashion/Illustrate | 21 | 完整业务逻辑 + 部分占位 |
 | Building/Bathroom/Study/Strategy/Build | 48 | 全部占位 (C# 逻辑) |
 | Friend/Chat/Discuss | 21 | 全部占位 (多人社交) |
-| Task | 9 | 全部占位 (空响应) |
+| Task | 9 | 完整业务逻辑（任务同步/领奖/刷新/教学任务） |
 | Guild/Teaching/Multiplayer | 100 | 全部占位 (多人系统) |
 | Activity/Copy/Boss/Tower/Misc | 157 | 全部占位 (离线不适用) |
 | **总计** | **423** | |
@@ -89,6 +89,19 @@
 |------|------|
 | tactic.GetHerosTactic | 获取战术 |
 | tactic.SetHerosTactic | 设置战术 |
+
+### 任务
+| 协议 | 功能 |
+|------|------|
+| task.TaskInfo | 同步主线/日常/周常/成长/成就/教学任务 |
+| task.TaskReward | 领取单项任务奖励并持久化 |
+| task.TaskAllReward | 一键领取任务或成就奖励 |
+| task.TaskTrigger | 客户端任务事件触发确认 |
+| task.GetPtReward | 领取教学履历阶段奖励 |
+| task.GetTeachingTask | 获取教学日常与考核任务 |
+| task.TaskRewardByDaysActivity | 领取七日活动任务奖励 |
+| task.TaskSevenDayActivity | 领取限时七日任务奖励 |
+| task.TaskRewardByReturnActivity | 领取回归任务奖励 |
 
 ## Hero 模块 (22 协议)
 

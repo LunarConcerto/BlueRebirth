@@ -46,6 +46,7 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
         int battleTime = passArg.BattleTime;
         if (copyId == 0) return ProtocolEncoder.EncodePassBaseRet(0, 0, 0, 0);
 
+        using IDisposable accountLock = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         int passTime = battleTime > 0 ? battleTime : 60;

@@ -211,6 +211,24 @@ public sealed record PlayerBuilding(
     int FoodMax = 100,
     int ElectricMax = 100);
 
+/// <summary>单个任务的持久化状态。TaskType 对应客户端 constants.lua 的 TaskType。</summary>
+public sealed record PlayerTaskRecord(
+    int TaskType,
+    int TaskId,
+    int FinishTime,
+    int RewardTime = 0,
+    int Count = 0);
+
+/// <summary>
+/// 离线任务进度。日常/周常领奖记录分别按东八区自然日和自然周刷新；其余任务永久保留。
+/// TeachingPtRewardIds 记录已领取的教学履历阶段奖励。
+/// </summary>
+public sealed record PlayerTaskProgress(
+    IReadOnlyList<PlayerTaskRecord>? Records = null,
+    int DailyResetDay = 0,
+    int WeeklyResetWeek = 0,
+    IReadOnlyList<int>? TeachingPtRewardIds = null);
+
 /// <summary>
 /// 玩家账号聚合（角色 + 船坞 + 仓库 + 时装 + 关卡进度）。存档数据库中实际存在的实体根，
 /// 后续如需加入建造/浴室/建筑等玩家域数据，可在此扩展新的成员（保持向后兼容：
@@ -233,7 +251,8 @@ public sealed record PlayerAccount(
     string? ProfileDisplayName = null,
     PlayerIllustrate? Illustrate = null,
     PlayerBuildState? BuildState = null,
-    PlayerDailyCopyProgress? DailyCopy = null);
+    PlayerDailyCopyProgress? DailyCopy = null,
+    PlayerTaskProgress? Tasks = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。

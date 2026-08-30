@@ -29,7 +29,7 @@ public sealed record UserInfoFields(
     int BattlePassExp = 0, int BattlePassGold = 0, int PvePt = 0,
     int GuildCoinII = 0, int UrEquipCoin = 0, int ActivityBattlePassExp = 0,
     int GetHeroCount = 0, int AttackCount = 0, int MarriedNum = 0,
-    int Head = 1021051, int HeadFrame = 0, string Message = "");
+    int Head = 1021051, int HeadFrame = 0, string Message = "", int AchievePoint = 0);
 
 public static class TMessageCodec
 {
@@ -186,6 +186,7 @@ public static class TMessageCodec
         WriteVarintField(output, 28, unchecked((uint)0));            // BuySupplyNum
         WriteVarintField(output, 29, unchecked((uint)0));            // BuySupplyTime (isSameDay 算术，缺则 nil 崩)
         WriteVarintField(output, 30, unchecked((uint)v.Retire));     // Retire (CurrencyType.RETIRE)
+        WriteVarintField(output, 32, unchecked((uint)v.AchievePoint)); // AchievePoint（成就页汇总）
         WriteVarintField(output, 35, unchecked((uint)v.Bath));       // Bath (SPA 温泉币，CurrencyType.SPA)
         WriteVarintField(output, 37, unchecked((uint)v.Strategy));   // Strategy (CurrencyType.STRATEGY)
         WriteVarintField(output, 39, unchecked((uint)v.Medal));      // Medal (CurrencyType.MEDAL)

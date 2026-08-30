@@ -71,6 +71,7 @@ internal sealed class GameServices
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
         DailyCopyRewardCatalog.Load(configDir);
+        TaskConfigCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
         ShipBreakLoader.Load(configDir);
@@ -205,7 +206,9 @@ internal sealed class GameServices
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
         PlayerAccount refreshed = ConstructionService.RefreshQueue(account, now);
-        if (!ReferenceEquals(refreshed, account))
+        bool constructionChanged = !ReferenceEquals(refreshed, account);
+        (refreshed, bool tasksChanged) = TaskService.Normalize(refreshed, checked((int)now));
+        if (constructionChanged || tasksChanged)
         {
             account = refreshed;
             await SaveAccountAsync(account, ct);
@@ -252,6 +255,10 @@ internal sealed class GameServices
                 Method: "study.GetStudyInfo",
                 Ret: new byte[] { 0x08, 0x02 },
                 Time: now)),
+
+            // 任务页面不会主动请求基础 TaskInfo；登录同步必须先初始化日常/周常/
+            // 主线/成长/成就/教学任务，否则首页红点与 TaskPage 都读到空表。
+            TaskService.BuildTaskInfoPush(account, now),
 
             // 船坞数据来自存档实体。秘书舰 HeroId 必须与 Character.SecretaryId 一致。
             TMessageCodec.EncodeResponse(new TResponse(
@@ -576,7 +583,8 @@ internal sealed class GameServices
             BattlePassExp: c.BattlePassExp, BattlePassGold: c.BattlePassGold, PvePt: c.PvePt,
             GuildCoinII: c.GuildCoinII, UrEquipCoin: c.UrEquipCoin, ActivityBattlePassExp: c.ActivityBattlePassExp,
             GetHeroCount: c.GetHeroCount, AttackCount: c.AttackCount, MarriedNum: c.MarriedNum,
-            Head: c.Head, HeadFrame: c.HeadFrame, Message: c.Message));
+            Head: c.Head, HeadFrame: c.HeadFrame, Message: c.Message,
+            AchievePoint: TaskConfigCatalog.GetAchievePoint(account)));
     }
 
     internal static BathHeroInfo ToBathHeroInfo(BathHero h) => new(h.HeroId, h.Pos, h.IsAuto, h.StartTime, h.BathTime, h.BuffId, h.BuffTime, h.Power);

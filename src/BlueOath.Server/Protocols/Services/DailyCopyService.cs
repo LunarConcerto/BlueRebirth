@@ -12,6 +12,13 @@ internal sealed class DailyCopyService(GameServices services)
     internal async Task<PlayerAccount> GetRefreshedAccountAsync(
         string profileId, int now, CancellationToken ct)
     {
+        using IDisposable accountLock = await services.LockAccountAsync(profileId, ct);
+        return await GetRefreshedAccountLockedAsync(profileId, now, ct);
+    }
+
+    private async Task<PlayerAccount> GetRefreshedAccountLockedAsync(
+        string profileId, int now, CancellationToken ct)
+    {
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         (account, bool changed) = Normalize(account, now);
         if (changed) await services.SaveAccountAsync(account, ct);
@@ -21,7 +28,8 @@ internal sealed class DailyCopyService(GameServices services)
     internal async Task<PlayerAccount> SetSelectExAsync(
         string profileId, int chapterId, bool selectEx, int now, CancellationToken ct)
     {
-        PlayerAccount account = await GetRefreshedAccountAsync(profileId, now, ct);
+        using IDisposable accountLock = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await GetRefreshedAccountLockedAsync(profileId, now, ct);
         PlayerDailyCopyProgress state = account.DailyCopy!;
         List<DailyCopyChapterProgress> chapters = state.Chapters!.ToList();
         int index = chapters.FindIndex(x => x.ChapterId == chapterId);
@@ -47,14 +55,19 @@ internal sealed class DailyCopyService(GameServices services)
         if (chapterIndex < 0) return new(account, false, []);
 
         DailyCopyChapterProgress chapter = chapters[chapterIndex];
+        bool isTreaty = ChapterCopyLoader.IsDailyTreatyCopy(copyId);
         List<int> passed = (chapter.PassCopy ?? []).Distinct().ToList();
         bool firstPass = !passed.Contains(copyId);
         if (firstPass) passed.Add(copyId);
-        chapters[chapterIndex] = chapter with
+        int exStar = isTreaty ? Math.Clamp(grade, 0, 6) : chapter.ExStar;
+        DailyCopyChapterProgress updatedChapter = chapter with
         {
             ChallengeTimes = checked(chapter.ChallengeTimes + 1),
             PassCopy = passed,
+            SelectEx = isTreaty || chapter.SelectEx,
+            ExStar = isTreaty ? Math.Max(chapter.ExStar, exStar) : chapter.ExStar,
         };
+        chapters[chapterIndex] = updatedChapter;
 
         int groupId = ChapterCopyLoader.GetDailyGroupId(chapterId);
         List<DailyCopyGroupProgress> groups = state.Groups!.ToList();
@@ -69,31 +82,44 @@ internal sealed class DailyCopyService(GameServices services)
         {
             DailyCopy = state with { Chapters = chapters, Groups = groups },
         };
-        List<CommonReward> rewards = ResolveRewards(ref account, chapterId, copyId, firstPass);
+        List<CommonReward> rewards = ResolveRewards(
+            ref account, chapterId, copyId, firstPass, isTreaty, exStar);
         return new(account, firstPass, rewards);
     }
 
     private List<CommonReward> ResolveRewards(
-        ref PlayerAccount account, int chapterId, int copyId, bool firstPass)
+        ref PlayerAccount account, int chapterId, int copyId, bool firstPass,
+        bool isTreaty, int exStar)
     {
         int groupId = ChapterCopyLoader.GetDailyGroupId(chapterId);
         ConfigDailyGroup? group = DailyCopyRewardCatalog.GetGroup(groupId);
-        List<int> levels = ChapterCopyLoader.GetDailyCopyIds(chapterId);
-        int levelIndex = levels.IndexOf(copyId);
-        if (group is null || levelIndex < 0) return [];
+        if (group is null) return [];
 
         List<(int Type, int ConfigId, int Num)> pending = [];
-        if (firstPass && group.FirstDrop is { } firstDrops && levelIndex < firstDrops.Count &&
-            DailyCopyRewardCatalog.GetReward(checked((int)firstDrops[levelIndex])) is { Rewards: { } firstRewards })
+        if (isTreaty)
         {
-            foreach (List<long> entry in firstRewards)
-                if (entry.Count >= 3 && entry[2] > 0)
-                    pending.Add((checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
+            if (firstPass) AppendReward(group.TreatyPassDrop, pending);
+            if (group.TreatyBasicDropBase > 0)
+                DrawDropPool(checked((int)group.TreatyBasicDropBase), pending, [], 0);
+            if (group.TreatyBasicDropStar is { Count: > 0 } starDrops)
+            {
+                int starIndex = Math.Clamp(exStar, 0, starDrops.Count - 1);
+                DrawDropPool(checked((int)starDrops[starIndex]), pending, [], 0);
+            }
         }
+        else
+        {
+            List<int> levels = ChapterCopyLoader.GetDailyCopyIds(chapterId);
+            int levelIndex = levels.IndexOf(copyId);
+            if (levelIndex < 0) return [];
 
-        if (group.BasicDrop is { } basicDrops && levelIndex < basicDrops.Count)
-            foreach (long dropId in basicDrops[levelIndex])
-                DrawDropPool(checked((int)dropId), pending, [], 0);
+            if (firstPass && group.FirstDrop is { } firstDrops && levelIndex < firstDrops.Count)
+                AppendReward(firstDrops[levelIndex], pending);
+
+            if (group.BasicDrop is { } basicDrops && levelIndex < basicDrops.Count)
+                foreach (long dropId in basicDrops[levelIndex])
+                    DrawDropPool(checked((int)dropId), pending, [], 0);
+        }
 
         List<CommonReward> result = [];
         foreach ((int type, int configId, int num) in pending)
@@ -122,6 +148,17 @@ internal sealed class DailyCopyService(GameServices services)
             }
         }
         return result;
+    }
+
+    private static void AppendReward(
+        long rewardId, List<(int Type, int ConfigId, int Num)> pending)
+    {
+        if (rewardId <= 0 ||
+            DailyCopyRewardCatalog.GetReward(checked((int)rewardId)) is not { Rewards: { } rewards })
+            return;
+        foreach (List<long> entry in rewards)
+            if (entry.Count >= 3 && entry[2] > 0)
+                pending.Add((checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
     }
 
     private bool DrawDropPool(
