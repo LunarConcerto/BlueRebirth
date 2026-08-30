@@ -168,10 +168,15 @@ encoded[i] = decoded[i] XOR 0x55
 
 脚本底层调用 `BlueOath.Tools` 的 `--config-excel` 子命令，把加密的 `config_*.db` 导出为可编辑的
 `.xlsx`，也能把编辑后的 Excel 反导回配置数据库。每个表一个 `.xlsx` 文件（`config_<表>.xlsx`），
-内含两个工作表：
+JSON 已展开为表头列，内含三个工作表：
 
-- `data`：业务行，列为 `id` / `indexid` / `json`（`json` 为已解密的明文 JSON，直接编辑即可）。
+- `data`：业务行。前两列为数据库键 `_id` / `_indexid`，其余每列对应一个 JSON 字段（列名即原字段名）。
+  整数/浮点存为数字单元格、字符串存为文本（空字符串写作 `""`）、布尔存 `true`/`false`、
+  数组/嵌套结构存 JSON 文本（如 `[1,2,3]`、`[[1,2],[3]]`）、字段缺失为空单元格。
+- `_schema`：字段类型说明（`header` / `field` / `type`），导入时据此把单元格还原为正确的 JSON 类型。
 - `_meta`：元数据行（`id = nill` 的整表校验哈希，`jsonbytes_base64` 为已解密字节，一般无需改动）。
+
+> 旧版单列 `json` 格式（`id`/`indexid`/`json` 三列）导出的 Excel 仍可导入。
 
 导出：
 
