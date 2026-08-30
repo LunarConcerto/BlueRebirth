@@ -379,11 +379,14 @@ internal sealed class GameServices
             PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
             bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
             account = profileNameReady;
+            PlayerAccount bagReady = CleanupPollutedBagShips(account);
+            bool bagMigrated = !ReferenceEquals(bagReady, account);
+            account = bagReady;
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
             if (affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
-                profileNameMigrated)
+                profileNameMigrated || bagMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
@@ -420,6 +423,7 @@ internal sealed class GameServices
             account = EnsureConstructionItems(account);
             return EnsureBuildingMaterials(account);
         }
+        EnsureEquipIdFromAccount(account);
         account = EnsureHeroPSkills(account);
         account = EnsureAllFashion(account);
         PlayerAccount normalized = NormalizeAffection(account);
@@ -448,18 +452,32 @@ internal sealed class GameServices
         return account;
     }
 
-    /// <summary>迁移修复：清除误入仓库的舰娘模板。早期商店购买舰娘错误地走 AddBagItem
-    /// 写入背包，客户端 baglogic 按 config_table_index 解析模板时崩溃。舰娘模板
-    /// （config_ship_main）不属于背包，应移除以恢复存档。</summary>
-    private static PlayerAccount CleanupPollutedBagShips(PlayerAccount account)
+    /// <summary>迁移修复：把误入道具仓库的舰娘模板恢复成真实舰娘实例。早期商店购买及
+    /// 累计抽数舰船奖励曾错误地走 AddBagItem，客户端 baglogic 会按道具配置解析舰船模板而崩溃；
+    /// 单纯删除污染项又会吞掉玩家已领取的舰娘，因此按堆叠数量补发实例后再清除背包项。</summary>
+    private PlayerAccount CleanupPollutedBagShips(PlayerAccount account)
     {
         var bag = account.Bag;
         if (bag is null || bag.Items.Count == 0) return account;
-        List<BagItem> cleaned = bag.Items
-            .Where(item => ShipMainLoader.Get(item.TemplateId) is null)
+        List<BagItem> polluted = bag.Items
+            .Where(item => ShipMainLoader.Get(item.TemplateId) is not null)
             .ToList();
-        if (cleaned.Count == bag.Items.Count) return account;
-        return account with { Bag = bag with { Items = cleaned } };
+        if (polluted.Count == 0) return account;
+
+        PlayerAccount recovered = account with
+        {
+            Bag = bag with
+            {
+                Items = bag.Items
+                    .Where(item => ShipMainLoader.Get(item.TemplateId) is null)
+                    .ToList(),
+            },
+        };
+        int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        foreach (BagItem item in polluted)
+            for (int i = 0; i < Math.Max(0, item.Num); i++)
+                recovered = AddShip(recovered, NextHeroId(), item.TemplateId, now);
+        return recovered;
     }
 
     private string GetProfileDisplayName(string profileId) =>

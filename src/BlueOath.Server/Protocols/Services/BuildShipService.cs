@@ -188,6 +188,7 @@ internal sealed class BuildShipService(GameServices services)
         // 发放掉落表内全部物品（与抽卡一致，按类型处理 SHIP/EQUIP/CURRENCY/ITEM）。
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         List<CommonReward> rewards = [];
+        services.LastBuildHeroIds.Clear();
         foreach (var entry in FlattenDropPool((int)dropId))
         {
             (account, CommonReward reward) = GrantDropReward(account, entry, now);
@@ -236,9 +237,12 @@ internal sealed class BuildShipService(GameServices services)
         if (usedReward.TryGetValue(arg.Id, out var claimedList) && claimedList.Contains(arg.Num))
             return [];
 
+        int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         int num = count > 0 ? (int)count : 1;
-        account = GrantReward(account, (int)itemType, (int)itemId, num);
-        List<CommonReward> rewards = [new CommonReward((int)itemType, (int)itemId, num)];
+        services.LastBuildHeroIds.Clear();
+        (account, CommonReward reward) = GrantReward(
+            account, (int)itemType, (int)itemId, num, now);
+        List<CommonReward> rewards = [reward];
 
         if (!usedReward.ContainsKey(arg.Id)) usedReward[arg.Id] = [];
         usedReward[arg.Id].Add(arg.Num);
@@ -271,12 +275,28 @@ internal sealed class BuildShipService(GameServices services)
             new CommonReward(entry.GoodsType, entry.ConfigId, entry.MinNum));
     }
 
-    /// <summary>按 GoodsType 发放累计奖励：CURRENCY 走 AddCurrency，其余走 AddBagItem。</summary>
-    private PlayerAccount GrantReward(PlayerAccount account, int goodsType, int configId, int num)
+    /// <summary>按 GoodsType 发放累计奖励。舰船和装备必须创建实例，并把实例 id
+    /// 写入 TCommonReward.Id；否则客户端会把模板当背包道具解析，领奖演出和船坞都会损坏。</summary>
+    private (PlayerAccount Account, CommonReward Reward) GrantReward(
+        PlayerAccount account, int goodsType, int configId, int num, int now)
     {
+        if (goodsType == GameServices.GoodsTypeShip)
+        {
+            uint heroId = services.NextHeroId();
+            account = services.AddShip(account, heroId, configId, now);
+            services.LastBuildHeroIds.Add(heroId);
+            return (account, new CommonReward(goodsType, configId, num, (int)heroId));
+        }
+        if (goodsType == GameServices.GoodsTypeEquip)
+        {
+            (account, uint equipId) = AddEquip(account, configId, now);
+            return (account, new CommonReward(goodsType, configId, num, (int)equipId));
+        }
         if (goodsType == GameServices.GoodsTypeCurrency)
-            return GameServices.AddCurrency(account, configId, num);
-        return GameServices.AddBagItem(account, configId, num);
+            return (GameServices.AddCurrency(account, configId, num),
+                new CommonReward(goodsType, configId, num));
+        return (GameServices.AddBagItem(account, configId, num),
+            new CommonReward(goodsType, configId, num));
     }
 
     /// <summary>递归展开 config_drop_item 掉落池，将 GoodsType.DROP 嵌套条目展开为最终物品列表。</summary>
