@@ -40,7 +40,7 @@ internal static class TaskProtocolCodec
                 foreach (TaskDefinition definition in eventGroup)
                 {
                     recordMap.TryGetValue((definition.TaskType, definition.Id), out PlayerTaskRecord? record);
-                    eventInfo.Write(0x1A, EncodeTask(definition, record, now));
+                    eventInfo.Write(0x1A, EncodeTask(definition, record));
                 }
                 output.Write(tag, eventInfo.ToArray());
             }
@@ -87,7 +87,7 @@ internal static class TaskProtocolCodec
                 foreach (TaskDefinition definition in eventGroup)
                 {
                     recordMap.TryGetValue((definition.TaskType, definition.Id), out PlayerTaskRecord? record);
-                    eventInfo.Write(0x1A, EncodeTask(definition, record, now));
+                    eventInfo.Write(0x1A, EncodeTask(definition, record));
                 }
                 output.Write(tag, eventInfo.ToArray());
             }
@@ -143,13 +143,13 @@ internal static class TaskProtocolCodec
         return 0;
     }
 
-    private static byte[] EncodeTask(TaskDefinition definition, PlayerTaskRecord? record, int now)
+    internal static byte[] EncodeTask(TaskDefinition definition, PlayerTaskRecord? record)
     {
         ProtocolPackage task = new();
         task.Write(0x08, unchecked((ulong)definition.Id));
         task.Write(0x10, unchecked((ulong)(record?.RewardTime ?? 0)));
-        task.Write(0x18, unchecked((ulong)(record?.FinishTime ?? now)));
-        task.Write(0x20, unchecked((ulong)(record?.Count ?? definition.Goal)));
+        task.Write(0x18, unchecked((ulong)(record?.FinishTime ?? 0)));
+        task.Write(0x20, unchecked((ulong)Math.Max(0, record?.Count ?? 0)));
         task.Write(0x38, 0UL); // StartTime
         task.Write(0x40, 0UL); // FinishNum
         return task.ToArray();

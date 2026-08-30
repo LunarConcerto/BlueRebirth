@@ -782,7 +782,8 @@ void DispatchLoginEvent() {
 
 bool closeWebViewRequested = false;
 ULONGLONG closeWebViewAt = 0;
-bool closeScheduledOnce = false;
+int closeWebViewAttemptCount = 0;
+constexpr int MaxLoginWebViewCloseAttempts = 3;
 bool loginWebViewSuppressionEnabled = true;
 
 void HideCefWebView() {
@@ -954,15 +955,17 @@ void __stdcall HookSdkCallback(int eventId, const char* payload) {
     if (originalSdkCallback) originalSdkCallback(eventId, payload);
     // Event 29 (kWebViewResUrlParms) is the SDK's WebView lifecycle. The first "open" is the
     // announcement/supernotice WebView; dispatch a fabricated login result (event 2) then and
-    // schedule a single close so the blank CEF window does not stay on top. The close is
-    // scheduled only once to avoid the SDK re-opening the WebView in a loop.
+    // schedule a bounded number of closes so a follow-up SDK WebView cannot leave the
+    // client stuck at the title screen. The bound still prevents an SDK reopen loop.
     if (loginWebViewSuppressionEnabled && eventId == 29 && payload &&
         strstr(payload, "open") != nullptr) {
         DispatchLoginEvent();
-        if (!closeScheduledOnce) {
-            closeScheduledOnce = true;
+        if (!closeWebViewRequested && closeWebViewAttemptCount < MaxLoginWebViewCloseAttempts) {
+            ++closeWebViewAttemptCount;
             closeWebViewRequested = true;
             closeWebViewAt = GetTickCount64() + 500;
+            Log("scheduled login WebView close attempt=" +
+                std::to_string(closeWebViewAttemptCount));
         }
     }
 }

@@ -31,8 +31,15 @@ internal sealed class TaskService(GameServices services)
             return TaskRewardMutation.Fail(account, "Task is not available");
 
         List<PlayerTaskRecord> records = (account.Tasks?.Records ?? []).ToList();
-        if (records.Any(x => x.TaskType == taskType && x.TaskId == taskId && x.RewardTime > 0))
+        PlayerTaskRecord? record = records
+            .Where(x => x.TaskType == taskType && x.TaskId == taskId)
+            .OrderByDescending(x => x.RewardTime)
+            .ThenByDescending(x => x.Count)
+            .FirstOrDefault();
+        if (record?.RewardTime > 0)
             return TaskRewardMutation.Fail(account, "Task reward was already claimed");
+        if (!IsCompleted(record, definition))
+            return TaskRewardMutation.Fail(account, "Task is not complete");
 
         List<CommonReward> granted = [];
         foreach (CommonReward configured in TaskConfigCatalog.GetRewards(definition))
@@ -62,8 +69,18 @@ internal sealed class TaskService(GameServices services)
             .Where(x => x.RewardTime > 0)
             .Select(x => (x.TaskType, x.TaskId))
             .ToHashSet();
+        Dictionary<(int Type, int Id), PlayerTaskRecord> progress = (account.Tasks?.Records ?? [])
+            .GroupBy(x => (x.TaskType, x.TaskId))
+            .ToDictionary(
+                x => x.Key,
+                x => x.OrderByDescending(y => y.RewardTime)
+                    .ThenByDescending(y => y.Count)
+                    .First());
         List<TaskDefinition> definitions = TaskConfigCatalog.GetSnapshotDefinitions(account)
-            .Where(x => allowedTypes.Contains(x.TaskType) && !claimed.Contains((x.TaskType, x.Id)))
+            .Where(x => allowedTypes.Contains(x.TaskType) &&
+                        !claimed.Contains((x.TaskType, x.Id)) &&
+                        progress.TryGetValue((x.TaskType, x.Id), out PlayerTaskRecord? record) &&
+                        IsCompleted(record, x))
             .ToList();
 
         List<PlayerTaskRecord> records = (account.Tasks?.Records ?? []).ToList();
@@ -172,6 +189,9 @@ internal sealed class TaskService(GameServices services)
         return TaskConfigCatalog.GetSnapshotDefinitions(account)
             .Any(x => x.TaskType == definition.TaskType && x.Id == definition.Id);
     }
+
+    internal static bool IsCompleted(PlayerTaskRecord? record, TaskDefinition definition) =>
+        record is not null && (record.FinishTime > 0 || record.Count >= definition.Goal);
 
     private PlayerAccount Grant(
         PlayerAccount account, CommonReward configured, int now, List<CommonReward> granted)
