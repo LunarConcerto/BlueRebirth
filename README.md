@@ -20,8 +20,8 @@
 
 ## 特性
 
-- ✅ **本地离线服务端** — `BlueOath.Server`：HTTP 引导 + 游戏登录（TCP 与 KCP/UDP）双端点，SQLite 存档，仅监听 `127.0.0.1`
-- ✅ **真实传输协议还原** — 11 字节应用层头 + protobuf 信封；KCP over UDP（`KcpCodec` + ARQ 可靠性）
+- ✅ **本地离线服务端** — `BlueOath.Server`：HTTP 引导 + 游戏登录（TCP 与 UDP）双端点，SQLite 存档，仅监听 `127.0.0.1`
+- ✅ **真实传输协议还原** — 11 字节应用层头 + protobuf 信封；TCP over UDP（`KcpCodec` + ARQ 可靠性）
 - ✅ **客户端注入与重定向** — x86 注入 DLL（xinput 劫持）：SDK 登录绕过、DNS/connect/TLS 重定向、UnityTLS 证书信任补丁、引导系统跳过
 - ✅ **配置数据库双向转换** — 解密 `config_*.db`（XOR 0x55）⇄ Excel ⇄ C# 强类型类，一键脚本导出/反导
 - ✅ **协议/类型/配置知识库** — `BlueOath.Tools` 只读分析生成 `docs/*-catalog`，含 `.proto` 草案与 wire 证据
