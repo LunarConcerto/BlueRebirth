@@ -810,6 +810,11 @@ internal static class ChapterCopyLoader
     private static readonly List<ChapterMemory> _allChapterMemories = [];
     private static readonly Dictionary<int, List<int>> _seaChapterCopies = new();
     private static readonly Dictionary<int, List<int>> _mubarChapterCopies = new();
+    private static readonly Dictionary<int, List<int>> _dailyChapterCopies = new();
+    private static readonly Dictionary<int, List<int>> _dailyTreatyCopies = new();
+    private static readonly Dictionary<int, int> _dailyChapterByCopy = new();
+    private static readonly Dictionary<int, int> _dailyGroupByChapter = new();
+    private static readonly Dictionary<int, int> _dailyRelationByChapter = new();
     private static int _seaFirstChapterId = 0;
     private static readonly Dictionary<int, int> _copyTypeMap = new();
     private static int _seaFirstCopyId = 0;
@@ -864,11 +869,45 @@ internal static class ChapterCopyLoader
                     _mubarChapterCopies[id] = copies;
                     foreach (var cid in copies) _copyTypeMap[cid] = 33;
                 }
+                else if (ct == 9)
+                {
+                    // 每日副本（驱逐大作战等）。客户端以 relation_chapter_id 作为
+                    // config_daily_chapter id，以实际 config_chapter id 保存 PassCopy。
+                    _dailyChapterCopies[id] = copies;
+                    int groupId = doc.RootElement.TryGetProperty("dailygroup_id", out var dailyGroup)
+                        ? dailyGroup.GetInt32()
+                        : 0;
+                    int relationId = doc.RootElement.TryGetProperty("relation_chapter_id", out var relation)
+                        ? relation.GetInt32()
+                        : 0;
+                    if (groupId > 0) _dailyGroupByChapter[id] = groupId;
+                    if (relationId > 0) _dailyRelationByChapter[id] = relationId;
+                    foreach (var cid in copies)
+                    {
+                        _copyTypeMap[cid] = 9;
+                        _dailyChapterByCopy[cid] = id;
+                    }
+                    if (doc.RootElement.TryGetProperty("treaty_copy", out var treatyCopies) &&
+                        treatyCopies.ValueKind == JsonValueKind.Array)
+                    {
+                        List<int> treatyIds = [];
+                        foreach (var treatyCopy in treatyCopies.EnumerateArray())
+                        {
+                            int cid = treatyCopy.GetInt32();
+                            if (cid <= 0) continue;
+                            treatyIds.Add(cid);
+                            _copyTypeMap[cid] = 9;
+                            _dailyChapterByCopy[cid] = id;
+                        }
+                        if (treatyIds.Count > 0) _dailyTreatyCopies[id] = treatyIds;
+                    }
+                }
             });
             _allChapterMemories.Sort(static (left, right) => left.ChapterId.CompareTo(right.ChapterId));
             Console.Error.WriteLine(
                 $"[ChapterCopy] loaded {_chapterCopies.Count} story chapters, " +
-                $"{_allChapterMemories.Count} archived activity chapters and {_seaChapterCopies.Count} sea chapters");
+                $"{_allChapterMemories.Count} archived activity chapters, {_seaChapterCopies.Count} sea chapters " +
+                $"and {_dailyChapterCopies.Count} daily chapters");
         }
         catch { }
         _loaded = true;
@@ -916,8 +955,66 @@ internal static class ChapterCopyLoader
         return levels.Count > 0 ? levels[^1] : 0;
     }
 
+    public static List<int> GetDailyLevels()
+    {
+        var result = new List<int>();
+        foreach (var chapterId in _dailyChapterCopies.Keys.OrderBy(x => x))
+        {
+            result.AddRange(_dailyChapterCopies[chapterId]);
+            if (_dailyTreatyCopies.TryGetValue(chapterId, out var treatyCopies))
+                result.AddRange(treatyCopies);
+        }
+        return result;
+    }
+
+    public static List<int> GetDailyChapterIds()
+        => [.. _dailyChapterCopies.Keys.OrderBy(x => x)];
+
+    public static List<int> GetDailyGroupIds()
+        => [.. _dailyGroupByChapter.Values.Distinct().OrderBy(x => x)];
+
+    public static int GetDailyChapterId(int copyId)
+        => _dailyChapterByCopy.TryGetValue(copyId, out var chapterId) ? chapterId : 0;
+
+    public static int GetDailyGroupId(int chapterId)
+        => _dailyGroupByChapter.TryGetValue(chapterId, out var groupId) ? groupId : 0;
+
+    public static int GetDailyRelationId(int chapterId)
+        => _dailyRelationByChapter.TryGetValue(chapterId, out var relationId) ? relationId : 0;
+
+    public static List<int> GetDailyCopyIds(int chapterId)
+        => _dailyChapterCopies.TryGetValue(chapterId, out var copies) ? copies : [];
+
+    public static List<int> GetDailyTreatyCopyIds(int chapterId)
+        => _dailyTreatyCopies.TryGetValue(chapterId, out var copies) ? copies : [];
+
+    public static bool IsDailyTreatyCopy(int copyId)
+        => _dailyTreatyCopies.Values.Any(copies => copies.Contains(copyId));
+
     public static int GetCopyType(int copyId)
         => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;
+}
+
+/// <summary>每日副本的组掉落与首通奖励配置。</summary>
+internal static class DailyCopyRewardCatalog
+{
+    private static Dictionary<int, ConfigDailyGroup> _groups = [];
+    private static Dictionary<int, ConfigRewards> _rewards = [];
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        _groups = ConfigDbLoader.LoadAll<ConfigDailyGroup>(configDir, "config_daily_group.db");
+        _rewards = ConfigDbLoader.LoadAll<ConfigRewards>(configDir, "config_rewards.db");
+        _loaded = true;
+    }
+
+    public static ConfigDailyGroup? GetGroup(int groupId)
+        => _groups.GetValueOrDefault(groupId);
+
+    public static ConfigRewards? GetReward(int rewardId)
+        => _rewards.GetValueOrDefault(rewardId);
 }
 
 /// <summary>从个人剧情配置生成图鉴协议所需的完整 THeroMemory 列表。</summary>

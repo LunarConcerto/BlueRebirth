@@ -54,7 +54,7 @@ internal sealed class ConstructionService(GameServices services)
         if (templateId <= 0 || BuildFormulaCatalog.GetFormula(templateId) is not { } formula)
             return PlayerDataCodec.Encode(new DiscussRet());
         string shipName = ShipHandbookLoader.GetShipName(templateId);
-        string msg = $"固定建造配方\n金币：{formula.Gold} 钢材：{formula.Steel} 铝材：{formula.Aluminium}";
+        string msg = FormatFormulaMessage(formula.Gold, formula.Steel, formula.Aluminium);
         Console.WriteLine(msg);
         var comments = new List<DiscussMsgInfo>
         {
@@ -62,6 +62,12 @@ internal sealed class ConstructionService(GameServices services)
         };
         return PlayerDataCodec.Encode(new DiscussRet(MsgInfo: comments));
     }
+
+    /// <summary>
+    /// 评价卡片的正文只有两行且不会自动扩宽；资源名使用单字缩写，确保三个三位数都能显示。
+    /// </summary>
+    internal static string FormatFormulaMessage(int gold, int steel, int aluminium) =>
+        $"固定建造配方\n金{gold} 钢{steel} 铝{aluminium}";
 
     internal async Task<MutationResult> StartAsync(
         TRequest request, string profileId, int now, CancellationToken ct)

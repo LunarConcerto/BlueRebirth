@@ -18,11 +18,5 @@
             "endtime": 2000000000
         }
     },
-    "innerBrowse": [
-        {
-            "id": "browse_001",
-            "begin_time": 1700000000,
-            "end_time": 2000000000
-        }
-    ]
+    "innerBrowse": []
 }

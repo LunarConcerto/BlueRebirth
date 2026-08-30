@@ -12,7 +12,7 @@ internal sealed class PlayerModule : IGameModule
         var ret = request.Method switch
         {
             "player.Login" => GameLoginCodec.Encode(new TRetLogin("ok", "1")),
-            "player.GetUserList" => [],
+            "player.GetUserList" => GameServices.EncodeGetUsers(await ctx.GetAccountAsync()),
             "player.CreateUser" => GameServices.EncodeCreateUser(await ctx.GetAccountAsync()),
             _ => []
         };
