@@ -100,7 +100,7 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock Text="某游戏重生版"
+                    <TextBlock Text="BlueRebirth"
                                Style="{StaticResource TitleTextStyle}"
                                FontSize="48"
                                HorizontalAlignment="Center"
