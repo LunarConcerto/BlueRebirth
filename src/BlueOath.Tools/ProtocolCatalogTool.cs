@@ -430,7 +430,7 @@ static partial class ProtocolCatalogTool
     private static string BuildChineseReport(ProtocolCatalog catalog)
     {
         var b = new StringBuilder();
-        b.AppendLine("# 苍蓝誓约协议与事件目录");
+        b.AppendLine("# 某游戏协议与事件目录");
         b.AppendLine();
         b.AppendLine($"> 由只读分析器生成，目录版本 `{catalog.SchemaVersion}`。生成时间 `{catalog.GeneratedUtc:O}`。");
         b.AppendLine();

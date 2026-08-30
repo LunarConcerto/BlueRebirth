@@ -1,4 +1,4 @@
-# 苍蓝誓约本地服（BlueOath.Server）代码规范
+# 某游戏本地服（BlueOath.Server）代码规范
 
 > 适用范围：`src/BlueOath.Server` 项目（含 `Hosting` / `Listeners` / `Sessions` / `Protocols` / `Infrastructure` 各层）。
 > 目标：让本地服后续的改动保持风格一致、职责清晰、可测试。本规范为**现状约定**——现有代码已按此编写，新增代码请遵守。

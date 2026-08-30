@@ -1,6 +1,6 @@
 # 自律/自动战斗（AutoBattle）完整机制调查记录
 
-> 调查对象：blueoath（苍蓝誓约，il2cpp v24 / Unity 2019 系，Windows x86）
+> 调查对象：blueoath（某游戏，il2cpp v24 / Unity 2019 系，Windows x86）
 > GameAssembly RVA = 地址 - 0x10000000；dump `il2cppdump/dump.cs` TypeDefIndex 索引
 > 状态：资料收集完成（2026-08-26）。海域索敌决斗 `auto  1 False` 日志已被正确定位与解释。
 
