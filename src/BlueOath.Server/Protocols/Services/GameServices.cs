@@ -419,6 +419,7 @@ internal sealed class GameServices
         created = EnsureOathShopCurrency(created);
         created = EnsureConstructionItems(created);
         created = EnsureBuildingMaterials(created);
+        EnsureEquipIdFromAccount(created);
         _accountCache[profileId] = created;
         await _repo.SaveAccountAsync(created, ct);
         return created;
@@ -441,7 +442,9 @@ internal sealed class GameServices
             account = EnsureAffectionGifts(account);
             account = EnsureOathShopCurrency(account);
             account = EnsureConstructionItems(account);
-            return EnsureBuildingMaterials(account);
+            account = EnsureBuildingMaterials(account);
+            EnsureEquipIdFromAccount(account);
+            return account;
         }
         PlayerAccount heroReady = RepairDuplicateHeroIds(account);
         bool heroMigrated = !ReferenceEquals(heroReady, account);
@@ -566,6 +569,13 @@ internal sealed class GameServices
         var c = account.Character;
         return UserInfoCodec.Encode(new TUserInfo(c.Uid, c.Name, c.Level, c.Class));
     }
+
+    /// <summary>
+    /// TRetGetUsers.ArrUser 是 field 1 的 repeated TUserInfo。已有存档必须在这里返回，
+    /// 否则客户端会把账号误判成新玩家并再次调用 player.CreateUser。
+    /// </summary>
+    internal static byte[] EncodeGetUsers(PlayerAccount account) =>
+        new ProtocolPackage().Write(0x0A, EncodeCreateUser(account)).ToArray();
 
     internal static byte[] EncodeGetUserInfo(PlayerAccount account)
     {

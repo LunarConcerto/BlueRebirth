@@ -280,6 +280,12 @@ public static class PlayerAccountFactory
     /// <summary>秘书舰默认时装（limit_type=0 -> ship_show "u_cl_oakland"）。</summary>
     public const int DefaultHeroFashioning = 1021051;
 
+    /// <summary>奥克兰 config_ship_info[1021051] 的第一槽默认主炮。</summary>
+    public const int DefaultHeroMainGunTemplateId = 30091;
+
+    /// <summary>奥克兰 config_ship_info[1021051] 的第三槽默认副炮。</summary>
+    public const int DefaultHeroSecondaryGunTemplateId = 30221;
+
     /// <summary>GM 默认金币（足量，避免时装等高金币商品置灰）。</summary>
     public const int DefaultGold = 99999999;
 
@@ -292,7 +298,7 @@ public static class PlayerAccountFactory
     /// <summary>HP 系数（shiplogic.lua HP_COEFFICIENT），CurHp 等于此值时满血。</summary>
     public const long HpCoefficient = 10000000000;
 
-    /// <summary>创建新档案的默认账号（角色 + 含一只秘书舰的船坞 + 空仓库/时装）。</summary>
+    /// <summary>创建新档案的默认账号（角色 + 已锁定并配装的秘书舰 + 基础仓库/时装）。</summary>
     public static PlayerAccount CreateDefault(string profileId, int nowSeconds, string? displayName = null)
     {
         string characterName = string.IsNullOrWhiteSpace(displayName) ? profileId : displayName.Trim();
@@ -311,11 +317,17 @@ public static class PlayerAccountFactory
             MarryTime: 0,
             CurHp: HpCoefficient,
             Mood: 100,
-            MarryType: 0);
+            MarryType: 0,
+            EquipSlots: [1, 0, 2, 0, 0, 0],
+            Lock: true);
         var dock = new HeroDock([hero], BagSize: 200);
         var bag = new PlayerBag([], BagSize: 100);
         var fashion = new PlayerFashion([]);
-        var equip = new PlayerEquip([], EquipBagSize: 2000);
+        var equip = new PlayerEquip(
+        [
+            new EquipItem(1, DefaultHeroMainGunTemplateId, HeroId: hero.HeroId),
+            new EquipItem(2, DefaultHeroSecondaryGunTemplateId, HeroId: hero.HeroId),
+        ], EquipBagSize: 2000);
         var fleet = DefaultFleet();
         return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet,
             Building: DefaultBuilding(nowSeconds), ProfileDisplayName: characterName);

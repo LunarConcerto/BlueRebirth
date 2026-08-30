@@ -742,8 +742,8 @@ void TryApplyNewSdkReportHooks() {
 bool simulationModeSet = false;
 
 bool loginFallbackStarted = false;
-const ULONGLONG loginFallbackStart = GetTickCount64() + 30000;
-const ULONGLONG loginFallbackDelay = 30000;
+bool loginBootstrapComplete = false;
+const ULONGLONG loginFallbackStart = GetTickCount64() + 2000;
 
 bool IsGameNetworkConnected() {
     auto ga = GetModuleHandleW(L"GameAssembly.dll");
@@ -761,8 +761,9 @@ bool IsGameNetworkConnected() {
 
 void DispatchLoginEvent() {
     static ULONGLONG lastDispatch = 0;
+    if (loginBootstrapComplete) return;
     const auto now = GetTickCount64();
-    if (now - lastDispatch < 5000) return;
+    if (now - lastDispatch < 2000) return;
     lastDispatch = now;
     if (!originalSdkCallback) { Log("dispatchLogin: no sdk callback"); return; }
     // The SDK delivers every event (1/9/19/27/31/1007/...) through the initSDK callback
@@ -952,6 +953,13 @@ void __stdcall HookSdkCallback(int eventId, const char* payload) {
         preview = "<null>";
     }
     Log("sdk callback event=" + std::to_string(eventId) + " payload=" + preview);
+    // Event 3 is the successful server-list response. From this point the Lua login flow
+    // owns navigation; another fabricated event 2 would reopen server/role selection even
+    // after the game session has started. Events 16 and 4 are later confirmations.
+    if (!loginBootstrapComplete && (eventId == 3 || eventId == 16 || eventId == 4)) {
+        loginBootstrapComplete = true;
+        Log("login bootstrap complete; stopping fabricated login retries");
+    }
     if (originalSdkCallback) originalSdkCallback(eventId, payload);
     // Event 29 (kWebViewResUrlParms) is the SDK's WebView lifecycle. The first "open" is the
     // announcement/supernotice WebView; dispatch a fabricated login result (event 2) then and
@@ -2901,11 +2909,9 @@ void InitializeHooks(HMODULE module) {
             loginWebViewSuppressionEnabled = false;
             Log("login WebView suppression disabled after game connection");
         }
-        // Auto-login fallback: SDK event 29 (announcement WebView "open") does not always
-        // fire headlessly. Repeatedly dispatch the fabricated login result (event 2) until
-        // the game connects to the server. After login the server stays connected, so this
-        // path is skipped once IsGameNetworkConnected() turns true.
-        if (originalSdkCallback && !gameNetworkConnected &&
+        // Auto-login fallback: the first event 2 can arrive before LoginLogic is ready.
+        // Retry promptly, but stop as soon as event 3 confirms that the server list arrived.
+        if (originalSdkCallback && !loginBootstrapComplete && !gameNetworkConnected &&
             GetTickCount64() >= loginFallbackStart) {
             if (!loginFallbackStarted) {
                 loginFallbackStarted = true;

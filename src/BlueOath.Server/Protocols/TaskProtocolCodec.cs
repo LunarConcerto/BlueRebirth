@@ -36,7 +36,7 @@ internal static class TaskProtocolCodec
             {
                 ProtocolPackage eventInfo = new();
                 eventInfo.Write(0x08, unchecked((ulong)eventGroup.Key));
-                eventInfo.Write(0x10, unchecked((ulong)eventGroup.Max(x => x.Goal)));
+                eventInfo.Write(0x10, unchecked((ulong)GetEventProgress(eventGroup, recordMap)));
                 foreach (TaskDefinition definition in eventGroup)
                 {
                     recordMap.TryGetValue((definition.TaskType, definition.Id), out PlayerTaskRecord? record);
@@ -83,7 +83,7 @@ internal static class TaskProtocolCodec
             {
                 ProtocolPackage eventInfo = new();
                 eventInfo.Write(0x08, unchecked((ulong)eventGroup.Key));
-                eventInfo.Write(0x10, unchecked((ulong)eventGroup.Max(x => x.Goal)));
+                eventInfo.Write(0x10, unchecked((ulong)GetEventProgress(eventGroup, recordMap)));
                 foreach (TaskDefinition definition in eventGroup)
                 {
                     recordMap.TryGetValue((definition.TaskType, definition.Id), out PlayerTaskRecord? record);
@@ -98,6 +98,24 @@ internal static class TaskProtocolCodec
         output.Write(0x1A, stage.ToArray());
         output.Write(0x20, 0UL);
         return output.ToArray();
+    }
+
+    /// <summary>
+    /// TTaskEventInfo.Count 表示该事件的当前累计值，不是任务目标值。任务目录通常会为同一
+    /// EventType 配置多个递进目标，因此取已持久化记录中的最大进度，并限制在最高目标内。
+    /// </summary>
+    internal static int GetEventProgress(IEnumerable<TaskDefinition> definitions,
+        IReadOnlyDictionary<(int Type, int Id), PlayerTaskRecord> records)
+    {
+        int progress = 0;
+        int maxGoal = 0;
+        foreach (TaskDefinition definition in definitions)
+        {
+            maxGoal = Math.Max(maxGoal, Math.Max(0, definition.Goal));
+            if (records.TryGetValue((definition.TaskType, definition.Id), out PlayerTaskRecord? record))
+                progress = Math.Max(progress, Math.Max(0, record.Count));
+        }
+        return Math.Min(progress, maxGoal);
     }
 
     internal static byte[] EncodeReward(int taskId, IReadOnlyList<CommonReward> rewards)
