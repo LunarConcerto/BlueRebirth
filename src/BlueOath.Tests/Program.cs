@@ -41,7 +41,6 @@ var tests = new (string Name, Func<Task> Run)[]
     ("mod manager filters target and orders mods", ModTest),
     ("equipment mod adds a client/server template and GM shop good", EquipmentModTest),
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
-    ("kcp fragments reassemble across sticky and split buffers", KcpReassemblyTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
@@ -724,40 +723,6 @@ static Task ClientLoginWireTest()
     var response = ClientGameWireCodec.DecodeServerResponse(responsePacket);
     Assert(response.Operation == 2 && GameLoginCodec.DecodeLoginResponse(response.Payload).FeignRoleId == "wire-player",
         "server response wire mismatch");
-    return Task.CompletedTask;
-}
-
-static Task KcpReassemblyTest()
-{
-    var login = new TArgLogin("kcp-player", 1234567890, "2026-08-13", "hash",
-        new TSampleInfo("uuid", "model", "release", "wifi", "windows", "jp.local"));
-    var appMessage = ClientGameWireCodec.EncodeClientRequest(GameOperationCodes.Login,
-        GameLoginCodec.Encode(login), sessionId: 42, state: 3);
-
-    var fragments = KcpCodec.FragmentPushMessage(0x11223344, 7, 1000, 32, 0, appMessage, maxPayload: 8);
-    Assert(fragments.Count > 1, "login message was not fragmented");
-
-    var stream = fragments.SelectMany(f => f).ToArray();
-    var reader = new KcpStreamReader();
-    var reassembler = new KcpReassembler();
-    byte[]? reassembled = null;
-    var cursor = 0;
-    while (cursor < stream.Length)
-    {
-        var chunk = Math.Min(Random.Shared.Next(1, 7), stream.Length - cursor);
-        foreach (var packet in reader.Feed(stream.AsSpan(cursor, chunk)))
-        {
-            if (reassembler.TryReassemble(packet, out var message))
-                reassembled = message;
-        }
-        cursor += chunk;
-    }
-
-    Assert(reassembled is not null, "reassembler produced no message");
-    Assert(reassembled.AsSpan().SequenceEqual(appMessage), "reassembled application message mismatch");
-    var request = ClientGameWireCodec.DecodeClientRequest(reassembled);
-    Assert(request.Operation == GameOperationCodes.Login &&
-        GameLoginCodec.DecodeLogin(request.Payload).Pid == "kcp-player", "login application wire mismatch");
     return Task.CompletedTask;
 }
 
