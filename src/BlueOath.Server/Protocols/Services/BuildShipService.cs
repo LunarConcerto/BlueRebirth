@@ -240,8 +240,10 @@ internal sealed class BuildShipService(GameServices services)
         int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         int num = count > 0 ? (int)count : 1;
         services.LastBuildHeroIds.Clear();
-        (account, CommonReward reward) = GrantReward(
-            account, (int)itemType, (int)itemId, num, now);
+        // 与抽卡/宝箱发放走同一套 GrantDropReward：SHIP 创建舰娘实例入船坞、
+        // EQUIP 创建装备实例入装备仓库，避免把舰船模板当背包道具塞进背包。
+        var dropEntry = new DropPoolEntry((int)itemType, (int)itemId, num, num, 1);
+        (account, CommonReward reward) = GrantDropReward(account, dropEntry, now);
         List<CommonReward> rewards = [reward];
 
         if (!usedReward.ContainsKey(arg.Id)) usedReward[arg.Id] = [];
@@ -276,28 +278,8 @@ internal sealed class BuildShipService(GameServices services)
     }
 
     /// <summary>按 GoodsType 发放累计奖励。舰船和装备必须创建实例，并把实例 id
-    /// 写入 TCommonReward.Id；否则客户端会把模板当背包道具解析，领奖演出和船坞都会损坏。</summary>
-    private (PlayerAccount Account, CommonReward Reward) GrantReward(
-        PlayerAccount account, int goodsType, int configId, int num, int now)
-    {
-        if (goodsType == GameServices.GoodsTypeShip)
-        {
-            uint heroId = services.NextHeroId();
-            account = services.AddShip(account, heroId, configId, now);
-            services.LastBuildHeroIds.Add(heroId);
-            return (account, new CommonReward(goodsType, configId, num, (int)heroId));
-        }
-        if (goodsType == GameServices.GoodsTypeEquip)
-        {
-            (account, uint equipId) = AddEquip(account, configId, now);
-            return (account, new CommonReward(goodsType, configId, num, (int)equipId));
-        }
-        if (goodsType == GameServices.GoodsTypeCurrency)
-            return (GameServices.AddCurrency(account, configId, num),
-                new CommonReward(goodsType, configId, num));
-        return (GameServices.AddBagItem(account, configId, num),
-            new CommonReward(goodsType, configId, num));
-    }
+    /// 写入 TCommonReward.Id；否则客户端会把模板当背包道具解析，领奖演出和船坞都会损坏。
+    /// 由 <see cref="GrantDropReward"/> 统一处理（本方法已废弃合并）。</summary>
 
     /// <summary>递归展开 config_drop_item 掉落池，将 GoodsType.DROP 嵌套条目展开为最终物品列表。</summary>
     private List<DropPoolEntry> FlattenDropPool(int dropItemId, int countMul = 1)
