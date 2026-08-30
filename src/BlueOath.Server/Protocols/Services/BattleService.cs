@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace BlueOath.Server.Protocols;
 
 /// <summary>关卡/战斗服务：copy.StartBase / copy.PassBase 的领域逻辑。</summary>
-internal sealed class BattleService(GameServices services)
+internal sealed class BattleService(GameServices services, DailyCopyService dailyCopy)
 {
     internal async Task<byte[]> BuildStartBaseRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
@@ -76,6 +76,15 @@ internal sealed class BattleService(GameServices services)
             account = account with { SeaProgress = new PlayerSeaCopyProgress(seaRecords) };
             await services.SaveAccountAsync(account, ct);
             return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isFirstPass ? 1 : 0, passTime);
+        }
+
+        if (copyType == 9)
+        {
+            DailyCopyPassMutation mutation = dailyCopy.RecordPass(account, copyId, grade, now);
+            account = mutation.Account;
+            await services.SaveAccountAsync(account, ct);
+            return ProtocolEncoder.EncodePassBaseRet(
+                copyId, grade, mutation.FirstPass ? 1 : 0, passTime, mutation.Rewards);
         }
 
         PlayerCopyProgress progress = account.CopyProgress ?? new PlayerCopyProgress([]);

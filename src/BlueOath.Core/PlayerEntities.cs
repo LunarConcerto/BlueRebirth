@@ -164,6 +164,29 @@ public sealed record PlayerCopyProgress(
 public sealed record PlayerSeaCopyProgress(
     IReadOnlyList<CopyRecord> Records);
 
+/// <summary>每日副本单章节进度。ChapterId 对应 config_chapter（例如驱逐大作战为 20001）。</summary>
+public sealed record DailyCopyChapterProgress(
+    int ChapterId,
+    int ChallengeTimes = 0,
+    IReadOnlyList<int>? PassCopy = null,
+    bool SelectEx = false,
+    int ExStar = 0);
+
+/// <summary>每日副本组的当日成功次数。DailyGroupId 对应 config_daily_group。</summary>
+public sealed record DailyCopyGroupProgress(
+    int DailyGroupId,
+    int SuccessTimes = 0);
+
+/// <summary>
+/// 每日副本（DailyCopy）持久化状态。ResetDay 使用东八区自然日编号；跨日时只清空
+/// ChallengeTimes/SuccessTimes，永久通关记录与条约选择保持不变。
+/// </summary>
+public sealed record PlayerDailyCopyProgress(
+    IReadOnlyList<DailyCopyChapterProgress>? Chapters = null,
+    IReadOnlyList<DailyCopyGroupProgress>? Groups = null,
+    IReadOnlyList<DailyCopyGroupProgress>? ExtraGroups = null,
+    int ResetDay = 0);
+
 /// <summary>基地中的单栋建筑。Tid 对应 config_buildinginfo，Id 是存档内的建筑实例 ID。</summary>
 public sealed record PlayerBuildingEntry(
     int Id,
@@ -209,7 +232,8 @@ public sealed record PlayerAccount(
     PlayerBuilding? Building = null,
     string? ProfileDisplayName = null,
     PlayerIllustrate? Illustrate = null,
-    PlayerBuildState? BuildState = null);
+    PlayerBuildState? BuildState = null,
+    PlayerDailyCopyProgress? DailyCopy = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。

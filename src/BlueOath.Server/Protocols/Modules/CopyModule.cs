@@ -33,11 +33,21 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                     Ret: copyType switch
                     {
                         2 => ProtocolEncoder.EncodeSeaCopyInfo(account.SeaProgress),
+                        9 => ProtocolEncoder.EncodeDailyCopyInfo(account.DailyCopy),
                         33 => ProtocolEncoder.EncodeMubarCopyInfo(),
                         _ => ProtocolEncoder.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
                     },
                     Time: (uint)ctx.Now));
-                result = new ModuleResult { Ret = ret, PostPushes = [copyPush] };
+                List<byte[]> postPushes = [copyPush];
+                if (copyType == 9)
+                {
+                    postPushes.Add(DailyCopyService.BuildUpdatePush(account.DailyCopy, (uint)ctx.Now));
+                    postPushes.Add(ctx.Services.BuildBagPush(account, (uint)ctx.Now));
+                    postPushes.Add(ctx.Services.BuildEquipPush(account, (uint)ctx.Now));
+                    postPushes.Add(await ctx.Services.BuildUpdateUserInfoPushAsync(
+                        ctx.ProfileId, (uint)ctx.Now, ctx.Ct));
+                }
+                result = new ModuleResult { Ret = ret, PostPushes = postPushes };
                 break;
             case "copy.QuitBase":
                 result = ModuleResult.Ok(ProtocolEncoder.BuildQuitBaseRet(request.Args));

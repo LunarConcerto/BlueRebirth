@@ -70,6 +70,7 @@ internal sealed class GameServices
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
+        DailyCopyRewardCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
         ShipBreakLoader.Load(configDir);
@@ -288,6 +289,15 @@ internal sealed class GameServices
                 Ret: ProtocolEncoder.EncodeMubarCopyInfo(),
                 Time: now)),
 
+            // 每日副本（CopyType=9）与其独立次数/通关状态。活动入口会立即读取
+            // DailyCopy 的 BaseInfo；缺失时驱逐大作战关卡详情无法进入。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "copy.GetCopy",
+                Ret: ProtocolEncoder.EncodeDailyCopyInfo(account.DailyCopy),
+                Time: now)),
+
+            DailyCopyService.BuildUpdatePush(account.DailyCopy, now),
+
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目，
             // 每个条目同时下发客户端配置中的全部动作 ID，使图鉴动作直接全部解锁。
             // （IllustrateId = config_ship_handbook 的 key = ship_info_id）；未列出的条目
@@ -359,6 +369,9 @@ internal sealed class GameServices
         var account = await _repo.LoadAccountAsync(profileId, ct);
         if (account is not null)
         {
+            PlayerAccount heroReady = RepairDuplicateHeroIds(account);
+            bool heroMigrated = !ReferenceEquals(heroReady, account);
+            account = heroReady;
             EnsureEquipIdFromAccount(account);
             account = EnsureHeroPSkills(account);
             account = EnsureAllFashion(account);
@@ -385,7 +398,7 @@ internal sealed class GameServices
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
-            if (affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
+            if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
                 profileNameMigrated || bagMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
@@ -423,6 +436,9 @@ internal sealed class GameServices
             account = EnsureConstructionItems(account);
             return EnsureBuildingMaterials(account);
         }
+        PlayerAccount heroReady = RepairDuplicateHeroIds(account);
+        bool heroMigrated = !ReferenceEquals(heroReady, account);
+        account = heroReady;
         EnsureEquipIdFromAccount(account);
         account = EnsureHeroPSkills(account);
         account = EnsureAllFashion(account);
@@ -447,9 +463,42 @@ internal sealed class GameServices
         if (account.Character.Level < 80)
             account = account with { Character = account.Character with { Level = 80 } };
         _accountCache[profileId] = account;
-        if (affectionMigrated || buildingMigrated || buildingMaterialsMigrated || profileNameMigrated || bagMigrated)
+        if (heroMigrated || affectionMigrated || buildingMigrated || buildingMaterialsMigrated || profileNameMigrated || bagMigrated)
             await _repo.SaveAccountAsync(account, ct);
         return account;
+    }
+
+    /// <summary>
+    /// 迁移修复：早期 HeroAdvance 在素材位于目标之前时会用删除前的下标写回，造成目标
+    /// HeroId 一旧一新两条记录。保留突破/改造进度最高的一条，并维持该 HeroId 首次出现的
+    /// 列表位置；装备、编队和秘书舰均按 HeroId 引用，因此不需要重写关联数据。
+    /// </summary>
+    internal static PlayerAccount RepairDuplicateHeroIds(PlayerAccount account)
+    {
+        IReadOnlyList<Hero> heroes = account.Dock.Heroes;
+        if (heroes.GroupBy(hero => hero.HeroId).All(group => group.Count() == 1))
+            return account;
+
+        List<Hero> repaired = [];
+        HashSet<uint> emitted = [];
+        foreach (Hero hero in heroes)
+        {
+            if (!emitted.Add(hero.HeroId))
+                continue;
+
+            Hero survivor = heroes
+                .Where(candidate => candidate.HeroId == hero.HeroId)
+                .OrderByDescending(candidate => candidate.Advance)
+                .ThenByDescending(candidate => candidate.AdvLv)
+                .ThenByDescending(candidate => candidate.Level)
+                .ThenByDescending(candidate => candidate.Exp)
+                .ThenByDescending(candidate => candidate.UpdateTime)
+                .ThenByDescending(candidate => candidate.TemplateId)
+                .First();
+            repaired.Add(survivor);
+        }
+
+        return account with { Dock = account.Dock with { Heroes = repaired } };
     }
 
     /// <summary>迁移修复：把误入道具仓库的舰娘模板恢复成真实舰娘实例。早期商店购买及
