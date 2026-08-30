@@ -121,6 +121,12 @@ public sealed record IllustrateEntry(
 public sealed record PlayerIllustrate(
     IReadOnlyList<IllustrateEntry> Entries);
 
+/// <summary>抽卡池累计状态：各池抽数 + 已领取的抽数奖励（20/100 连宝箱）。</summary>
+public sealed record PlayerBuildState(
+    IReadOnlyDictionary<int, int> DrawCount,
+    IReadOnlyDictionary<int, IReadOnlyList<int>> UsedBoxInfo,
+    IReadOnlyDictionary<int, IReadOnlyList<int>> UsedRewardInfo);
+
 /// <summary>时装解锁项（TFashionInfo：船型 SfId + 已解锁时装列表）。</summary>
 public sealed record FashionEntry(int SfId, IReadOnlyList<int> FashionTids);
 
@@ -202,7 +208,8 @@ public sealed record PlayerAccount(
     PlayerConstruction? Construction = null,
     PlayerBuilding? Building = null,
     string? ProfileDisplayName = null,
-    PlayerIllustrate? Illustrate = null);
+    PlayerIllustrate? Illustrate = null,
+    PlayerBuildState? BuildState = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。

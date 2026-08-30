@@ -104,22 +104,8 @@ internal sealed class BuildShipService(GameServices services)
         for (int i = 0; i < num; i++)
         {
             var entry = WeightedPick(entries);
-            if (entry.GoodsType == GameServices.GoodsTypeShip)
-            {
-                uint heroId = services.NextHeroId();
-                account = services.AddShip(account, heroId, entry.ConfigId, now);
-                services.LastBuildHeroIds.Add(heroId);
-                rewards.Add(new CommonReward(GameServices.GoodsTypeShip, entry.ConfigId, entry.MinNum, (int)heroId));
-            }
-            else if (entry.GoodsType == GameServices.GoodsTypeEquip)
-            {
-                (account, uint equipId) = AddEquip(account, entry.ConfigId, now);
-                rewards.Add(new CommonReward(GameServices.GoodsTypeEquip, entry.ConfigId, entry.MinNum, (int)equipId));
-            }
-            else
-            {
-                rewards.Add(new CommonReward(entry.GoodsType, entry.ConfigId, entry.MinNum));
-            }
+            (account, CommonReward reward) = GrantDropReward(account, entry, now);
+            rewards.Add(reward);
         }
 
         // 10 连保底：至少一个 SR（quality>=3）。仅对舰船类型卡池生效。
@@ -153,9 +139,144 @@ internal sealed class BuildShipService(GameServices services)
         }
 
         if (rewards.Count > 0)
+        {
+            // 累计该池抽数（用于 20/100 连累计奖励判断）。
+            var buildState = account.BuildState ?? new PlayerBuildState(
+                new Dictionary<int, int>(), new Dictionary<int, IReadOnlyList<int>>(), new Dictionary<int, IReadOnlyList<int>>());
+            var drawCount = buildState.DrawCount.ToDictionary(kv => kv.Key, kv => kv.Value);
+            drawCount[arg.Id] = drawCount.GetValueOrDefault(arg.Id) + num;
+            account = account with { BuildState = buildState with { DrawCount = drawCount } };
             await services.SaveAccountAsync(account, ct);
+        }
 
         return ProtocolEncoder.EncodeBuildShipRet(rewards);
+    }
+
+    /// <summary>处理 buildship.BuildShipBox：领取累计抽数宝箱奖励（twenty_drop / ChooseShip）。
+    /// 从 config_extract_ship.twenty_drop 找到 limitCount 对应的 dropId，发放掉落表内全部物品，
+    /// 并记录到 UsedBoxInfo（客户端据此判断是否已领取）。返回 TBuildShipRet。</summary>
+    internal async Task<byte[]> BuildBuildShipBoxRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        BuildShipArg arg = ProtocolDecoder.DecodeBuildShipArg(request.Args);
+        if (!services.ExtractShips.TryGetValue(arg.Id, out var extractConfig))
+            return [];
+
+        // twenty_drop 形如 [[limitCount, dropId], ...]
+        long dropId = 0;
+        if (extractConfig.TwentyDrop is { Count: > 0 } twentyDrop)
+            foreach (var entry in twentyDrop)
+                if (entry is { Count: >= 2 } && entry[0] == arg.Num)
+                {
+                    dropId = entry[1];
+                    break;
+                }
+        if (dropId == 0) return [];
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+
+        // 校验已抽次数足够且未领取过该档位。
+        var buildState = account.BuildState ?? new PlayerBuildState(
+            new Dictionary<int, int>(), new Dictionary<int, IReadOnlyList<int>>(), new Dictionary<int, IReadOnlyList<int>>());
+        int drawCount = buildState.DrawCount.GetValueOrDefault(arg.Id);
+        if (drawCount < arg.Num) return [];
+        var usedBox = buildState.UsedBoxInfo.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
+        if (usedBox.TryGetValue(arg.Id, out var claimedList) && claimedList.Contains(arg.Num))
+            return [];
+
+        // 发放掉落表内全部物品（与抽卡一致，按类型处理 SHIP/EQUIP/CURRENCY/ITEM）。
+        int now = checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        List<CommonReward> rewards = [];
+        foreach (var entry in FlattenDropPool((int)dropId))
+        {
+            (account, CommonReward reward) = GrantDropReward(account, entry, now);
+            rewards.Add(reward);
+        }
+
+        // 记录已领取。
+        if (!usedBox.ContainsKey(arg.Id)) usedBox[arg.Id] = [];
+        usedBox[arg.Id].Add(arg.Num);
+        account = account with { BuildState = buildState with {
+            UsedBoxInfo = usedBox.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<int>)kv.Value) } };
+        await services.SaveAccountAsync(account, ct);
+        return ProtocolEncoder.EncodeBuildShipRet(rewards);
+    }
+
+    /// <summary>处理 buildship.BuildShipReward：领取累计抽数次奖励（hundred_reward）。
+    /// 从 config_extract_ship.hundred_reward 找到 limitCount 对应的 [itemType, itemId, count]，
+    /// 发放该道具，并记录到 UsedRewardInfo。返回 TBuildShipRet。</summary>
+    internal async Task<byte[]> BuildBuildShipRewardRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        BuildShipArg arg = ProtocolDecoder.DecodeBuildShipArg(request.Args);
+        if (!services.ExtractShips.TryGetValue(arg.Id, out var extractConfig))
+            return [];
+
+        long itemType = 0, itemId = 0, count = 0;
+        if (extractConfig.HundredReward is { Count: > 0 } hundredReward)
+            foreach (var entry in hundredReward)
+                if (entry is { Count: >= 4 } && entry[0] == arg.Num)
+                {
+                    itemType = entry[1];
+                    itemId = entry[2];
+                    count = entry[3];
+                    break;
+                }
+        if (itemType == 0) return [];
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+
+        var buildState = account.BuildState ?? new PlayerBuildState(
+            new Dictionary<int, int>(), new Dictionary<int, IReadOnlyList<int>>(), new Dictionary<int, IReadOnlyList<int>>());
+        int drawCount = buildState.DrawCount.GetValueOrDefault(arg.Id);
+        if (drawCount < arg.Num) return [];
+        var usedReward = buildState.UsedRewardInfo.ToDictionary(kv => kv.Key, kv => kv.Value.ToList());
+        if (usedReward.TryGetValue(arg.Id, out var claimedList) && claimedList.Contains(arg.Num))
+            return [];
+
+        int num = count > 0 ? (int)count : 1;
+        account = GrantReward(account, (int)itemType, (int)itemId, num);
+        List<CommonReward> rewards = [new CommonReward((int)itemType, (int)itemId, num)];
+
+        if (!usedReward.ContainsKey(arg.Id)) usedReward[arg.Id] = [];
+        usedReward[arg.Id].Add(arg.Num);
+        account = account with { BuildState = buildState with {
+            UsedRewardInfo = usedReward.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<int>)kv.Value) } };
+        await services.SaveAccountAsync(account, ct);
+        return ProtocolEncoder.EncodeBuildShipRet(rewards);
+    }
+
+    /// <summary>按 GoodsType 发放掉落奖励（与抽卡一致）：SHIP 走 AddShip，EQUIP 走 AddEquip，
+    /// CURRENCY 走 AddCurrency，其余走 AddBagItem。返回更新后的账号与该条奖励。</summary>
+    private (PlayerAccount Account, CommonReward Reward) GrantDropReward(PlayerAccount account, DropPoolEntry entry, int now)
+    {
+        if (entry.GoodsType == GameServices.GoodsTypeShip)
+        {
+            uint heroId = services.NextHeroId();
+            account = services.AddShip(account, heroId, entry.ConfigId, now);
+            services.LastBuildHeroIds.Add(heroId);
+            return (account, new CommonReward(GameServices.GoodsTypeShip, entry.ConfigId, entry.MinNum, (int)heroId));
+        }
+        if (entry.GoodsType == GameServices.GoodsTypeEquip)
+        {
+            (account, uint equipId) = AddEquip(account, entry.ConfigId, now);
+            return (account, new CommonReward(GameServices.GoodsTypeEquip, entry.ConfigId, entry.MinNum, (int)equipId));
+        }
+        if (entry.GoodsType == GameServices.GoodsTypeCurrency)
+            return (GameServices.AddCurrency(account, entry.ConfigId, entry.MinNum),
+                new CommonReward(entry.GoodsType, entry.ConfigId, entry.MinNum));
+        return (GameServices.AddBagItem(account, entry.ConfigId, entry.MinNum),
+            new CommonReward(entry.GoodsType, entry.ConfigId, entry.MinNum));
+    }
+
+    /// <summary>按 GoodsType 发放累计奖励：CURRENCY 走 AddCurrency，其余走 AddBagItem。</summary>
+    private PlayerAccount GrantReward(PlayerAccount account, int goodsType, int configId, int num)
+    {
+        if (goodsType == GameServices.GoodsTypeCurrency)
+            return GameServices.AddCurrency(account, configId, num);
+        return GameServices.AddBagItem(account, configId, num);
     }
 
     /// <summary>递归展开 config_drop_item 掉落池，将 GoodsType.DROP 嵌套条目展开为最终物品列表。</summary>

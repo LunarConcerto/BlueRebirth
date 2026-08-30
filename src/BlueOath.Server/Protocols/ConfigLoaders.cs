@@ -977,11 +977,37 @@ internal static class ShipHandbookLoader
     public static ConfigShipHandbook? Get(int shipInfoId)
         => _handbooks.TryGetValue(shipInfoId, out var cfg) ? cfg : null;
 
+    /// <summary>全部图鉴条目（ship_info_id → ConfigShipHandbook）。</summary>
+    public static IReadOnlyDictionary<int, ConfigShipHandbook> All => _handbooks;
+
     public static string GetShipName(int templateId)
     {
         int shipInfoId = (templateId - 1) / 10;
         return _handbooks.TryGetValue(shipInfoId, out var cfg) ? cfg.ShipName ?? "" : "";
     }
+}
+
+/// <summary>从 config_expand_item 加载扩容道具配置（itemId → type/expandNum）。type: 1=船坞, 2=装备仓库。</summary>
+internal static class ExpandItemLoader
+{
+    private static readonly Dictionary<int, ConfigExpandItem> _items = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _items.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigExpandItem>(configDir, "config_expand_item.db"))
+                _items[id] = cfg;
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigExpandItem? Get(int itemTemplateId)
+        => _items.TryGetValue(itemTemplateId, out var cfg) ? cfg : null;
 }
 
 /// <summary>

@@ -6,12 +6,24 @@ namespace BlueOath.Server.Protocols;
 /// <summary>传统舰船建造模块：配方、队列、快速完成与领取。</summary>
 internal sealed class BuildModule(ConstructionService construction, GameServices services) : IGameModule
 {
-    public IReadOnlyList<string> Prefixes => ["build"];
+    public IReadOnlyList<string> Prefixes => ["build", "buildnotes", "discuss"];
 
     public async Task<ModuleResult> HandleAsync(GameContext ctx, TRequest request)
     {
         switch (request.Method)
         {
+            case "discuss.GetDiscuss":
+                return ModuleResult.Ok(construction.GetDiscuss(ProtocolDecoder.DecodeDiscussHtid(request.Args)));
+
+            case "discuss.HeroLike":
+                // 舰船点赞数：返回 0（协议只读 HeroLikeNum，不持久化）。
+                return ModuleResult.Ok(new byte[] { 0x08, 0x00 });
+
+            case "buildnotes.GetNotesList":
+            case "buildnotes.GiveLike":
+                // GiveLike 同样返回完整配方墙；点赞状态不持久化（返回同一列表即可）。
+                return ModuleResult.Ok(construction.GetNotesList(ctx.Now));
+
             case "build.BuildsInfo":
                 return ModuleResult.Ok(await construction.BuildInfoAsync(ctx.ProfileId, ctx.Now, ctx.Ct));
 
