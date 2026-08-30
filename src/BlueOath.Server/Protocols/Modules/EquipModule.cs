@@ -51,7 +51,8 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
                         : [],
                 };
             case "equip.RiseStar":
-                var (riseRet, changed) = await equip.BuildRiseStarRetAsync(request, ctx.ProfileId, ctx.Ct);
+                var (riseRet, changed, removedEquipIds) =
+                    await equip.BuildRiseStarRetAsync(request, ctx.ProfileId, ctx.Ct);
                 return new ModuleResult
                 {
                     Ret = riseRet,
@@ -59,7 +60,8 @@ internal sealed class EquipModule(EquipService equip, GameServices services) : I
                     ErrMsg = changed ? "" : "equipment renovation requirements are not met",
                     // RiseStarSuccess immediately reads currency, bag, and equip caches.
                     PrePushes = changed
-                        ? await services.BuildRiseStarPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)
+                        ? await services.BuildRiseStarPushesAsync(
+                            ctx.ProfileId, (uint)ctx.Now, ctx.Ct, removedEquipIds)
                         : [],
                 };
             default:

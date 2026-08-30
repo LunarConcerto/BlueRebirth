@@ -7,6 +7,11 @@ namespace BlueOath.Server.Protocols;
 /// <summary>装备服务：equip.Dismantle 的领域逻辑（分解装备返还材料）。</summary>
 internal sealed class EquipService(GameServices services)
 {
+    // Client constant CommonRiseEquipTag. Equipment templates with this type are
+    // universal rise-star cores and can replace one same-quality duplicate.
+    private const int CommonRiseEquipType = 129;
+    private const int MinimumCommonRiseEquipQuality = 3;
+
     /// <summary>
     /// 处理 equip.Dismantle：删除选中的装备实例，按 config_equip.dismantling_get 返还材料。
     /// 返回 (TEquipDismantleRet 字节, 被删除的装备实例 ID 列表)。
@@ -357,19 +362,19 @@ internal sealed class EquipService(GameServices services)
         return (TMessageCodec.EncodeEquipEnhanceRet(arg.EquipId, nextLevel, 0), true, "");
     }
 
-    internal async Task<(byte[] Ret, bool Changed)> BuildRiseStarRetAsync(
+    internal async Task<(byte[] Ret, bool Changed, List<uint> RemovedEquipIds)> BuildRiseStarRetAsync(
         TRequest request, string profileId, CancellationToken ct)
     {
-        if (request.Args is null) return ([], false);
+        if (request.Args is null) return ([], false, []);
         EquipRiseStarArgs arg = TMessageCodec.DecodeEquipRiseStarArgs(request.Args);
-        if (arg.EquipId == 0) return ([], false);
+        if (arg.EquipId == 0) return ([], false, []);
 
         using var _ = await services.LockAccountAsync(profileId, ct);
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
         List<EquipItem> equipItems = equip.Items.ToList();
         int equipIndex = equipItems.FindIndex(e => e.EquipId == arg.EquipId);
-        if (equipIndex < 0) return ([], false);
+        if (equipIndex < 0) return ([], false, []);
 
         EquipItem current = equipItems[equipIndex];
         ConfigEquip? config = services.GetEquipConfig(current.TemplateId);
@@ -377,7 +382,7 @@ internal sealed class EquipService(GameServices services)
         ConfigEquipEnhanceRenovate? renovate = services.GetEquipRenovateLevel(nextStar);
         if (config is null || renovate is null || nextStar > config.StarMax ||
             current.EnhanceLv < renovate.NeedEnhanceLevel)
-            return ([], false);
+            return ([], false, []);
 
         PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
         List<BagItem> bagItems = bag.Items.ToList();
@@ -385,31 +390,38 @@ internal sealed class EquipService(GameServices services)
         // Validate all configured currency/item costs before mutating the account.
         foreach (List<long> cost in renovate.ItemArray ?? [])
         {
-            if (cost.Count < 3 || cost[2] < 0 || cost[2] > int.MaxValue) return ([], false);
+            if (cost.Count < 3 || cost[2] < 0 || cost[2] > int.MaxValue) return ([], false, []);
             int goodsType = checked((int)cost[0]);
             int configId = checked((int)cost[1]);
             int count = checked((int)cost[2]);
             if (goodsType == GameServices.GoodsTypeCurrency)
             {
-                if (configId != 1 || account.Character.Gold < count) return ([], false);
+                if (configId != 1 || account.Character.Gold < count) return ([], false, []);
             }
             else if (goodsType is 1 or 6)
             {
                 int bagIndex = bagItems.FindIndex(i => i.TemplateId == configId);
-                if (bagIndex < 0 || bagItems[bagIndex].Num < count) return ([], false);
+                if (bagIndex < 0 || bagItems[bagIndex].Num < count) return ([], false, []);
             }
-            else return ([], false);
+            else return ([], false, []);
         }
 
         List<uint> consumeIds = (arg.ConsumeIds ?? []).Distinct().ToList();
         int selfCount = checked((int)renovate.EquipSelfCount);
-        if (consumeIds.Count != selfCount) return ([], false);
+        if (consumeIds.Count != selfCount) return ([], false, []);
         foreach (uint consumeId in consumeIds)
         {
             EquipItem? consumed = equipItems.FirstOrDefault(e => e.EquipId == consumeId);
+            ConfigEquip? consumedConfig = consumed is null
+                ? null
+                : services.GetEquipConfig(consumed.TemplateId);
+            bool isSameTemplate = consumed?.TemplateId == current.TemplateId;
+            bool isUniversalCore = config.Quality >= MinimumCommonRiseEquipQuality &&
+                                   consumedConfig?.EquipTypeId == CommonRiseEquipType &&
+                                   consumedConfig.Quality == config.Quality;
             if (consumed is null || consumed.EquipId == current.EquipId || consumed.HeroId != 0 ||
-                consumed.TemplateId != current.TemplateId)
-                return ([], false);
+                (!isSameTemplate && !isUniversalCore))
+                return ([], false, []);
         }
 
         foreach (List<long> cost in renovate.ItemArray ?? [])
@@ -441,7 +453,7 @@ internal sealed class EquipService(GameServices services)
         // The client does not declare a dedicated RiseStar ret message. Returning updated
         // TEquipInfo keeps the payload non-empty while the pre-push refreshes its cache.
         return (PlayerDataCodec.Encode(new EquipInfo(updated.EquipId, updated.TemplateId,
-            updated.EnhanceLv, updated.Star, updated.HeroId, updated.EnhanceExp)), true);
+            updated.EnhanceLv, updated.Star, updated.HeroId, updated.EnhanceExp)), true, consumeIds);
     }
 
     private void ApplyReward(ref PlayerAccount account, int type, int configId, int num)

@@ -1158,14 +1158,15 @@ internal sealed class GameServices
         ];
     }
 
-    public async Task<IReadOnlyList<byte[]>> BuildRiseStarPushesAsync(string profileId, uint now, CancellationToken ct)
+    public async Task<IReadOnlyList<byte[]>> BuildRiseStarPushesAsync(
+        string profileId, uint now, CancellationToken ct, IReadOnlyList<uint>? removedEquipIds = null)
     {
         PlayerAccount account = await GetOrCreateAccountAsync(profileId, ct);
         return
         [
             await BuildUpdateUserInfoPushAsync(profileId, now, ct),
             BuildBagPush(account, now),
-            BuildEquipPush(account, now),
+            BuildEquipPush(account, now, removedEquipIds),
         ];
     }
 }
