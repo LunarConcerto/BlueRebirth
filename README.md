@@ -5,9 +5,8 @@
 **某款已关服 Unity 手游的本地离线复原工程** — 从日服/国服客户端还原出可一键启动的本地服务端与 Mod 环境。
 
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?style=for-the-badge&logo=dotnet)
-![Platform](https://img.shields.io/badge/Platform-Windows-x86-blue?style=for-the-badge&logo=windows)
 ![Lang](https://img.shields.io/badge/C%23%20%2B%20Lua-2E8B57?style=for-the-badge)
-![Status](https://img.shields.io/badge/Status-%E6%9C%AC%E5%9C%B0%E5%A4%8D%E5%8E%9F%E4%B8%AD-yellowgreen?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Update-yellowgreen?style=for-the-badge)
 
 </div>
 
