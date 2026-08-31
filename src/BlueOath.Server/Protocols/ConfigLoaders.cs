@@ -1150,6 +1150,59 @@ internal static class MubConversionLoader
     };
 }
 
+/// <summary>加载实验室（天赋树）配置：config_talent 全部天赋 + config_talentmain 主天赋。</summary>
+internal static class TalentConfigLoader
+{
+    private static readonly Dictionary<int, ConfigTalent> _talents = new();
+    private static readonly List<ConfigTalent> _rootTalents = [];
+    private static readonly HashSet<int> _rootIds = [];
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _talents.Clear();
+            _rootTalents.Clear();
+            _rootIds.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigTalent>(configDir, "config_talent.db"))
+            {
+                _talents[id] = cfg;
+                if (cfg.Belongtalent == 0)
+                {
+                    _rootTalents.Add(cfg);
+                    _rootIds.Add(checked((int)id));
+                }
+            }
+
+            // 合并 config_talentmain.talentlist 里的根天赋（个别条目可能 belongtalent≠0，但仍作根）。
+            var rootOrder = new List<ConfigTalent>(_rootTalents);
+            ConfigDbLoader.LoadRows(configDir, "config_talentmain.db", (_, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("talentlist", out var list)
+                    || list.ValueKind != JsonValueKind.Array) return;
+                foreach (var item in list.EnumerateArray())
+                {
+                    if (!item.TryGetInt32(out int tid) || tid <= 0 || _rootIds.Contains(tid)) continue;
+                    if (_talents.TryGetValue(tid, out ConfigTalent? cfg))
+                        _rootTalents.Add(cfg);
+                    _rootIds.Add(tid);
+                }
+            });
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigTalent? Get(int talentId)
+        => _talents.TryGetValue(talentId, out var cfg) ? cfg : null;
+
+    /// <summary>全部根天赋（config_talent.belongtalent=0 ∪ config_talentmain.talentlist）。</summary>
+    public static IReadOnlyList<ConfigTalent> RootTalents => _rootTalents;
+}
+
 internal static class ShipHandbookLoader
 {
     private static readonly Dictionary<int, ConfigShipHandbook> _handbooks = new();

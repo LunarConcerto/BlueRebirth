@@ -90,6 +90,7 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<IGameModule, TaskModule>();
         builder.Services.AddSingleton<IGameModule, RepairModule>();
         builder.Services.AddSingleton<IGameModule, StrategyModule>();
+        builder.Services.AddSingleton<IGameModule, TalentModule>();
         builder.Services.AddSingleton<MessageRouter>();
         builder.Services.AddSingleton<GameLoginSession>();
 

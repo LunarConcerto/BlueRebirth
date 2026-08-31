@@ -321,6 +321,17 @@ internal static class ProtocolDecoder
         return (id, level, fleetId, tacticType);
     }
 
+    /// <summary>解码 talentTree.GetTalentData / UnLockTalent / UpgradeTalent 参数：TalentId(1, int32)。</summary>
+    internal static int DecodeTalentIdArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        int talentId = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            if (field == 1 && wire == 0) talentId = checked((int)reader.ReadVarint());
+            else reader.Skip(wire);
+        return talentId;
+    }
+
     /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>
     internal static (uint HeroId, int SkillId) DecodeStudySkillArg(byte[] args)
     {

@@ -74,6 +74,7 @@ internal sealed class GameServices
         CopyDisplayLoader.Load(configDir);
         StrategyConfigLoader.Load(configDir);
         MubConversionLoader.Load(configDir);
+        TalentConfigLoader.Load(configDir);
         TaskConfigCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
@@ -375,7 +376,32 @@ internal sealed class GameServices
                 Ret: ProtocolEncoder.EncodeStrategyRet(
                     StrategyConfigLoader.All.Select(s => ((int)s.Id, 1)), resetNum: 0),
                 Time: now)),
+
+            // 实验室（天赋树）数据推送：talentTree.TalentTreeAllList 填充 Data.talentData，
+            // 否则 TalentPage 的 GetCurSubTalentId 返回 0 → config_talent 查 nil → 崩溃。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "talentTree.TalentTreeAllList",
+                Ret: ProtocolEncoder.EncodeTalentTreeAllList(BuildTalentTreeList(account)),
+                Time: now)),
         ];
+    }
+
+    /// <summary>构建天赋树列表：每个根天赋返回当前激活的 subTalent（默认根自身），IsOperate=1。</summary>
+    private static IReadOnlyList<(int TalentId, IReadOnlyList<int> PreCondition, int IsOperate)> BuildTalentTreeList(
+        PlayerAccount account)
+    {
+        var active = account.Talent?.ActiveTalents ?? new Dictionary<int, int>();
+        return TalentConfigLoader.RootTalents
+            .Select(root =>
+            {
+                int rootId = checked((int)root.Id);
+                active.TryGetValue(rootId, out int activeSub);
+                ConfigTalent? cfg = TalentConfigLoader.Get(activeSub != 0 ? activeSub : rootId);
+                int talentId = cfg is not null ? checked((int)cfg.Id) : rootId;
+                IReadOnlyList<int> pre = cfg?.Precondition?.Select(p => checked((int)p)).ToList() ?? [];
+                return (talentId, pre, 1);
+            })
+            .ToList();
     }
 
     /// <summary>加载账号；不存在时按默认工厂创建并落盘。优先从内存缓存读取。</summary>

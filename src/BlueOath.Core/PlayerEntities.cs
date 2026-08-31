@@ -121,6 +121,10 @@ public sealed record IllustrateEntry(
 public sealed record PlayerIllustrate(
     IReadOnlyList<IllustrateEntry> Entries);
 
+/// <summary>实验室（天赋树）进度：mainTalentId（根天赋）→ 当前激活的 subTalentId。</summary>
+public sealed record PlayerTalent(
+    IReadOnlyDictionary<int, int> ActiveTalents);
+
 /// <summary>抽卡池累计状态：各池抽数 + 已领取的抽数奖励（20/100 连宝箱）。</summary>
 public sealed record PlayerBuildState(
     IReadOnlyDictionary<int, int> DrawCount,
@@ -250,6 +254,7 @@ public sealed record PlayerAccount(
     PlayerBuilding? Building = null,
     string? ProfileDisplayName = null,
     PlayerIllustrate? Illustrate = null,
+    PlayerTalent? Talent = null,
     PlayerBuildState? BuildState = null,
     PlayerDailyCopyProgress? DailyCopy = null,
     PlayerTaskProgress? Tasks = null);
