@@ -941,6 +941,12 @@ internal static class ProtocolEncoder
             baseInfo.Write(0x20, 0UL); // IsRunningFight(4)
             baseInfo.Write(0x28, 0UL); // LBPoint(5)
             baseInfo.Write(0x30, isPassed ? 1UL : 0UL); // FirstPassTime(6)
+            // SfLv/SfPoint/SfLvChoose 必须编码：LevelDetailsPage._SafeArea 直接用
+            // tabSerData.SfLv/SfPoint 调 GetCurrSafeConfig→GetSafeCurrProgress，
+            // 缺失时 SfLv 为 nil → stageConfig.safe_area 找不到 → safe_area_score[0]=nil → 算术崩溃。
+            baseInfo.Write(0x40, 1UL); // SfLv(8)=1
+            baseInfo.WriteFixed32(0x4D, 0U); // SfPoint(9)=0.0f
+            baseInfo.Write(0x60, 1UL); // SfLvChoose(12)=1
             ms.Write(0x0A, baseInfo.ToArray());
             if (isPassed && cid > maxCopyId) maxCopyId = cid;
         }
