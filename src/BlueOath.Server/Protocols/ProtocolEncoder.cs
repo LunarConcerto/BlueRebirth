@@ -121,6 +121,22 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 TStrategy: StrategyList(1, repeated TStrategyInfo{Id=1,Level=2}) / CurCost(2) / ResetNum(3)。</summary>
+    internal static byte[] EncodeStrategyRet(IEnumerable<(int Id, int Level)> strategies, int resetNum = 0)
+    {
+        ProtocolPackage output = new();
+        foreach ((int id, int level) in strategies)
+        {
+            ProtocolPackage info = new();
+            info.Write(0x08, unchecked((ulong)id));     // Id
+            info.Write(0x10, unchecked((ulong)level));  // Level
+            output.Write(0x0A, info.ToArray());          // StrategyList(1)
+        }
+        output.Write(0x10, 0UL); // CurCost(2) = 0
+        if (resetNum != 0) output.Write(0x18, unchecked((ulong)resetNum));
+        return output.ToArray();
+    }
+
     /// <summary>编码 TVowHeroRet: Type(1)/ConfigId(2)/Num(3)/Id(4)，均为 int32。</summary>
     internal static byte[] EncodeVowHeroRet(int type, int configId, int num, int id)
     {

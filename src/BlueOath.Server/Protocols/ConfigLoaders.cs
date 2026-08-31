@@ -1092,6 +1092,35 @@ internal static class CharacterStoryLoader
     public static IReadOnlyList<HeroMemory> AllMemories => _allMemories;
 }
 
+/// <summary>加载战术（config_strategy）配置，供 strategy.GetStrategy 解锁推送使用。</summary>
+internal static class StrategyConfigLoader
+{
+    private static readonly List<ConfigStrategy> _strategies = [];
+    private static readonly HashSet<int> _ids = [];
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _strategies.Clear();
+            _ids.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigStrategy>(configDir, "config_strategy.db"))
+            {
+                _strategies.Add(cfg);
+                _ids.Add(checked((int)id));
+            }
+            _strategies.Sort((a, b) => checked((int)a.Order).CompareTo(checked((int)b.Order)));
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>全部战术（按 order 排序），用于一次性解锁。</summary>
+    public static IReadOnlyList<ConfigStrategy> All => _strategies;
+}
+
 internal static class ShipHandbookLoader
 {
     private static readonly Dictionary<int, ConfigShipHandbook> _handbooks = new();

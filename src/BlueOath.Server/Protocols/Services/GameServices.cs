@@ -72,6 +72,7 @@ internal sealed class GameServices
         ChapterCopyLoader.Load(configDir);
         DailyCopyRewardCatalog.Load(configDir);
         CopyDisplayLoader.Load(configDir);
+        StrategyConfigLoader.Load(configDir);
         TaskConfigCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
@@ -364,6 +365,14 @@ internal sealed class GameServices
             // 置 updataTog=true，玩家打开邮件页面时才 SendGetMailList 拉取邮件列表。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "payback.newPayback",
+                Time: now)),
+
+            // 战术数据推送：strategy.GetStrategy 一次性解锁全部战术（Level=1），
+            // 否则客户端战术页面 Data.strategyData 为空，全部显示"未解锁"。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "strategy.GetStrategy",
+                Ret: ProtocolEncoder.EncodeStrategyRet(
+                    StrategyConfigLoader.All.Select(s => ((int)s.Id, 1)), resetNum: 0),
                 Time: now)),
         ];
     }
