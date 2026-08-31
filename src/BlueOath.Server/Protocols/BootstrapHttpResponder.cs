@@ -61,11 +61,11 @@ internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints, Announce
 
         if (requestLine.Contains("/phone/getPlData/getPlData", StringComparison.OrdinalIgnoreCase))
         {
-            var noticeBoardJson = "null";
-            /*if (announcementConfig.NoticeBoard is { } nb)
-            {
-                noticeBoardJson = JsonSerializer.Serialize(nb);
-            }*/
+            // noticeBoard 不能是 null：cjson.decode 会把 JSON null 解析成 cjson.null
+            // （一个 userdata，truthy），platformManager.GetAnnounceState 里
+            // self.noticeBoard.beforgame 会报 "attempt to index a userdata value"。
+            // 用空对象 {} 让 self.noticeBoard 成为空 Lua 表，GetAnnounceState 返回 false。
+            var noticeBoardJson = "{}";
             return new(200, "OK", "application/json; charset=utf-8",
                 // 线上事件 1007 的固定信封是 errornu/errordesc/data。抓包已确认 errornu
                 // 为字符串；把平台字段直接摊在根对象会让 SDK 走 111111 未知错误分支。
