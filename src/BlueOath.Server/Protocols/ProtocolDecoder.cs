@@ -257,6 +257,21 @@ internal static class ProtocolDecoder
         return result;
     }
 
+    /// <summary>解码 repair.RepairHero 参数：HeroIds(1, repeated uint32), Type(2, uint32)。</summary>
+    internal static (List<uint> HeroIds, uint Type) DecodeRepairArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        List<uint> heroIds = [];
+        uint type = 0;
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 0) heroIds.Add(checked((uint)reader.ReadVarint()));
+            else if (field == 2 && wire == 0) type = checked((uint)reader.ReadVarint());
+            else reader.Skip(wire);
+        }
+        return (heroIds, type);
+    }
+
     /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>
     internal static (uint HeroId, int SkillId) DecodeStudySkillArg(byte[] args)
     {
