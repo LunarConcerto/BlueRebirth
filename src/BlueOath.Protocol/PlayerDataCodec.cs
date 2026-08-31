@@ -390,15 +390,16 @@ public static class PlayerDataCodec
     public static byte[] Encode(BathHeroInfo value)
     {
         using var output = new MemoryStream();
-        // HeroId/StartTime are written explicitly so the client never sees nil; the notice
-        // handler indexes args[1].HeroId and reads v.StartTime.
+        // HeroId/StartTime/BuffId 无条件编码：客户端 GetBathAttrBuff 用 `heroBath.BuffId == 0`
+        // 判断，缺失字段解码为 nil 时 `nil == 0` 为 false，会误入 else 分支查 config_value_effect(nil) 崩溃。
+        // BathTime/BuffTime 在算术中出现（`heroBath.BuffTime + buffInfo.time`），nil 也会崩。
         WriteVarintField(output, 1, value.HeroId);
         if (value.Pos != 0) WriteVarintField(output, 2, unchecked((ulong)value.Pos));
         if (value.IsAuto != 0) WriteVarintField(output, 3, unchecked((ulong)value.IsAuto));
         WriteVarintField(output, 4, unchecked((ulong)value.StartTime));
-        if (value.BathTime != 0) WriteVarintField(output, 5, unchecked((ulong)value.BathTime));
-        if (value.BuffId != 0) WriteVarintField(output, 6, unchecked((ulong)value.BuffId));
-        if (value.BuffTime != 0) WriteVarintField(output, 7, unchecked((ulong)value.BuffTime));
+        WriteVarintField(output, 5, unchecked((ulong)value.BathTime));
+        WriteVarintField(output, 6, unchecked((ulong)value.BuffId));
+        WriteVarintField(output, 7, unchecked((ulong)value.BuffTime));
         if (value.Power != 0) WriteVarintField(output, 8, unchecked((ulong)value.Power));
         return output.ToArray();
     }
@@ -662,7 +663,9 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         using var output = new MemoryStream();
         if (hero.Pos != 0) WriteVarintField(output, 1, unchecked((ulong)hero.Pos));
         WriteVarintField(output, 2, hero.HeroId);
-        if (buffId != 0) WriteVarintField(output, 3, unchecked((ulong)buffId));
+        // BuffId 无条件编码：客户端 _SendGiftRet 把 shipInfo.BuffId = param.BuffId，
+        // nil 时 GetBathAttrBuff 的 `heroBath.BuffId == 0` 判断为 false 会崩。
+        WriteVarintField(output, 3, unchecked((ulong)buffId));
         if (isCrit) WriteVarintField(output, 4, 1);
         return output.ToArray();
     }
