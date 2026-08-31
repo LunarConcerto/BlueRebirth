@@ -256,8 +256,38 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     ],
                 };
                 break;
-            case "hero.HeroIntensify":
             case "hero.HeroAdvanceMUB":
+                HeroService.AdvanceResult advanceMub =
+                    await hero.BuildAdvanceMubRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (!advanceMub.Changed || advanceMub.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = advanceMub.Ret,
+                        Err = 1,
+                        ErrMsg = "advance mub failed",
+                    };
+                    break;
+                }
+                PlayerAccount mubAccount = await ctx.GetAccountAsync();
+                uint mubNow = (uint)ctx.Now;
+                result = new ModuleResult
+                {
+                    Ret = advanceMub.Ret,
+                    // 彩色船突破只消耗道具，无消耗舰娘，推送更新后的主舰娘 + 背包 + 用户信息即可。
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(
+                                [GameServices.ToHeroGrid(advanceMub.UpdatedHero)], mubAccount.Dock.BagSize)),
+                            Time: mubNow)),
+                        services.BuildBagPush(mubAccount, mubNow),
+                        await services.BuildUpdateUserInfoPushAsync(ctx.ProfileId, mubNow, ctx.Ct),
+                    ],
+                };
+                break;
+            case "hero.HeroIntensify":
             case "hero.AutoEquip":
             case "hero.AutoUnEquip":
             case "hero.HeroAdvMaxLv":

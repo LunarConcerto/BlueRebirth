@@ -1121,6 +1121,35 @@ internal static class StrategyConfigLoader
     public static IReadOnlyList<ConfigStrategy> All => _strategies;
 }
 
+/// <summary>彩色船（MUB）突破的碎片换算：config_parameter[507]/[508] 决定可用道具的等效碎片数。</summary>
+internal static class MubConversionLoader
+{
+    private static int _coreToOmnipotent = 30;
+    private static int _omnipotentToFragment = 1;
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            var parameters = ConfigDbLoader.LoadAll<ConfigParameter>(configDir, "config_parameter.db");
+            if (parameters.TryGetValue(507, out ConfigParameter? p507)) _coreToOmnipotent = checked((int)p507.Value);
+            if (parameters.TryGetValue(508, out ConfigParameter? p508)) _omnipotentToFragment = checked((int)p508.Value);
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>道具 → 碎片等效数量（对应 shiplogic.GetBreakItemsNumMubo）。</summary>
+    public static int GetConversion(int itemId) => itemId switch
+    {
+        18051 => _omnipotentToFragment,                 // 万能碎片 → 彩色碎片
+        17512 => _coreToOmnipotent * _omnipotentToFragment, // 核心 → 彩色碎片
+        _ => 1,
+    };
+}
+
 internal static class ShipHandbookLoader
 {
     private static readonly Dictionary<int, ConfigShipHandbook> _handbooks = new();

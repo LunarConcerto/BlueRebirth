@@ -487,6 +487,89 @@ internal sealed class HeroService(GameServices services)
         return new([], updatedHero, consumedIds, true);
     }
 
+    /// <summary>
+    /// 处理 hero.HeroAdvanceMUB（彩色船突破）：按 config_ship_break 校验，消耗
+    /// TAdvanceMubItemInfo{ItemId,ItemNum} 道具（碎片）与货币，Advance+1、TemplateId=break_to。
+    /// 与普通突破的区别：不消耗重复舰娘，只消耗道具。
+    /// </summary>
+    internal async Task<AdvanceResult> BuildAdvanceMubRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return new([], null, [], false);
+        var (heroId, consumeItems) = ProtocolDecoder.DecodeAdvanceMubArg(request.Args);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+
+        HeroDock dock = account.Dock;
+        List<Hero> heroList = dock.Heroes.ToList();
+        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return new([], null, [], false);
+
+        Hero hero = heroList[heroIdx];
+        ConfigShipBreak? config = ShipBreakLoader.Get(hero.TemplateId);
+        if (config is null || hero.Level < config.MinLevel ||
+            !int.TryParse(config.BreakTo, out int newTemplateId) || newTemplateId <= 0)
+            return new([], null, [], false);
+
+        // 道具要求可选：配置了 break_item_mub 才校验并消耗道具；未配置（null/空）则不要求。
+        if (config.BreakItemMub is { Count: > 0 } itemReq)
+        {
+            if (itemReq.Count != 2 || itemReq[0] <= 0 || itemReq[1] <= 0 ||
+                itemReq[0] > int.MaxValue || itemReq[1] > int.MaxValue)
+                return new([], null, [], false);
+
+            int requiredFragmentId = (int)itemReq[0];
+            int requiredItemCount = (int)itemReq[1];
+            HashSet<int> allowedItems = [requiredFragmentId];
+            foreach (long usableId in config.BreakUsableitemMub ?? [])
+                if (usableId > 0 && usableId <= int.MaxValue) allowedItems.Add((int)usableId);
+
+            // 校验消耗道具：每个 ItemId 必须在 break_item_mub / break_usableitem_mub 允许范围内，
+            // 按转换率折算成碎片等效数量后总和必须等于配置要求（对应 Lua GetMuboSelectBreakItemCount）。
+            int totalItems = 0;
+            foreach ((uint itemId, int itemNum) in consumeItems)
+            {
+                if (itemId == 0 || itemNum <= 0 || itemId > int.MaxValue || !allowedItems.Contains((int)itemId))
+                    return new([], null, [], false);
+                int effective = (int)itemId == requiredFragmentId
+                    ? itemNum
+                    : itemNum * MubConversionLoader.GetConversion((int)itemId);
+                totalItems += effective;
+            }
+            if (totalItems != requiredItemCount) return new([], null, [], false);
+
+            foreach ((uint itemId, int itemNum) in consumeItems)
+            {
+                int owned = account.Bag?.Items.FirstOrDefault(i => i.TemplateId == (int)itemId)?.Num ?? 0;
+                if (owned < itemNum) return new([], null, [], false);
+            }
+        }
+
+        // 货币（config.currency_cost = [GoodsType, CurrencyId, Cost]）。
+        int currencyId = 1, currencyCost = 0;
+        if (config.CurrencyCost is { Count: 3 } currency && currency[0] == GameServices.GoodsTypeCurrency)
+        {
+            if (currency[1] <= 0 || currency[1] > int.MaxValue || currency[2] < 0 || currency[2] > int.MaxValue)
+                return new([], null, [], false);
+            currencyId = (int)currency[1];
+            currencyCost = (int)currency[2];
+        }
+        if (currencyId != 1 || currencyCost < 0 || account.Character.Gold < currencyCost)
+            return new([], null, [], false);
+
+        int newAdvance = hero.Advance + 1;
+        Hero updatedHero = hero with { Advance = newAdvance, TemplateId = newTemplateId };
+        heroList[heroIdx] = updatedHero;
+        account = account with { Dock = dock with { Heroes = heroList } };
+
+        foreach ((uint itemId, int itemNum) in consumeItems)
+            account = GameServices.AddBagItem(account, (int)itemId, -itemNum);
+        account = GameServices.AddCurrency(account, currencyId, -currencyCost);
+
+        await services.SaveAccountAsync(account, ct);
+        return new([], updatedHero, [], true);
+    }
+
     private static bool TryGetAdvanceRequirements(
         ConfigShipBreak config,
         out HashSet<int> allowedHeroTemplates,

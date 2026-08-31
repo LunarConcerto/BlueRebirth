@@ -73,6 +73,7 @@ internal sealed class GameServices
         DailyCopyRewardCatalog.Load(configDir);
         CopyDisplayLoader.Load(configDir);
         StrategyConfigLoader.Load(configDir);
+        MubConversionLoader.Load(configDir);
         TaskConfigCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);

@@ -208,6 +208,38 @@ internal static class ProtocolDecoder
         return (heroId, consumedHeros, consumeItems);
     }
 
+    /// <summary>解码 hero.HeroAdvanceMUB 参数：HeroId(1, uint32),
+    /// ConsumeItems(2, repeated TAdvanceMubItemInfo{ItemId=1, ItemNum=2})。</summary>
+    internal static (uint HeroId, List<(uint ItemId, int ItemNum)> ConsumeItems) DecodeAdvanceMubArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        uint heroId = 0;
+        List<(uint, int)> consumeItems = [];
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 0)
+            {
+                heroId = checked((uint)reader.ReadVarint());
+            }
+            else if (field == 2 && wire == 2)
+            {
+                ProtoReader item = new(reader.ReadBytes());
+                uint itemId = 0;
+                int itemNum = 0;
+                while (item.TryReadField(out int ifield, out int iwire))
+                {
+                    if (ifield == 1 && iwire == 0) itemId = checked((uint)item.ReadVarint());
+                    else if (ifield == 2 && iwire == 0) itemNum = checked((int)item.ReadVarint());
+                    else item.Skip(iwire);
+                }
+                if (itemId != 0)
+                    consumeItems.Add((itemId, itemNum));
+            }
+            else reader.Skip(wire);
+        }
+        return (heroId, consumeItems);
+    }
+
     /// <summary>解码 equip.Dismantle 参数：ConsumeIds(1, repeated uint32)。</summary>
     internal static List<uint> DecodeEquipDismantle(byte[] args)
     {
