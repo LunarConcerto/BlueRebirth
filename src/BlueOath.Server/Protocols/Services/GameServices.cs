@@ -71,6 +71,7 @@ internal sealed class GameServices
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
         DailyCopyRewardCatalog.Load(configDir);
+        CopyDisplayLoader.Load(configDir);
         TaskConfigCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);

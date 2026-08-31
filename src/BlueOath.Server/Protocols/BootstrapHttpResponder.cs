@@ -62,10 +62,10 @@ internal sealed class BootstrapHttpResponder(ServerEndpoints endpoints, Announce
         if (requestLine.Contains("/phone/getPlData/getPlData", StringComparison.OrdinalIgnoreCase))
         {
             var noticeBoardJson = "null";
-            if (announcementConfig.NoticeBoard is { } nb)
+            /*if (announcementConfig.NoticeBoard is { } nb)
             {
                 noticeBoardJson = JsonSerializer.Serialize(nb);
-            }
+            }*/
             return new(200, "OK", "application/json; charset=utf-8",
                 // 线上事件 1007 的固定信封是 errornu/errordesc/data。抓包已确认 errornu
                 // 为字符串；把平台字段直接摊在根对象会让 SDK 走 111111 未知错误分支。

@@ -1017,6 +1017,45 @@ internal static class DailyCopyRewardCatalog
         => _rewards.GetValueOrDefault(rewardId);
 }
 
+/// <summary>关卡掉落配置（config_copy_display）：副本 id → 掉落表 id 列表 + 首通奖励 id 列表。
+/// 掉落表 id 指向 config_drop_item；首通奖励 id 指向 config_rewards。</summary>
+internal static class CopyDisplayLoader
+{
+    public sealed record CopyDropInfo(IReadOnlyList<int> DropInfoId, IReadOnlyList<int> FirstReward);
+
+    private static readonly Dictionary<int, CopyDropInfo> _drops = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _drops.Clear();
+            ConfigDbLoader.LoadRows(configDir, "config_copy_display.db", (id, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                var dropInfo = new List<int>();
+                var firstReward = new List<int>();
+                if (doc.RootElement.TryGetProperty("drop_info_id", out var dropProp)
+                    && dropProp.ValueKind == JsonValueKind.Array)
+                    foreach (var item in dropProp.EnumerateArray())
+                        if (item.TryGetInt32(out var v)) dropInfo.Add(v);
+                if (doc.RootElement.TryGetProperty("first_reward", out var firstProp)
+                    && firstProp.ValueKind == JsonValueKind.Array)
+                    foreach (var item in firstProp.EnumerateArray())
+                        if (item.TryGetInt32(out var v)) firstReward.Add(v);
+                _drops[id] = new CopyDropInfo(dropInfo, firstReward);
+            });
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static CopyDropInfo? Get(int copyDisplayId)
+        => _drops.TryGetValue(copyDisplayId, out var info) ? info : null;
+}
+
 /// <summary>从个人剧情配置生成图鉴协议所需的完整 THeroMemory 列表。</summary>
 internal static class CharacterStoryLoader
 {
