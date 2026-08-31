@@ -386,22 +386,54 @@ internal sealed class GameServices
         ];
     }
 
-    /// <summary>构建天赋树列表：每个根天赋返回当前激活的 subTalent（默认根自身），IsOperate=1。</summary>
-    private static IReadOnlyList<(int TalentId, IReadOnlyList<int> PreCondition, int IsOperate)> BuildTalentTreeList(
+    /// <summary>构建天赋树列表：每个根天赋返回下一个未解锁目标（IsOperate=0），
+    /// 已到链尾时返回最大天赋（IsOperate=1）。全新账号从根节点开始手动解锁。</summary>
+    internal static IReadOnlyList<(int TalentId, IReadOnlyList<int> PreCondition, int IsOperate)> BuildTalentTreeList(
         PlayerAccount account)
     {
-        var active = account.Talent?.ActiveTalents ?? new Dictionary<int, int>();
+        var reached = account.Talent?.ActiveTalents ?? new Dictionary<int, int>();
         return TalentConfigLoader.RootTalents
             .Select(root =>
             {
                 int rootId = checked((int)root.Id);
-                active.TryGetValue(rootId, out int activeSub);
-                ConfigTalent? cfg = TalentConfigLoader.Get(activeSub != 0 ? activeSub : rootId);
-                int talentId = cfg is not null ? checked((int)cfg.Id) : rootId;
-                IReadOnlyList<int> pre = cfg?.Precondition?.Select(p => checked((int)p)).ToList() ?? [];
-                return (talentId, pre, 1);
+                reached.TryGetValue(rootId, out int reachedSub);
+                return ComputeTalentTarget(rootId, reachedSub != 0 ? reachedSub : (int?)null);
             })
             .ToList();
+    }
+
+    /// <summary>计算某根天赋链当前应展示的目标天赋：
+    /// 未解锁 → 根（IsOperate=0，显示解锁按钮）；已到链中 → 下一级（IsOperate=0，可升级）；
+    /// 已到链尾 → 自身（IsOperate=1，显示最大等级）。</summary>
+    internal static (int TalentId, IReadOnlyList<int> PreCondition, int IsOperate) ComputeTalentTarget(
+        int rootId, int? reached)
+    {
+        int targetId;
+        int isOperate;
+        if (reached is int r)
+        {
+            ConfigTalent? cfg = TalentConfigLoader.Get(r);
+            int nextId = cfg is { Nexttalent: > 0 } ? checked((int)cfg.Nexttalent) : 0;
+            if (nextId != 0)
+            {
+                targetId = nextId;
+                isOperate = 0;
+            }
+            else
+            {
+                targetId = r;
+                isOperate = 1;
+            }
+        }
+        else
+        {
+            targetId = rootId;
+            isOperate = 0;
+        }
+
+        IReadOnlyList<int> pre = TalentConfigLoader.Get(targetId)?.Precondition
+            ?.Select(p => checked((int)p)).ToList() ?? [];
+        return (targetId, pre, isOperate);
     }
 
     /// <summary>加载账号；不存在时按默认工厂创建并落盘。优先从内存缓存读取。</summary>
