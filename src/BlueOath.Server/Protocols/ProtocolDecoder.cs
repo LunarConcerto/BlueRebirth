@@ -272,6 +272,23 @@ internal static class ProtocolDecoder
         return (heroIds, type);
     }
 
+    /// <summary>解码 strategy.Apply 参数：Id(1, int32), Level(2, int32), FleetId(3, int32), TacticType(4, int32)。</summary>
+    internal static (int Id, int Level, int FleetId, int TacticType) DecodeStrategyApplyArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        int id = 0, level = 0, fleetId = 0, tacticType = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: id = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: level = checked((int)reader.ReadVarint()); break;
+                case 3 when wire == 0: fleetId = checked((int)reader.ReadVarint()); break;
+                case 4 when wire == 0: tacticType = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        return (id, level, fleetId, tacticType);
+    }
+
     /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>
     internal static (uint HeroId, int SkillId) DecodeStudySkillArg(byte[] args)
     {
