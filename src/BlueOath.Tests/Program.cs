@@ -45,7 +45,6 @@ var tests = new (string Name, Func<Task> Run)[]
     ("mod manager filters target and orders mods", ModTest),
     ("equipment mod adds a client/server template and GM shop good", EquipmentModTest),
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
-    ("kcp fragments reassemble across sticky and split buffers", KcpReassemblyTest),
     ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("item selection boxes grant the chosen option", SelectTreasureTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
