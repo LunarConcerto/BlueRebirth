@@ -93,17 +93,15 @@ internal sealed class BuildShipService(GameServices services)
         List<CommonReward> rewards = new();
         services.LastBuildHeroIds.Clear();
 
-        var entries = FlattenDropPool((int)extractConfig.DropItemId);
-        if (entries.Count == 0)
+        int rootDropItemId = (int)extractConfig.DropItemId;
+        if (PoolLevelEntries(rootDropItemId, 1).Count == 0)
             return [];
-
-        // Console.WriteLine(string.Join(",\n", entries));
 
         long extractType = extractConfig.ExtractType;
 
         for (int i = 0; i < num; i++)
         {
-            var entry = WeightedPick(entries);
+            if (DrawFromPool(rootDropItemId) is not { } entry) continue;
             (account, CommonReward reward) = GrantDropReward(account, entry, now);
             rewards.Add(reward);
         }
@@ -114,16 +112,14 @@ internal sealed class BuildShipService(GameServices services)
             bool hasSR = rewards.Any(r => r.Type == GameServices.GoodsTypeShip && GetShipRarity(r.ConfigId) >= GameServices.RaritySR);
             if (!hasSR)
             {
-                var srPlusEntries = entries.Where(
-                    e => e.GoodsType == GameServices.GoodsTypeShip && GetShipRarity(e.ConfigId) >= GameServices.RaritySR).ToList();
-                if (srPlusEntries.Count > 0)
+                if (PoolChance(rootDropItemId, GameServices.RaritySR) > 0)
                 {
                     // 从后往前找到最后一个舰船奖励并替换
                     for (int i = rewards.Count - 1; i >= 0; i--)
                     {
                         if (rewards[i].Type == GameServices.GoodsTypeShip)
                         {
-                            var newEntry = WeightedPick(srPlusEntries);
+                            if (DrawSrPlusFromPool(rootDropItemId) is not { } newEntry) break;
                             uint oldHeroId = (uint)rewards[i].Id;
                             account = GameServices.RemoveHero(account, oldHeroId);
                             services.LastBuildHeroIds.Remove(oldHeroId);
@@ -281,7 +277,150 @@ internal sealed class BuildShipService(GameServices services)
     /// 写入 TCommonReward.Id；否则客户端会把模板当背包道具解析，领奖演出和船坞都会损坏。
     /// 由 <see cref="GrantDropReward"/> 统一处理（本方法已废弃合并）。</summary>
 
-    /// <summary>递归展开 config_drop_item 掉落池，将 GoodsType.DROP 嵌套条目展开为最终物品列表。</summary>
+    /// <summary>掉落池递归深度上限，防止配置里出现自引用子池导致无限下降。</summary>
+    private const int MaxPoolDepth = 8;
+
+    /// <summary>单层掉落池条目 + 该层生效的数量倍率（嵌套条目原样保留，用于递归下降）。</summary>
+    private sealed record PoolLevelEntry(DropPoolEntry Entry, int CountMul);
+
+    /// <summary>
+    /// 取出掉落池「当前这一层」的条目，<b>不</b>展开嵌套：GoodsType.DROP 条目原样保留，
+    /// 其 ConfigId 即子池 id。抽取必须逐层进行，见 <see cref="DrawFromPool"/>。
+    /// </summary>
+    private List<PoolLevelEntry> PoolLevelEntries(int dropItemId, int countMul)
+    {
+        var result = new List<PoolLevelEntry>();
+        if (!services.DropItems.TryGetValue(dropItemId, out var dropItem))
+            return result;
+
+        if (dropItem.DropRate > 0 && dropItem.Drop is { Count: > 0 })
+            AppendLevelEntries(dropItem.Drop, countMul, result);
+
+        if (dropItem.DropAloneCount > 0 && dropItem.DropAlone is { Count: > 0 })
+            AppendLevelEntries(dropItem.DropAlone, (int)dropItem.DropAloneCount * countMul, result);
+
+        return result;
+    }
+
+    private static void AppendLevelEntries(List<List<long>> entries, int countMul, List<PoolLevelEntry> result)
+    {
+        foreach (var entry in entries)
+        {
+            if (entry.Count < 5) continue;
+            int weight = (int)entry[4];
+            if (weight == 0) continue;
+            result.Add(new PoolLevelEntry(
+                new DropPoolEntry((int)entry[0], (int)entry[1],
+                    (int)entry[2] * countMul, (int)entry[3] * countMul, weight),
+                countMul));
+        }
+    }
+
+    /// <summary>
+    /// 按嵌套结构逐层抽取：在当前层按该层自身的权重选出一条，命中 GoodsType.DROP 就进入
+    /// 对应子池再选一次，直到落在实际物品上。
+    ///
+    /// 卡池顶层条目全部是子池入口，其权重即官方公示概率（例如 106 号池
+    /// SSR 150+50、SR 1500、R 8300，合计 10000），因此<b>必须逐层归一化</b>。
+    /// 若把各子池的条目按原始权重平铺进同一张表再抽，父级权重会被整个丢弃，出率退化成
+    /// 「该稀有度有多少条船」——实测会把 SSR 由 2% 抬到 50%~70%，同时让 R 由 83% 掉到 5%~9%。
+    /// </summary>
+    private DropPoolEntry? DrawFromPool(int dropItemId, int countMul = 1)
+    {
+        for (int depth = 0; depth < MaxPoolDepth; depth++)
+        {
+            List<PoolLevelEntry> level = PoolLevelEntries(dropItemId, countMul);
+            if (level.Count == 0) return null;
+
+            PoolLevelEntry picked = PickLevel(level);
+            if (picked.Entry.GoodsType != GameServices.GoodsTypeDrop)
+                return picked.Entry;
+
+            dropItemId = picked.Entry.ConfigId;
+            countMul = picked.CountMul;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 某个掉落池最终产出「品质 &gt;= <paramref name="minRarity"/> 的舰娘」的概率，
+    /// 逐层归一化，与 <see cref="DrawFromPool"/> 的实际抽取口径完全一致。
+    /// 结果应当等于卡池顶层条目的权重占比，即官方公示概率。
+    /// </summary>
+    internal double PoolChance(int dropItemId, int minRarity, int depth = 0)
+    {
+        if (depth >= MaxPoolDepth) return 0;
+        List<PoolLevelEntry> level = PoolLevelEntries(dropItemId, 1);
+        long total = level.Sum(e => (long)e.Entry.Weight);
+        if (total <= 0) return 0;
+
+        double chance = 0;
+        foreach (PoolLevelEntry e in level)
+            chance += (double)e.Entry.Weight / total * BranchChance(e.Entry, minRarity, depth);
+        return chance;
+    }
+
+    private double BranchChance(DropPoolEntry entry, int minRarity, int depth) =>
+        entry.GoodsType == GameServices.GoodsTypeDrop
+            ? PoolChance(entry.ConfigId, minRarity, depth + 1)
+            : entry.GoodsType == GameServices.GoodsTypeShip &&
+              GetShipRarity(entry.ConfigId) >= minRarity ? 1 : 0;
+
+    /// <summary>
+    /// 在「结果为 SR 及以上舰娘」的条件下抽取，用于 10 连保底补发。
+    /// 每个分支按「该分支被选中的权重 × 该分支产出 SR+ 的概率」加权，因此得到的是真实条件
+    /// 分布——按官方 2% SSR / 15% SR 的比例，保底给出 SSR 的概率约为 2/(2+15)。
+    /// </summary>
+    private DropPoolEntry? DrawSrPlusFromPool(int dropItemId, int countMul = 1, int depth = 0)
+    {
+        if (depth >= MaxPoolDepth) return null;
+        List<PoolLevelEntry> level = PoolLevelEntries(dropItemId, countMul);
+        if (level.Count == 0) return null;
+
+        var weighted = level
+            .Select(e => (Level: e, Weight: e.Entry.Weight * BranchChance(e.Entry, GameServices.RaritySR, depth)))
+            .Where(x => x.Weight > 0)
+            .ToList();
+        double total = weighted.Sum(x => x.Weight);
+        if (total <= 0) return null;
+
+        double roll = services.Rng.NextDouble() * total;
+        double cumulative = 0;
+        foreach (var (levelEntry, weight) in weighted)
+        {
+            cumulative += weight;
+            if (roll >= cumulative) continue;
+            return levelEntry.Entry.GoodsType == GameServices.GoodsTypeDrop
+                ? DrawSrPlusFromPool(levelEntry.Entry.ConfigId, levelEntry.CountMul, depth + 1)
+                : levelEntry.Entry;
+        }
+        PoolLevelEntry last = weighted[^1].Level;
+        return last.Entry.GoodsType == GameServices.GoodsTypeDrop
+            ? DrawSrPlusFromPool(last.Entry.ConfigId, last.CountMul, depth + 1)
+            : last.Entry;
+    }
+
+    /// <summary>在单层条目中按权重抽取一条。</summary>
+    private PoolLevelEntry PickLevel(List<PoolLevelEntry> entries)
+    {
+        long totalWeight = entries.Sum(e => (long)e.Entry.Weight);
+        if (totalWeight <= 0) return entries[0];
+        long roll = services.Rng.NextInt64(totalWeight);
+        long cumulative = 0;
+        foreach (PoolLevelEntry e in entries)
+        {
+            cumulative += e.Entry.Weight;
+            if (roll < cumulative)
+                return e;
+        }
+        return entries[^1];
+    }
+
+    /// <summary>
+    /// 递归展开 config_drop_item 掉落池，将 GoodsType.DROP 嵌套条目展开为最终物品列表。
+    /// <b>仅用于枚举池内容</b>（如累计抽数奖励箱一次性发放全部物品）；展开会丢失父级权重，
+    /// 不可用于加权抽取——抽取请用 <see cref="DrawFromPool"/>。
+    /// </summary>
     private List<DropPoolEntry> FlattenDropPool(int dropItemId, int countMul = 1)
     {
         var result = new List<DropPoolEntry>();
@@ -319,22 +458,6 @@ internal sealed class BuildShipService(GameServices services)
                 result.Add(new DropPoolEntry(goodsType, configId, minNum, maxNum, weight));
             }
         }
-    }
-
-    /// <summary>按权重随机抽取一个掉落池条目。</summary>
-    private DropPoolEntry WeightedPick(List<DropPoolEntry> entries)
-    {
-        int totalWeight = entries.Sum(e => e.Weight);
-        if (totalWeight <= 0) return entries[0];
-        int roll = services.Rng.Next(totalWeight);
-        int cumulative = 0;
-        foreach (var e in entries)
-        {
-            cumulative += e.Weight;
-            if (roll < cumulative)
-                return e;
-        }
-        return entries[^1];
     }
 
     /// <summary>通过 ship_info_id 获取舰娘稀有度（quality）。</summary>

@@ -32,6 +32,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
     ("illustrate entries unlock every configured behaviour", IllustrateBehaviourUnlockTest),
     ("ship acquisition keeps the client illustrate snapshot in sync", ShipAcquisitionIllustrateSyncTest),
+    ("gacha pools draw at the rates published in the client config", GachaPoolRateTest),
     ("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest),
     ("sea-copy entries include non-nil safe-area state", SeaCopySafeAreaCodecTest),
     ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
@@ -149,6 +150,20 @@ static async Task ShipAcquisitionIllustrateSyncTest()
             Dock = new HeroDock([new Hero(10, 10210511, 5)]),
         });
 
+// 卡池顶层条目全是子池入口（GoodsType.DROP），其权重即官方公示概率；子池内部才是具体舰娘，
+// 内部权重只决定「同稀有度里出哪一条」。抽取必须逐层归一化，把子池条目按原始权重平铺到同一张
+// 表再抽会丢掉父级权重，使出率退化成「该稀有度有多少条船」。
+// 以 106 号池为例，顶层是 SSR 150+50 / SR 1500 / R 8300（合计 10000），而各子池的内部权重和分别
+// 是 6 / 57 / 50 / 11 —— 平铺后 SSR 会变成 (6+57)/124 = 50.8%，R 只剩 11/124 = 8.9%。
+static async Task GachaPoolRateTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-gacha-rate-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "gacha-rate";
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, 1));
         ServerOptions options = ServerOptions.Parse(
             ["--data=" + dataRoot,
              "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
@@ -183,6 +198,29 @@ static async Task ShipAcquisitionIllustrateSyncTest()
         byte[] expected = new ProtocolPackage().Write(0x08, (ulong)((shipTemplateId - 1) / 10)).ToArray();
         Assert(illustratePush.Ret is { Length: > 0 } && ContainsSequence(illustratePush.Ret, expected),
             "illustrate push did not carry the purchased ship's illustrate id");
+        var buildShip = new BuildShipService(services);
+
+        Assert(services.ExtractShips.TryGetValue(106, out ConfigExtractShip? pool) && pool is not null,
+            "gacha pool 106 is missing from config_extract_ship");
+        int dropItemId = (int)pool!.DropItemId;
+
+        // 官方公示：SSR 2%（UP 1.5% + 常驻 0.5%）、SR 15%、其余 83%。
+        double ssr = buildShip.PoolChance(dropItemId, 4);
+        double srPlus = buildShip.PoolChance(dropItemId, 3);
+        Assert(Math.Abs(ssr - 0.02) < 1e-9,
+            $"pool 106 SSR rate drifted from the published 2%: {ssr:P4}");
+        Assert(Math.Abs(srPlus - 0.17) < 1e-9,
+            $"pool 106 SR-and-above rate drifted from the published 17%: {srPlus:P4}");
+
+        // 其余舰船卡池同样是 2% SSR / 15% SR 的标准结构，一并守住。
+        foreach (int poolId in new[] { 109, 124, 150, 152 })
+        {
+            Assert(services.ExtractShips.TryGetValue(poolId, out ConfigExtractShip? other) && other is not null,
+                $"gacha pool {poolId} is missing from config_extract_ship");
+            double otherSsr = buildShip.PoolChance((int)other!.DropItemId, 4);
+            Assert(Math.Abs(otherSsr - 0.02) < 1e-9,
+                $"pool {poolId} SSR rate drifted from the published 2%: {otherSsr:P4}");
+        }
     }
     finally
     {
