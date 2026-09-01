@@ -43,7 +43,7 @@ CI 工作流配置文件：`.github/workflows/ci.yml`
   - `workflow_dispatch`：手动触发。
 - **build 作业**（`windows-latest`）：安装 .NET 8 SDK → `dotnet restore` → `dotnet build`（仅 Debug）→ `dotnet test`。
 - **publish 作业**（`windows-2022`，需要 build 通过）：仅在 `master` 推送、`v*` 标签或手动触发时执行；
-  自动运行 `publish-release.bat` 逻辑（`BlueOath.Publisher`），校验 `launcher-settings.json` 与 `BlueOath.Launcher.Wpf.exe` 存在性；
+  直接运行 `BlueOath.Publisher`，并校验 `launcher-settings.json` 与 `BlueOath.Launcher.Wpf.exe` 存在性；
   将产物打包 zip 上传为 GitHub Release，并同步镜像到 Gitee（`asa233/blue-rebirth`）与 `launcher-update-release.json` 清单。
 
 ## 3. 发布流水线
@@ -143,7 +143,8 @@ BlueOath-Release
 ### 4.2 实现位置
 
 - 自动更新服务：`src/BlueOath.Launcher.Wpf/Services/LauncherUpdateService.cs`
-- 启动时触发：`src/BlueOath.Launcher.Wpf/MainWindow.xaml.cs`
+- 启动时触发与单实例保护：`src/BlueOath.Launcher.Wpf/App.xaml.cs`
+- 安装目录互斥：`src/BlueOath.Launcher.Wpf/Services/LauncherExecutionGuard.cs`
 - 配置读取：`src/BlueOath.Launcher.Wpf/Models/SettingsConfig.cs`
 - 默认配置：`src/BlueOath.Launcher.Wpf/Services/SettingsService.cs`
 
@@ -168,10 +169,8 @@ BlueOath-Release
 
 ### 4.5 建议镜像策略（国内访问）
 
-1. 当前可直接使用 GitHub：
-   - `updateManifestUrl` 指向 GitHub Pages 的公开清单；
-   - CI 自动将清单和 ZIP 同步部署到 Pages，启动器无需 GitHub 登录即可下载；
-2. 如后续需要国内镜像站，仅需修改清单地址与下载地址即可，无需改代码；
+1. CI 将 ZIP 发布到 GitHub Release，同时把发行包和 `launcher-update-release.json` 同步到 Gitee；
+2. Release 包默认读取项目根目录 `launcher-update.json` 中的 Gitee 清单地址；如需切换镜像，只需修改清单地址和清单内的下载地址；
 3. 建议统一通过同一个域名承载清单和安装包，减少域名切换维护成本。
 
 当前代码仅在客户端层读取 `updateManifestUrl`，该值在 `launcher-settings.json` 中显式配置后生效；清单内可灵活切换下载源。
@@ -186,18 +185,24 @@ Debug CI 默认发布到 Gitee 镜像，清单地址为：
 1. 启动时读取版本清单，提取 `version`；
 2. 与 `VersionInfo.Version` 做 `System.Version` 比较；
 3. 发现更新则弹窗确认；
-4. 下载更新压缩包到 `%TEMP%\BlueOathLauncherUpdate`；
+4. 下载更新压缩包到安装目录的 `.update\launcher-update.zip`；一次性 PowerShell 脚本写入 `%TEMP%\BlueOathLauncherUpdate\scripts`；
 5. 写入一次性 PowerShell 脚本并携带参数：
    - 根目录 `rootDir`
    - 压缩包路径 `zipPath`
    - 启动器文件名 `exeName`
    - 当前启动器进程 id `launcherPid`
 6. 启动脚本后关闭当前启动器：
-   - 脚本先等待旧进程结束；
-   - 解压到临时目录；
+   - 外部安装器先取得当前安装目录专属的更新互斥锁，并显示持续可见的安装窗口；
+   - 在旧启动器仍持有单实例锁时，先解压并校验新启动器文件；
+   - 通过命名事件完成“安装器已就绪”的无空窗交接，旧启动器收到信号后才退出；
+   - 安装器等待旧进程完全结束；
    - 复制新文件到根目录；
+   - 被占用文件最多自动重试 5 次；
    - 清理临时文件；
+   - 释放更新互斥锁；
    - 重启新启动器。
+
+启动器自身还持有安装目录专属的单实例互斥锁。覆盖安装期间再次双击启动器时，新进程会检测到更新互斥锁并立即退出；不能在这个进程中显示模态提示，否则提示框本身会继续占用待替换的 EXE/DLL。更新状态统一由持续可见的外部安装窗口展示。安装器复制前还会按完整可执行文件路径确认同目录的其他启动器进程均已退出，随后再执行带重试的覆盖。安装器准备失败时旧启动器继续运行；旧进程退出后的覆盖失败会写入发布包根目录的 `launcher-update-error.log` 并显示错误提示。
 
 > 说明：当前策略是“覆盖式更新”，不会删除新包里不存在的旧文件。若需要全量清理策略，请在发布流程明确目录约定后再引入。
 
@@ -206,6 +211,8 @@ Debug CI 默认发布到 Gitee 镜像，清单地址为：
 - 建议发布新版本时把启动器目录打包为 zip 根目录直接包含 `BlueOath.Launcher.Wpf.exe` 等目标文件；
 - 保持 `executableName` 与实际可执行文件名一致；
 - 当清单不可访问或解析失败时，启动器静默跳过更新，不影响正常启动流程。
+- 更新安装窗口关闭前不要强制结束安装器进程；窗口会在覆盖完成后自动关闭并重启启动器。
+- 若更新失败，先查看发布包根目录的 `launcher-update-error.log`，排除杀毒软件或其他程序占用文件后重试。
 
 ### 4.8 推荐 launcher-settings 配置示例
 
@@ -226,6 +233,10 @@ Debug CI 默认发布到 Gitee 镜像，清单地址为：
   - 检查 `autoUpdateEnabled` 是否为 `true`；
   - `updateManifestUrl` 是否可访问；
   - 清单 `version` 大于当前版本（严格比较）。
+- 更新期间重复打开启动器：
+  - 新进程应立即退出，不再额外弹出会占用文件的提示框；
+  - 安装进度窗口应始终可见，覆盖完成后自动重启；
+  - 如果仍能同时打开两个主窗口，检查运行的启动器是否已经升级到包含安装互斥保护的版本。
 - 双击启动器仍提示安装或更新 .NET：
   - 启动器采用轻量的框架依赖发布，不在发行包中内置 .NET 运行库；
   - 必须安装与程序架构一致的 **.NET Desktop Runtime 8 x64**，普通 **.NET Runtime** 不包含 WPF；

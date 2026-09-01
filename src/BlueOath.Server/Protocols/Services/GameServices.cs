@@ -34,6 +34,7 @@ internal sealed class GameServices
     private readonly Dictionary<int, ConfigExtractShip> _extractShips;
     private readonly Dictionary<int, ConfigDropItem> _dropItems;
     private readonly Dictionary<int, ConfigItemInfo> _itemInfos;
+    private readonly Dictionary<int, ConfigItemSelected> _itemSelected;
     private readonly Dictionary<int, ConfigSpecialdraw> _specialDraws;
     private readonly Dictionary<int, ConfigShipInfo> _shipInfos;
     private readonly Dictionary<int, int> _expPerItem;
@@ -67,6 +68,7 @@ internal sealed class GameServices
         ConstructionConfigLoader.Load(configDir);
         BuildingConfigLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
+        _itemSelected = ItemSelectedLoader.Load(configDir);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
@@ -119,6 +121,7 @@ internal sealed class GameServices
 
     /// <summary>道具配置（宝箱道具通过 DropId 指向 config_drop_item）。</summary>
     internal IReadOnlyDictionary<int, ConfigItemInfo> ItemInfos => _itemInfos;
+    internal IReadOnlyDictionary<int, ConfigItemSelected> ItemSelected => _itemSelected;
 
     /// <summary>船信息配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigShipInfo> ShipInfos => _shipInfos;
@@ -711,6 +714,30 @@ internal sealed class GameServices
     /// <summary>序列化 GUIDE_DONE_STAGES（Serialize 生成的字符串，key 为字符串）。</summary>
     private static string BuildDoneGuideStages() =>
         "{" + string.Join(",", DoneGuideStages.Select(id => $"[\"{id}\"]=1")) + "}";
+
+    /// <summary>
+    /// 时装解锁：按 config_ship_info.sf_id 归组写入玩家时装表，重复解锁不会产生重复项。
+    /// 商店购买与选择箱开启共用（选择箱的道具类里含时装奖励，不能走 AddBagItem）。
+    /// </summary>
+    internal PlayerAccount AddFashion(PlayerAccount account, int fashionTid)
+    {
+        var fashion = account.Fashion ?? new PlayerFashion([]);
+        var entries = fashion.Entries.ToList();
+        var sfId = FashionSfIdMap.GetValueOrDefault(fashionTid, fashionTid);
+        var idx = entries.FindIndex(e => e.SfId == sfId);
+        if (idx >= 0)
+        {
+            var tids = entries[idx].FashionTids.ToList();
+            if (!tids.Contains(fashionTid))
+                tids.Add(fashionTid);
+            entries[idx] = entries[idx] with { FashionTids = tids };
+        }
+        else
+        {
+            entries.Add(new FashionEntry(sfId, [fashionTid]));
+        }
+        return account with { Fashion = fashion with { Entries = entries } };
+    }
 
     /// <summary>设置装备的 HeroId（装备/卸下）。</summary>
     internal static PlayerAccount SetEquipHeroId(PlayerAccount account, uint equipId, uint heroId)
