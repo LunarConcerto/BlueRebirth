@@ -18,6 +18,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("real login protobuf payload round-trips", LoginProtobufTest),
     ("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest),
     ("launcher profile names initialize and migrate character names", AccountProfileNameMigrationTest),
+    ("legacy hero-advance duplicate ids migrate to the upgraded survivor", DuplicateHeroMigrationTest),
     ("client login wire envelope round-trips", ClientLoginWireTest),
     ("temporary game login frame round-trips", GameLoginFrameTest),
     ("equipment enhancement response contains required payload", EquipEnhanceRetCodecTest),
@@ -33,6 +34,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("illustrate entries unlock every configured behaviour", IllustrateBehaviourUnlockTest),
     ("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest),
     ("sea-copy entries include non-nil safe-area state", SeaCopySafeAreaCodecTest),
+    ("daily-copy gameplay unlocks and resets destroyer challenge progress", DailyCopyGameplayTest),
+    ("tasks remain incomplete until persisted progress reaches the goal", TaskCompletionRequiresProgressTest),
     ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
     ("remould config and hero protobuf fields match the client", RemouldConfigAndCodecTest),
     ("sqlite repository persists and isolates profiles", StorageTest),
@@ -42,6 +45,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("equipment mod adds a client/server template and GM shop good", EquipmentModTest),
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
     ("kcp fragments reassemble across sticky and split buffers", KcpReassemblyTest),
+    ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
@@ -110,12 +114,18 @@ if (args.Contains("--building-integration", StringComparer.OrdinalIgnoreCase))
     ];
 if (args.Contains("--fashion-preview-mod", StringComparer.OrdinalIgnoreCase))
     tests = [("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest)];
+if (args.Contains("--buildship-new-state-native", StringComparer.OrdinalIgnoreCase))
+    tests = [("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest)];
 if (args.Contains("--login-integration", StringComparer.OrdinalIgnoreCase))
     tests = [("protobuf login server creates a local profile", GameLoginIntegrationTest)];
 if (args.Contains("--mubar-battle-codec", StringComparer.OrdinalIgnoreCase))
     tests = [("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest)];
 if (args.Contains("--sea-safe-codec", StringComparer.OrdinalIgnoreCase))
     tests = [("sea-copy entries include non-nil safe-area state", SeaCopySafeAreaCodecTest)];
+if (args.Contains("--dailycopy", StringComparer.OrdinalIgnoreCase))
+    tests = [("daily-copy gameplay unlocks and resets destroyer challenge progress", DailyCopyGameplayTest)];
+if (args.Contains("--task-completion", StringComparer.OrdinalIgnoreCase))
+    tests = [("tasks remain incomplete until persisted progress reaches the goal", TaskCompletionRequiresProgressTest)];
 if (args.Contains("--account-profile", StringComparer.OrdinalIgnoreCase))
     tests = [
         ("selected launcher profile flows through bootstrap login responses", AccountProfileBootstrapTest),
@@ -408,13 +418,39 @@ static Task RemouldConfigAndCodecTest()
 
 static Task ConstructionConfigAndCodecTest()
 {
-    ConstructionConfigLoader.Load(FindClientConfigDir());
+    string configDir = FindClientConfigDir();
+    ConstructionConfigLoader.Load(configDir);
     Assert(ConstructionConfigLoader.Formulas.Count == 4,
         "traditional construction formulas were not loaded");
     Assert(ConstructionConfigLoader.Qualities.Count == 2020,
         "traditional construction quality curve was not loaded");
     Assert(ConstructionConfigLoader.Ships.Count == 30,
         "traditional construction ship packages were not loaded");
+    Assert(ConstructionService.FormatFormulaMessage(999, 999, 999) ==
+           "固定建造配方\n金999 钢999 铝999",
+        "traditional construction discussion text does not fit all three resources");
+
+    ShipMainLoader.Load(configDir);
+    ShipHandbookLoader.Load(configDir);
+    var (_, _, _, shipInfos) = BuildShipExtractLoader.Load(configDir);
+    BuildFormulaCatalog.Load(shipInfos);
+    var remouldHandbooks = ShipHandbookLoader.All
+        .Where(entry => entry.Value.ShowState == 1 && entry.Value.ShowTag == 1)
+        .ToList();
+    Assert(remouldHandbooks.Count > 0,
+        "client config did not contain an open remould handbook entry for construction alias coverage");
+    foreach (var (remouldShipInfoId, _) in remouldHandbooks)
+    {
+        Assert(shipInfos.TryGetValue(remouldShipInfoId, out ConfigShipInfo? remouldInfo) &&
+               remouldInfo.SfId > 0,
+            $"remould handbook {remouldShipInfoId} did not identify its base ship");
+        int baseTemplateId = BuildFormulaCatalog.TryGetTemplateByHtid(checked((int)remouldInfo!.SfId));
+        Assert(baseTemplateId > 0 &&
+               BuildFormulaCatalog.TryGetTemplateByHtid(remouldShipInfoId) == baseTemplateId,
+            $"remould handbook {remouldShipInfoId} did not resolve to its base construction formula");
+        Assert(BuildFormulaCatalog.GetFormula(remouldShipInfoId * 10 + 1) is null,
+            $"remould handbook {remouldShipInfoId} became an independent construction target");
+    }
 
     var steel = new ProtocolPackage().Write(0x08, 10029UL).Write(0x10, 30UL);
     var aluminium = new ProtocolPackage().Write(0x08, 10030UL).Write(0x10, 40UL);
@@ -796,6 +832,18 @@ static async Task AccountStorageTest()
     Assert(account.Character.SecretaryId == 1, "secretary id mismatch");
     Assert(account.Dock.Heroes.Count == 1, "dock should contain one hero");
     Assert(account.Dock.Heroes[0].HeroId == account.Character.SecretaryId, "secretary hero not in dock");
+    Hero initialHero = account.Dock.Heroes[0];
+    Assert(initialHero.Lock, "initial secretary hero was not locked");
+    Assert(initialHero.EquipSlots?.SequenceEqual(new uint[] { 1, 0, 2, 0, 0, 0 }) == true,
+        "initial secretary hero equipment slots mismatch");
+    Assert(account.Equip?.Items is { Count: 2 } initialEquips &&
+           initialEquips.Select(x => x.TemplateId).SequenceEqual(new[]
+           {
+               PlayerAccountFactory.DefaultHeroMainGunTemplateId,
+               PlayerAccountFactory.DefaultHeroSecondaryGunTemplateId,
+           }) &&
+           initialEquips.All(x => x.HeroId == initialHero.HeroId),
+        "initial secretary equipment instances were not created and bound");
 
     // 修改并保存账号，验证往返持久化。
     var updated = account with
@@ -854,7 +902,8 @@ static Task AccountProfileBootstrapTest()
 
     using JsonDocument plData = JsonDocument.Parse(
         responder.BuildResponse("GET /phone/getPlData/getPlData HTTP/1.1").Body);
-    Assert(plData.RootElement.GetProperty("pid").GetString() == profileId,
+    Assert(plData.RootElement.GetProperty("errornu").GetString() == "0" &&
+           plData.RootElement.GetProperty("data").GetProperty("pid").GetString() == profileId,
         "getPlData did not expose selected profile");
 
     using JsonDocument login = JsonDocument.Parse(
@@ -867,6 +916,33 @@ static Task AccountProfileBootstrapTest()
         responder.BuildResponse("GET /gethash HTTP/1.1").Body);
     Assert(hash.RootElement.GetProperty("pid").GetString() == profileId,
         "gethash did not expose selected profile");
+    return Task.CompletedTask;
+}
+
+static Task DuplicateHeroMigrationTest()
+{
+    PlayerAccount account = PlayerAccountFactory.CreateDefault("duplicate-hero", 1);
+    Hero original = account.Dock.Heroes[0] with
+    {
+        HeroId = 11,
+        TemplateId = 20640214,
+        Advance = 3,
+        Level = 49,
+    };
+    Hero upgraded = original with { TemplateId = 20640215, Advance = 4 };
+    Hero neighbor = original with { HeroId = 14, TemplateId = 20620111, Advance = 0 };
+    account = account with
+    {
+        Dock = account.Dock with { Heroes = [original, upgraded, neighbor] },
+    };
+
+    PlayerAccount repaired = GameServices.RepairDuplicateHeroIds(account);
+    Assert(repaired.Dock.Heroes.Select(hero => hero.HeroId).SequenceEqual([11U, 14U]) &&
+           repaired.Dock.Heroes[0].TemplateId == 20640215 &&
+           repaired.Dock.Heroes[0].Advance == 4,
+        "duplicate hero migration did not preserve the upgraded record");
+    Assert(ReferenceEquals(GameServices.RepairDuplicateHeroIds(repaired), repaired),
+        "duplicate hero migration was not idempotent");
     return Task.CompletedTask;
 }
 
@@ -893,6 +969,15 @@ static Task AccountProfileNameMigrationTest()
     PlayerAccount preserved = GameServices.SynchronizeProfileDisplayName(custom, "Carol");
     Assert(preserved.Character.Name == "游戏内昵称" && preserved.ProfileDisplayName == "Carol",
         "custom in-game character name was overwritten");
+
+    byte[] userList = GameServices.EncodeGetUsers(preserved);
+    ProtocolDecoder.ProtoReader listReader = new(userList);
+    Assert(listReader.TryReadField(out int field, out int wire) && field == 1 && wire == 2,
+        "saved character was omitted from player.GetUserList");
+    byte[] userInfo = listReader.ReadBytes().ToArray();
+    Assert(ProtocolDecoder.DecodeStringField(userInfo, 2) == "游戏内昵称" &&
+           ProtocolDecoder.DecodeVarintField(userInfo, 3) == 80,
+        "player.GetUserList did not preserve the saved character name and level");
     return Task.CompletedTask;
 }
 
@@ -976,6 +1061,25 @@ static Task FashionPreviewModTest()
            bootstrap.Contains("global_watchers", StringComparison.Ordinal) &&
            bootstrap.Contains("watch_global = function", StringComparison.Ordinal),
         "fashion preview fix is missing its shared runtime global watcher");
+    return Task.CompletedTask;
+}
+
+static Task BuildShipNewStateNativePatchTest()
+{
+    string root = FindRepositoryRoot();
+    string source = File.ReadAllText(Path.Combine(root, "native", "Payload", "lua_mod_loader.cpp"));
+    Assert(source.Contains("BuildShipCheckShowMeetPatched", StringComparison.Ordinal) &&
+           source.Contains("pendingBuildShipIsNew", StringComparison.Ordinal) &&
+           source.Contains("ShowGirlUpdatePagePatched", StringComparison.Ordinal) &&
+           source.Contains("showGirlSetField(state, paramIndex, \"bNew\")", StringComparison.Ordinal),
+        "native xLua bridge does not carry CheckShowMeet into ShowGirlPage");
+    Assert(source.Contains("hasBuildNum && !hasGetWay", StringComparison.Ordinal) &&
+           source.Contains("TryPatchBuildShipNewState(state)", StringComparison.Ordinal),
+        "native build-ship patch is not scoped and invoked for live Lua states");
+
+    string bootstrap = File.ReadAllText(Path.Combine(root, "Mods", "bootstrap.lua"));
+    Assert(!bootstrap.Contains("buildship-new-state-fix", StringComparison.Ordinal),
+        "build-ship new-state fix still depends on a Lua mod entry");
     return Task.CompletedTask;
 }
 
@@ -1680,8 +1784,15 @@ static async Task EquipEnhanceIntegrationTest()
     const uint boundEquipId = 79;
     const uint goldEquipId = 80;
     const uint legacyGoldEquipId = 81;
+    const uint riseStarEquipId = 82;
+    const uint riseStarConsumedEquipId = 83;
+    const uint universalRiseStarEquipId = 84;
+    const uint universalCoreEquipId = 85;
+    const uint wrongQualityCoreEquipId = 86;
     const int urEquipTemplateId = 100106;
     const int goldEquipTemplateId = 100101;
+    const int goldUniversalCoreTemplateId = 30581;
+    const int purpleUniversalCoreTemplateId = 30582;
 
     var repo = new SqliteGameRepository(data);
     await repo.CreateAsync(profileId, profileId);
@@ -1704,6 +1815,11 @@ static async Task EquipEnhanceIntegrationTest()
             new EquipItem(goldEquipId, goldEquipTemplateId),
             // Older builds stored only the remainder instead of cumulative EnhanceExp.
             new EquipItem(legacyGoldEquipId, goldEquipTemplateId, EnhanceLv: 3, EnhanceExp: 0),
+            new EquipItem(riseStarEquipId, goldEquipTemplateId, EnhanceLv: 15, Star: 2),
+            new EquipItem(riseStarConsumedEquipId, goldEquipTemplateId),
+            new EquipItem(universalRiseStarEquipId, goldEquipTemplateId, EnhanceLv: 15, Star: 2),
+            new EquipItem(universalCoreEquipId, goldUniversalCoreTemplateId),
+            new EquipItem(wrongQualityCoreEquipId, purpleUniversalCoreTemplateId),
         ], 2000),
         Bag = new PlayerBag(
         [
@@ -1711,7 +1827,7 @@ static async Task EquipEnhanceIntegrationTest()
             new BagItem(10029, 200),
             new BagItem(10030, 200),
             new BagItem(60003, 15),
-            new BagItem(10000, 12),
+            new BagItem(10000, 53),
         ], 100),
     };
     await repo.SaveAccountAsync(seeded);
@@ -1767,6 +1883,14 @@ static async Task EquipEnhanceIntegrationTest()
                     .Write(0x10, item.Num);
                 args.Write(0x12, body.ToArray());
             }
+            return args.ToArray();
+        }
+
+        static byte[] RiseStarArgs(uint equipId, params uint[] consumeIds)
+        {
+            var args = new ProtocolPackage().Write(0x08, equipId);
+            foreach (uint consumeId in consumeIds)
+                args.Write(0x10, consumeId);
             return args.ToArray();
         }
 
@@ -1839,8 +1963,64 @@ static async Task EquipEnhanceIntegrationTest()
             "equipped UR bound enhancement did not persist level 36");
         Assert(boundEnhanced.Character.UrEquipCoin == 90 && boundEnhanced.Character.Gold == 65_000,
             "equipped UR bound enhancement did not consume configured currencies");
-        Assert(!boundEnhanced.Bag!.Items.Any(i => i.TemplateId is 60003 or 10000),
+        Assert(!boundEnhanced.Bag!.Items.Any(i => i.TemplateId == 60003) &&
+               boundEnhanced.Bag.Items.Single(i => i.TemplateId == 10000).Num == 41,
             "equipped UR bound enhancement did not consume configured bag materials");
+
+        var (riseStarResponse, riseStarPushes) = await RoundTrip(
+            "equip.RiseStar", RiseStarArgs(riseStarEquipId, riseStarConsumedEquipId));
+        Assert(riseStarResponse.Err == 0 && riseStarResponse.Ret is { Length: > 0 },
+            "gold equipment rise-star was rejected");
+        Assert(riseStarPushes.Any(p => p.Method == "user.UpdateUserInfo") &&
+               riseStarPushes.Any(p => p.Method == "bag.UpdateBagData"),
+            "rise-star did not refresh currency and bag data before its response");
+        TResponse riseStarEquipPush = riseStarPushes.Single(p => p.Method == "equip.UpdateEquipBagData");
+        byte[] consumedDeletion = PlayerDataCodec.Encode(
+            new EquipInfo(riseStarConsumedEquipId, TemplateId: 0));
+        Assert(riseStarEquipPush.Ret is { Length: > 0 } &&
+               ContainsSequence(riseStarEquipPush.Ret, consumedDeletion),
+            "rise-star equipment push omitted the consumed equipment deletion marker");
+
+        PlayerAccount risenStar = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("rise-star account disappeared");
+        Assert(risenStar.Equip!.Items.Single(e => e.EquipId == riseStarEquipId).Star == 3 &&
+               risenStar.Equip.Items.All(e => e.EquipId != riseStarConsumedEquipId),
+            "rise-star did not persist the target update and consumed equipment removal");
+        Assert(risenStar.Character.Gold == 45_000 &&
+               risenStar.Bag!.Items.Single(i => i.TemplateId == 10000).Num == 21,
+            "rise-star did not consume its configured currency and item costs");
+
+        var (wrongCoreResponse, wrongCorePushes) = await RoundTrip(
+            "equip.RiseStar", RiseStarArgs(universalRiseStarEquipId, wrongQualityCoreEquipId));
+        Assert(wrongCoreResponse.Err != 0 && wrongCorePushes.Count == 0,
+            "rise-star accepted a universal core with the wrong quality");
+        PlayerAccount wrongCoreRejected = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("wrong-quality core rejection account disappeared");
+        Assert(wrongCoreRejected.Equip!.Items.Single(e => e.EquipId == universalRiseStarEquipId).Star == 2 &&
+               wrongCoreRejected.Equip.Items.Any(e => e.EquipId == wrongQualityCoreEquipId) &&
+               wrongCoreRejected.Character.Gold == 45_000 &&
+               wrongCoreRejected.Bag!.Items.Single(i => i.TemplateId == 10000).Num == 21,
+            "wrong-quality universal core rejection mutated the account");
+
+        var (universalResponse, universalPushes) = await RoundTrip(
+            "equip.RiseStar", RiseStarArgs(universalRiseStarEquipId, universalCoreEquipId));
+        Assert(universalResponse.Err == 0 && universalResponse.Ret is { Length: > 0 },
+            "gold equipment rise-star rejected its same-quality universal core");
+        byte[] universalDeletion = PlayerDataCodec.Encode(
+            new EquipInfo(universalCoreEquipId, TemplateId: 0));
+        TResponse universalEquipPush = universalPushes.Single(p => p.Method == "equip.UpdateEquipBagData");
+        Assert(universalEquipPush.Ret is { Length: > 0 } &&
+               ContainsSequence(universalEquipPush.Ret, universalDeletion),
+            "rise-star equipment push omitted the consumed universal core deletion marker");
+        PlayerAccount universalRisenStar = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("universal rise-star account disappeared");
+        Assert(universalRisenStar.Equip!.Items.Single(e => e.EquipId == universalRiseStarEquipId).Star == 3 &&
+               universalRisenStar.Equip.Items.All(e => e.EquipId != universalCoreEquipId) &&
+               universalRisenStar.Equip.Items.Any(e => e.EquipId == wrongQualityCoreEquipId),
+            "rise-star did not consume only the selected same-quality universal core");
+        Assert(universalRisenStar.Character.Gold == 25_000 &&
+               universalRisenStar.Bag!.Items.Single(i => i.TemplateId == 10000).Num == 1,
+            "universal-core rise-star did not consume its configured currency and item costs");
     }
     finally
     {
@@ -2677,6 +2857,173 @@ static Task SeaCopySafeAreaCodecTest()
     }
 
     Assert(foundSafeAreaCopy, "sea-copy synchronization did not include safe-area copy 5011");
+    return Task.CompletedTask;
+}
+
+static async Task DailyCopyGameplayTest()
+{
+    string root = FindRepositoryRoot();
+    string configDir = FindClientConfigDir();
+    ChapterCopyLoader.Load(configDir);
+    CopyBattleLoader.Load(configDir);
+
+    Assert(ChapterCopyLoader.GetCopyType(20101) == 9,
+        "destroyer challenge 20101 was not classified as DailyCopy");
+    Assert(ChapterCopyLoader.GetDailyChapterId(20101) == 20001 &&
+           ChapterCopyLoader.GetDailyGroupId(20001) == 2,
+        "destroyer challenge chapter/group mapping does not match client config");
+    Assert(ChapterCopyLoader.GetDailyCopyIds(20001).SequenceEqual(Enumerable.Range(20101, 10)),
+        "destroyer challenge did not load all ten configured difficulties");
+    Assert(ChapterCopyLoader.GetDailyTreatyCopyIds(20001).SequenceEqual([20518]) &&
+           ChapterCopyLoader.IsDailyTreatyCopy(20518),
+        "destroyer challenge did not load its configured treaty stage");
+
+    PlayerAccount codecAccount = PlayerAccountFactory.CreateDefault("daily-copy-codec", 1);
+    byte[] startPayload = ProtocolEncoder.EncodeStartBaseRet(
+        20101, codecAccount.Dock.Heroes.ToList(), codecAccount.Character);
+    Assert(ProtocolDecoder.DecodeVarintField(startPayload, 7) == 9,
+        "copy.StartBase did not preserve DailyCopy type 9");
+
+    byte[] copyPayload = ProtocolEncoder.EncodeDailyCopyInfo();
+    int baseInfoCount = 0;
+    bool foundFirstDestroyerLevel = false, foundDestroyerTreaty = false;
+    ProtocolDecoder.ProtoReader copyReader = new(copyPayload);
+    while (copyReader.TryReadField(out int field, out int wire))
+    {
+        if (field != 1 || wire != 2)
+        {
+            copyReader.Skip(wire);
+            continue;
+        }
+        baseInfoCount++;
+        int baseId = 0;
+        ProtocolDecoder.ProtoReader baseInfo = new(copyReader.ReadBytes());
+        while (baseInfo.TryReadField(out int baseField, out int baseWire))
+        {
+            if (baseField == 1 && baseWire == 0) baseId = checked((int)baseInfo.ReadVarint());
+            else baseInfo.Skip(baseWire);
+        }
+        if (baseId == 20101) foundFirstDestroyerLevel = true;
+        if (baseId == 20518) foundDestroyerTreaty = true;
+    }
+    Assert(baseInfoCount == 44 && foundFirstDestroyerLevel && foundDestroyerTreaty,
+        "DailyCopy synchronization omitted configured normal or treaty levels");
+
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-daily-copy-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "daily-copy-player";
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        ServerOptions options = ServerOptions.Parse([
+            "--data=" + dataRoot,
+            "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
+            "--profile-id=" + profileId,
+        ]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var dailyCopy = new DailyCopyService(services);
+        const int today = 1_800_000_000;
+
+        PlayerAccount account = await dailyCopy.GetRefreshedAccountAsync(
+            profileId, today, CancellationToken.None);
+        Assert(account.DailyCopy?.Chapters?.Count == 4 && account.DailyCopy.Groups?.Count == 4,
+            "dailycopy.GetData did not initialize all client chapter/group rows");
+
+        DailyCopyPassMutation mutation = dailyCopy.RecordPass(account, 20101, 3, today);
+        account = mutation.Account;
+        Assert(mutation.FirstPass, "first destroyer challenge clear was not marked as first pass");
+        Assert(mutation.Rewards.Count >= 3 && mutation.Rewards.All(x => x.Num > 0),
+            "destroyer clear omitted its configured first-pass/basic drops");
+        await services.SaveAccountAsync(account, CancellationToken.None);
+        DailyCopyChapterProgress destroyer = account.DailyCopy!.Chapters!
+            .Single(x => x.ChapterId == 20001);
+        Assert(destroyer.ChallengeTimes == 1 && destroyer.PassCopy?.SequenceEqual([20101]) == true,
+            "destroyer clear did not persist challenge count and unlock progress");
+        Assert(account.DailyCopy.Groups!.Single(x => x.DailyGroupId == 2).SuccessTimes == 1,
+            "destroyer clear did not increment daily group success count");
+
+        DailyCopyPassMutation treatyMutation = dailyCopy.RecordPass(account, 20518, 3, today);
+        account = treatyMutation.Account;
+        DailyCopyChapterProgress treatyDestroyer = account.DailyCopy!.Chapters!
+            .Single(x => x.ChapterId == 20001);
+        Assert(treatyMutation.FirstPass &&
+               treatyMutation.Rewards.Where(x => x.ConfigId == 13001).Sum(x => x.Num) >= 5_560,
+            "destroyer treaty clear omitted its configured pass/star rewards");
+        Assert(treatyDestroyer.ChallengeTimes == 2 &&
+               treatyDestroyer.PassCopy?.Contains(20518) == true &&
+               treatyDestroyer.SelectEx && treatyDestroyer.ExStar == 3,
+            "destroyer treaty clear did not persist its pass and EX-star state");
+        Assert(account.DailyCopy.Groups!.Single(x => x.DailyGroupId == 2).SuccessTimes == 2,
+            "destroyer treaty clear did not increment daily group success count");
+        await services.SaveAccountAsync(account, CancellationToken.None);
+
+        byte[] statePayload = DailyCopyService.EncodeSnapshot(account.DailyCopy, today);
+        int chapterRows = 0, groupRows = 0, extraRows = 0;
+        ProtocolDecoder.ProtoReader stateReader = new(statePayload);
+        while (stateReader.TryReadField(out int stateField, out int stateWire))
+        {
+            if (stateWire == 2 && stateField is >= 1 and <= 3)
+            {
+                _ = stateReader.ReadBytes();
+                if (stateField == 1) chapterRows++;
+                else if (stateField == 2) groupRows++;
+                else extraRows++;
+            }
+            else stateReader.Skip(stateWire);
+        }
+        Assert(chapterRows == 4 && groupRows == 4 && extraRows == 4,
+            "dailycopy.UpdateDailyCopyData omitted a repeated array required by the client");
+
+        PlayerAccount tomorrow = await dailyCopy.GetRefreshedAccountAsync(
+            profileId, today + 86_400, CancellationToken.None);
+        DailyCopyChapterProgress resetDestroyer = tomorrow.DailyCopy!.Chapters!
+            .Single(x => x.ChapterId == 20001);
+        Assert(resetDestroyer.ChallengeTimes == 0 &&
+               resetDestroyer.PassCopy?.Contains(20101) == true &&
+               resetDestroyer.PassCopy?.Contains(20518) == true &&
+               resetDestroyer.ExStar == 3 &&
+               tomorrow.DailyCopy.Groups!.Single(x => x.DailyGroupId == 2).SuccessTimes == 0,
+            "cross-day refresh did not reset counts while preserving normal/treaty progress");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+static Task TaskCompletionRequiresProgressTest()
+{
+    TaskDefinition definition = new(
+        TaskConfigCatalog.TypeDaily, 10, EventType: 2, Goal: 3, CountType: 1, RewardId: 40008);
+
+    byte[] emptyTask = TaskProtocolCodec.EncodeTask(definition, null);
+    Assert(ProtocolDecoder.DecodeVarintField(emptyTask, 3) == 0 &&
+           ProtocolDecoder.DecodeVarintField(emptyTask, 4) == 0,
+        "a task without progress encoded a finish time or completed count");
+
+    Assert(!TaskService.IsCompleted(null, definition),
+        "a task without persisted progress was treated as complete");
+    Assert(!TaskService.IsCompleted(
+            new PlayerTaskRecord(definition.TaskType, definition.Id, 0, Count: 2), definition),
+        "task progress below the configured goal was treated as complete");
+    Assert(TaskService.IsCompleted(
+            new PlayerTaskRecord(definition.TaskType, definition.Id, 0, Count: 3), definition),
+        "task progress at the configured goal was not treated as complete");
+    Assert(TaskService.IsCompleted(
+            new PlayerTaskRecord(definition.TaskType, definition.Id, FinishTime: 1, Count: 0), definition),
+        "an explicitly finished task was not treated as complete");
+
+    Dictionary<(int Type, int Id), PlayerTaskRecord> noProgress = [];
+    Assert(TaskProtocolCodec.GetEventProgress([definition], noProgress) == 0,
+        "an event without persisted progress encoded its goal as current progress");
+    Dictionary<(int Type, int Id), PlayerTaskRecord> partialProgress = new()
+    {
+        [(definition.TaskType, definition.Id)] =
+            new PlayerTaskRecord(definition.TaskType, definition.Id, 0, Count: 2)
+    };
+    Assert(TaskProtocolCodec.GetEventProgress([definition], partialProgress) == 2,
+        "partial task event progress was not preserved");
     return Task.CompletedTask;
 }
 

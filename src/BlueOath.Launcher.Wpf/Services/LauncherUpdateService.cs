@@ -104,15 +104,23 @@ internal sealed class LauncherUpdateService
         if (string.IsNullOrWhiteSpace(exeName))
             exeName = "BlueOath.Launcher.Wpf.exe";
 
-        var scriptPath = CreateUpdateScript(packagePath, exeName, Environment.ProcessId);
+        var scriptPath = CreateUpdateScript();
         if (scriptPath is null)
         {
             ShowMessage(activeOwner, "生成更新脚本失败。", "更新失败", MessageBoxButton.OK, MessageBoxImage.Warning);
             return UpdateCheckResult.Unavailable;
         }
 
-        LaunchUpdateAndExit(scriptPath, packagePath, exeName);
-        return UpdateCheckResult.Updating;
+        if (LaunchUpdateAndExit(scriptPath, packagePath, exeName))
+            return UpdateCheckResult.Updating;
+
+        ShowMessage(
+            activeOwner,
+            "更新安装程序未能安全启动，当前启动器将继续运行。请稍后重试；如果问题持续出现，请查看 launcher-update-error.log。",
+            "更新失败",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+        return UpdateCheckResult.Unavailable;
     }
 
     private static MessageBoxResult ShowMessage(
@@ -246,47 +254,254 @@ internal sealed class LauncherUpdateService
         }
     }
 
-    private string? CreateUpdateScript(string packagePath, string executableName, int currentProcessId)
+    private string? CreateUpdateScript()
     {
         try
         {
-            var script = new StringBuilder();
-            script.AppendLine("param(");
-            script.AppendLine("    [string]$rootDir,");
-            script.AppendLine("    [string]$zipPath,");
-            script.AppendLine("    [string]$exeName,");
-            script.AppendLine("    [int]$launcherPid");
-            script.AppendLine(")");
-            script.AppendLine("Start-Sleep -Seconds 1");
-            script.AppendLine("$workDir = Join-Path ([System.IO.Path]::GetTempPath()) ('blueoath-launcher-update-' + [System.Guid]::NewGuid())");
-            script.AppendLine("$updateDir = Split-Path -Parent $zipPath");
-            script.AppendLine("New-Item -ItemType Directory -Path $workDir | Out-Null");
-            script.AppendLine("Expand-Archive -Path $zipPath -DestinationPath $workDir -Force");
-            script.AppendLine("while ($true)");
-            script.AppendLine("{");
-            script.AppendLine("    if ($launcherPid -gt 0)");
-            script.AppendLine("    {");
-            script.AppendLine("        $running = Get-Process -Id $launcherPid -ErrorAction SilentlyContinue");
-            script.AppendLine("        if ($null -eq $running) { break }");
-            script.AppendLine("    }");
-            script.AppendLine("    else");
-            script.AppendLine("    {");
-            script.AppendLine("        break");
-            script.AppendLine("    }");
-            script.AppendLine("    Start-Sleep -Milliseconds 500");
-            script.AppendLine("}");
-            script.AppendLine("Copy-Item -Path (Join-Path $workDir '*') -Destination $rootDir -Recurse -Force");
-            script.AppendLine("Remove-Item -Path $workDir -Recurse -Force");
-            script.AppendLine("Remove-Item -Path $updateDir -Recurse -Force");
-            script.AppendLine("Start-Sleep -Milliseconds 250");
-            script.AppendLine("$newExe = Join-Path $rootDir $exeName");
-            script.AppendLine("if (Test-Path $newExe) { Start-Process -FilePath $newExe }");
-            script.AppendLine("Remove-Item -Path $PSCommandPath -Force");
+            const string script = """
+                param(
+                    [string]$rootDir,
+                    [string]$zipPath,
+                    [string]$exeName,
+                    [int]$launcherPid,
+                    [string]$updateMutexName,
+                    [string]$readyEventName,
+                    [string]$failedEventName
+                )
+
+                $ErrorActionPreference = 'Stop'
+                $installMutex = $null
+                $readyEvent = $null
+                $failedEvent = $null
+                $ownsInstallMutex = $false
+                $readySignaled = $false
+                $launcherExited = $false
+                $updateSucceeded = $false
+                $workDir = $null
+                $window = $null
+                $statusText = $null
+                $script:allowWindowClose = $false
+                $errorLog = Join-Path $rootDir 'launcher-update-error.log'
+
+                function Pump-UpdateWindow
+                {
+                    if ($null -ne $window)
+                    {
+                        $window.Dispatcher.Invoke(
+                            [Action]{},
+                            [System.Windows.Threading.DispatcherPriority]::Background)
+                    }
+                }
+
+                function Set-UpdateStatus([string]$status)
+                {
+                    if ($null -ne $statusText)
+                    {
+                        $statusText.Text = $status
+                        Pump-UpdateWindow
+                    }
+                }
+
+                try
+                {
+                    $installMutex = [System.Threading.Mutex]::new($false, $updateMutexName)
+                    try
+                    {
+                        $ownsInstallMutex = $installMutex.WaitOne([TimeSpan]::FromSeconds(10))
+                    }
+                    catch [System.Threading.AbandonedMutexException]
+                    {
+                        $ownsInstallMutex = $true
+                    }
+                    if (-not $ownsInstallMutex) { throw '另一更新进程已经占用安装目录。' }
+
+                    $readyEvent = [System.Threading.EventWaitHandle]::OpenExisting($readyEventName)
+                    $failedEvent = [System.Threading.EventWaitHandle]::OpenExisting($failedEventName)
+
+                    Add-Type -AssemblyName PresentationFramework
+                    $window = [System.Windows.Window]::new()
+                    $window.Title = 'BlueOath 启动器更新'
+                    $window.Width = 440
+                    $window.Height = 150
+                    $window.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterScreen
+                    $window.ResizeMode = [System.Windows.ResizeMode]::NoResize
+                    $window.ShowInTaskbar = $true
+                    $window.Add_Closing({
+                        param($sender, $eventArgs)
+                        if (-not $script:allowWindowClose) { $eventArgs.Cancel = $true }
+                    })
+
+                    $statusText = [System.Windows.Controls.TextBlock]::new()
+                    $statusText.Text = '正在校验更新包...'
+                    $statusText.Margin = [System.Windows.Thickness]::new(0, 0, 0, 14)
+                    $statusText.TextWrapping = [System.Windows.TextWrapping]::Wrap
+
+                    $progress = [System.Windows.Controls.ProgressBar]::new()
+                    $progress.Height = 18
+                    $progress.IsIndeterminate = $true
+
+                    $panel = [System.Windows.Controls.StackPanel]::new()
+                    $panel.Margin = [System.Windows.Thickness]::new(24)
+                    [void]$panel.Children.Add($statusText)
+                    [void]$panel.Children.Add($progress)
+                    $window.Content = $panel
+                    $window.Show()
+                    Pump-UpdateWindow
+
+                    $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ('blueoath-launcher-update-' + [System.Guid]::NewGuid())
+                    New-Item -ItemType Directory -Path $workDir | Out-Null
+                    Set-UpdateStatus '正在解压并校验更新包，请勿重新打开启动器...'
+                    Expand-Archive -LiteralPath $zipPath -DestinationPath $workDir -Force
+                    $stagedExe = Join-Path $workDir $exeName
+                    if (-not (Test-Path -LiteralPath $stagedExe -PathType Leaf))
+                    {
+                        throw "更新包缺少启动器文件：$exeName"
+                    }
+
+                    [void]$readyEvent.Set()
+                    $readySignaled = $true
+                    Set-UpdateStatus '更新包已就绪，正在等待旧启动器退出...'
+
+                    while ($launcherPid -gt 0)
+                    {
+                        $running = Get-Process -Id $launcherPid -ErrorAction SilentlyContinue
+                        if ($null -eq $running) { break }
+                        Pump-UpdateWindow
+                        Start-Sleep -Milliseconds 200
+                    }
+                    $launcherExited = $true
+
+                    Set-UpdateStatus '正在确认启动器文件已经释放...'
+                    $launcherPath = [System.IO.Path]::GetFullPath((Join-Path $rootDir $exeName))
+                    $launcherProcessName = [System.IO.Path]::GetFileNameWithoutExtension($exeName)
+                    $releaseDeadline = [DateTime]::UtcNow.AddSeconds(30)
+                    while ($true)
+                    {
+                        $blockingLaunchers = @(
+                            Get-Process -Name $launcherProcessName -ErrorAction SilentlyContinue |
+                                Where-Object {
+                                    try
+                                    {
+                                        $_.Id -ne $launcherPid -and
+                                            [string]::Equals(
+                                                [System.IO.Path]::GetFullPath($_.Path),
+                                                $launcherPath,
+                                                [System.StringComparison]::OrdinalIgnoreCase)
+                                    }
+                                    catch
+                                    {
+                                        $false
+                                    }
+                                })
+                        if ($blockingLaunchers.Count -eq 0) { break }
+                        if ([DateTime]::UtcNow -ge $releaseDeadline)
+                        {
+                            throw '仍有启动器进程占用安装文件，无法安全覆盖更新。'
+                        }
+                        Pump-UpdateWindow
+                        Start-Sleep -Milliseconds 200
+                    }
+
+                    $copied = $false
+                    for ($attempt = 1; $attempt -le 5; $attempt++)
+                    {
+                        try
+                        {
+                            Set-UpdateStatus "正在覆盖安装更新（第 $attempt 次尝试）..."
+                            Get-ChildItem -LiteralPath $workDir -Force |
+                                Copy-Item -Destination $rootDir -Recurse -Force
+                            $copied = $true
+                            break
+                        }
+                        catch
+                        {
+                            if ($attempt -ge 5) { throw }
+                            Set-UpdateStatus '部分文件暂时被占用，稍后自动重试...'
+                            Start-Sleep -Seconds 1
+                        }
+                    }
+                    if (-not $copied) { throw '覆盖安装未完成。' }
+
+                    Set-UpdateStatus '更新安装完成，正在重新启动...'
+                    Remove-Item -LiteralPath $errorLog -Force -ErrorAction SilentlyContinue
+                    $updateSucceeded = $true
+                    Pump-UpdateWindow
+                    Start-Sleep -Milliseconds 500
+                }
+                catch
+                {
+                    $errorMessage = $_.Exception.ToString()
+                    try
+                    {
+                        Set-Content -LiteralPath $errorLog -Encoding UTF8 -Value $errorMessage
+                    }
+                    catch { }
+
+                    if (-not $readySignaled -and $null -ne $failedEvent)
+                    {
+                        [void]$failedEvent.Set()
+                    }
+                    elseif ($readySignaled)
+                    {
+                        [void][System.Windows.MessageBox]::Show(
+                            "更新安装失败。请重新打开启动器后重试。`n`n详细信息：$errorLog",
+                            'BlueOath 启动器更新失败',
+                            [System.Windows.MessageBoxButton]::OK,
+                            [System.Windows.MessageBoxImage]::Error)
+                    }
+                }
+                finally
+                {
+                    if ($null -ne $workDir -and (Test-Path -LiteralPath $workDir))
+                    {
+                        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                    if ($updateSucceeded)
+                    {
+                        $updateDir = Split-Path -Parent $zipPath
+                        Remove-Item -LiteralPath $updateDir -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+
+                    $script:allowWindowClose = $true
+                    if ($null -ne $window) { $window.Close() }
+                    if ($null -ne $readyEvent) { $readyEvent.Dispose() }
+                    if ($null -ne $failedEvent) { $failedEvent.Dispose() }
+                    if ($ownsInstallMutex) { $installMutex.ReleaseMutex() }
+                    if ($null -ne $installMutex) { $installMutex.Dispose() }
+                }
+
+                if ($updateSucceeded)
+                {
+                    try
+                    {
+                        $newExe = Join-Path $rootDir $exeName
+                        Start-Process -FilePath $newExe -WorkingDirectory $rootDir
+                    }
+                    catch
+                    {
+                        try
+                        {
+                            Set-Content -LiteralPath $errorLog -Encoding UTF8 -Value $_.Exception.ToString()
+                        }
+                        catch { }
+                        [void][System.Windows.MessageBox]::Show(
+                            "更新已安装，但启动器未能自动重启。请手动打开启动器。`n`n详细信息：$errorLog",
+                            'BlueOath 启动器更新',
+                            [System.Windows.MessageBoxButton]::OK,
+                            [System.Windows.MessageBoxImage]::Warning)
+                    }
+                }
+
+                Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+                """;
 
             var updateDir = Path.Combine(Path.GetTempPath(), "BlueOathLauncherUpdate", "scripts");
             Directory.CreateDirectory(updateDir);
             var scriptPath = Path.Combine(updateDir, $"apply-update-{Guid.NewGuid():N}.ps1");
-            File.WriteAllText(scriptPath, script.ToString(), new UTF8Encoding(false));
+            // Windows PowerShell 5.1 treats UTF-8 without a BOM as the active
+            // ANSI code page. The generated updater contains localized status
+            // text, so it must carry a BOM to remain parseable on every locale.
+            File.WriteAllText(scriptPath, script, new UTF8Encoding(true));
             return scriptPath;
         }
         catch
@@ -295,14 +510,21 @@ internal sealed class LauncherUpdateService
         }
     }
 
-    private void LaunchUpdateAndExit(string scriptPath, string packagePath, string executableName)
+    private bool LaunchUpdateAndExit(string scriptPath, string packagePath, string executableName)
     {
+        var updateMutexName = LauncherExecutionGuard.GetUpdateMutexName(_rootDir);
+        var readyEventName = $"Local\\BlueOath.Launcher.UpdateReady.{Guid.NewGuid():N}";
+        var failedEventName = $"Local\\BlueOath.Launcher.UpdateFailed.{Guid.NewGuid():N}";
+        using var readyEvent = new EventWaitHandle(false, EventResetMode.ManualReset, readyEventName);
+        using var failedEvent = new EventWaitHandle(false, EventResetMode.ManualReset, failedEventName);
+
         var psi = new ProcessStartInfo("powershell.exe")
         {
             UseShellExecute = false,
             CreateNoWindow = true
         };
         psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-Sta");
         psi.ArgumentList.Add("-ExecutionPolicy");
         psi.ArgumentList.Add("Bypass");
         psi.ArgumentList.Add("-WindowStyle");
@@ -317,9 +539,57 @@ internal sealed class LauncherUpdateService
         psi.ArgumentList.Add(executableName);
         psi.ArgumentList.Add("-launcherPid");
         psi.ArgumentList.Add(Environment.ProcessId.ToString());
+        psi.ArgumentList.Add("-updateMutexName");
+        psi.ArgumentList.Add(updateMutexName);
+        psi.ArgumentList.Add("-readyEventName");
+        psi.ArgumentList.Add(readyEventName);
+        psi.ArgumentList.Add("-failedEventName");
+        psi.ArgumentList.Add(failedEventName);
 
-        Process.Start(psi);
-        Application.Current.Shutdown();
+        Process? updater;
+        try
+        {
+            updater = Process.Start(psi);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (updater is null)
+            return false;
+
+        using (updater)
+        {
+            var deadline = DateTime.UtcNow.AddMinutes(5);
+            while (true)
+            {
+                var handshake = WaitHandle.WaitAny(
+                    [readyEvent, failedEvent],
+                    TimeSpan.FromMilliseconds(250));
+                if (handshake == 0)
+                {
+                    Application.Current.Shutdown();
+                    return true;
+                }
+
+                if (handshake == 1 || updater.HasExited)
+                    return false;
+
+                if (DateTime.UtcNow < deadline)
+                    continue;
+
+                try
+                {
+                    updater.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // The updater may have exited between HasExited and Kill.
+                }
+                return false;
+            }
+        }
     }
 
     private sealed class LauncherUpdateManifest
