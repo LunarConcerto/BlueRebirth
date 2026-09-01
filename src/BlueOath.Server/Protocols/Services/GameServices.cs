@@ -81,6 +81,7 @@ internal sealed class GameServices
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
         ShipBreakLoader.Load(configDir);
+        ShipIntensifyLoader.Load(configDir);
         ShipMainLoader.Load(configDir);
         AssistShipLoader.Load(configDir);
         EquipLoader.Load(configDir, equipmentMods.Equipment);
@@ -690,7 +691,7 @@ internal sealed class GameServices
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
             hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType,
             hero.EquipSlots, hero.Name, hero.ChangeNameTime, hero.Lock, hero.Advance, hero.AdvLv, hero.PSkills,
-            hero.RemouldEffects, hero.RemouldLevel);
+            hero.RemouldEffects, hero.RemouldLevel, hero.Intensify);
 
     /// <summary>
     /// 由舰娘 TemplateId（config_ship_main 的 key）推导图鉴 IllustrateId

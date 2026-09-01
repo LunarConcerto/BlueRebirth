@@ -208,6 +208,32 @@ internal static class ProtocolDecoder
         return (heroId, consumedHeros, consumeItems);
     }
 
+    /// <summary>
+    /// 解码 hero.HeroIntensify 参数（TIntensifyHeroArgs）：HeroId(1, uint32),
+    /// ConsumedHeros(2, repeated uint32), SuperIntensify(3, bool)。
+    /// repeated 同时接受未打包（wire 0）与打包（wire 2）两种编码。
+    /// </summary>
+    internal static (uint HeroId, List<uint> ConsumedHeros, bool SuperIntensify) DecodeIntensifyArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        uint heroId = 0;
+        List<uint> consumedHeros = [];
+        bool superIntensify = false;
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: heroId = checked((uint)reader.ReadVarint()); break;
+                case 2 when wire == 0: consumedHeros.Add(checked((uint)reader.ReadVarint())); break;
+                case 2 when wire == 2:
+                    ProtoReader packed = new(reader.ReadBytes());
+                    while (packed.HasRemaining) consumedHeros.Add(checked((uint)packed.ReadVarint()));
+                    break;
+                case 3 when wire == 0: superIntensify = reader.ReadVarint() != 0; break;
+                default: reader.Skip(wire); break;
+            }
+        return (heroId, consumedHeros, superIntensify);
+    }
+
     /// <summary>解码 hero.HeroAdvanceMUB 参数：HeroId(1, uint32),
     /// ConsumeItems(2, repeated TAdvanceMubItemInfo{ItemId=1, ItemNum=2})。</summary>
     internal static (uint HeroId, List<(uint ItemId, int ItemNum)> ConsumeItems) DecodeAdvanceMubArg(byte[] args)

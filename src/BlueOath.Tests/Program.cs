@@ -47,7 +47,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
     ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("item selection boxes grant the chosen option", SelectTreasureTest),
-    ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
+    ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest),
+    ("ship intensify grants attribute levels and consumes materials", ShipIntensifyTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
@@ -3165,6 +3166,104 @@ static Task TaskCompletionRequiresProgressTest()
     Assert(TaskProtocolCodec.GetEventProgress([definition], partialProgress) == 2,
         "partial task event progress was not preserved");
     return Task.CompletedTask;
+}
+
+// 舰船强化（hero.HeroIntensify）此前是空占位：返回空 Ret、Err=0、不推送，客户端
+// _HeroIntensify 只看 err 就播成功动画，属性却全部取自 THeroGrid.Intensify（字段 7），
+// 于是「强化后数值不变」。数值口径对齐客户端 Strengthen_Page.GenPropertyData。
+static async Task ShipIntensifyTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-ship-intensify-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "ship-intensify";
+    // 10210511：enhance_type=2，need_power_exp = 8:3750 9:5625 10:1125 11:5625 12:2812，
+    //           max_power_prop = 8:24 9:16 10:80 11:16 12:32，provide = 各属性 3000。
+    // 10110111：enhance_type=1（异型），provide = 各属性 1000。
+    const int targetTid = 10210511;
+    const int sameTypeTid = 10210511;
+    const int otherTypeTid = 10110111;
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, 1);
+        await repo.SaveAccountAsync(seed with
+        {
+            Character = seed.Character with { SecretaryId = 10 },
+            Dock = new HeroDock(
+            [
+                new Hero(10, targetTid, 5),
+                new Hero(20, sameTypeTid, 1),
+                new Hero(30, otherTypeTid, 1),
+                new Hero(40, sameTypeTid, 1, Lock: true),
+                new Hero(50, sameTypeTid, 9),
+            ]),
+            Fleet = new PlayerFleet([new FleetEntry(1, HeroInfo: [10])]),
+        });
+
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot,
+             "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
+             "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var heroService = new HeroService(services);
+
+        static TRequest Intensify(uint heroId, uint[] materials)
+        {
+            var package = new ProtocolPackage().Write(0x08, heroId);
+            foreach (uint material in materials) package.Write(0x10, material);
+            return new TRequest("hero.HeroIntensify", package.ToArray());
+        }
+
+        // 上锁、非 1 级素材必须被拒（对应客户端 ScreenShip / FilterHero 的无条件筛选）。
+        foreach (uint rejected in new uint[] { 40, 50 })
+            Assert(!(await heroService.BuildIntensifyRetAsync(
+                        Intensify(10, [rejected]), profileId, CancellationToken.None)).Changed,
+                $"intensify accepted an ineligible material (hero {rejected})");
+        // 目标自身不能同时作素材。
+        Assert(!(await heroService.BuildIntensifyRetAsync(
+                    Intensify(10, [10]), profileId, CancellationToken.None)).Changed,
+            "intensify accepted the target itself as material");
+
+        HeroService.IntensifyResult result = await heroService.BuildIntensifyRetAsync(
+            Intensify(10, [20, 30]), profileId, CancellationToken.None);
+        Assert(result.Changed && result.UpdatedHero is not null, "intensify did not apply");
+
+        // 同型 3000×1.5=4500，异型 1000×1，合计 5500：
+        //   attr8  5500/3750 -> Lv1 余 1750
+        //   attr10 5500/1125 -> Lv4 余 1000
+        Dictionary<int, AttrIntensify> byAttr =
+            result.UpdatedHero!.Intensify!.ToDictionary(entry => entry.AttrType);
+        Assert(byAttr[8].IntensifyLvl == 1 && byAttr[8].CurExp == 1750,
+            $"attr 8 intensify drifted: Lv{byAttr[8].IntensifyLvl} exp{byAttr[8].CurExp}");
+        Assert(byAttr[10].IntensifyLvl == 4 && byAttr[10].CurExp == 1000,
+            $"attr 10 intensify drifted: Lv{byAttr[10].IntensifyLvl} exp{byAttr[10].CurExp}");
+        // 素材提供了 14/16 的强化值，但目标的 need_power_exp 不含这两项，不应被强化。
+        Assert(!byAttr.ContainsKey(14) && !byAttr.ContainsKey(16),
+            "intensify touched attributes outside the target's need_power_exp");
+        Assert(result.ConsumedHeroIds.Count == 2, "intensify did not consume both materials");
+
+        PlayerAccount after = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(after.Dock.Heroes.All(h => h.HeroId != 20 && h.HeroId != 30),
+            "consumed materials remain in the dock");
+
+        // THeroGrid.Intensify 是字段 7（wire 2）。缺这段编码，客户端 HeroAttr:_GetIntensify
+        // 拿到空表，属性加成恒为 0 —— 正是「强化后数值不变」的直接原因。
+        // attr8 子消息：08 08 (AttrType=8) 10 01 (Lv=1) 18 D6 0D (CurExp=1750)，共 7 字节。
+        byte[] encoded = PlayerDataCodec.Encode(GameServices.ToHeroGrid(result.UpdatedHero!));
+        Assert(ContainsSequence(encoded, [0x3A, 0x07, 0x08, 0x08, 0x10, 0x01, 0x18, 0xD6, 0x0D]),
+            "hero grid did not encode Intensify as field 7");
+
+        // 满级后再强化不应白吃素材。
+        HeroService.IntensifyResult noGain = await heroService.BuildIntensifyRetAsync(
+            Intensify(10, [20]), profileId, CancellationToken.None);
+        Assert(!noGain.Changed, "intensify consumed an already-removed material");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
 }
 
 static string FindClientConfigDir()
