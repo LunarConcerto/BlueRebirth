@@ -1,5 +1,6 @@
 using BlueOath.Core;
 using BlueOath.Protocol;
+using BlueOath.Server.Configs;
 
 namespace BlueOath.Server.Protocols;
 
@@ -88,6 +89,95 @@ internal sealed class ShopService(GameServices services)
                 account = GameServices.AddBagItem(account, reward.ConfigId, reward.Num);
                 rewards.Add(new CommonReward(reward.Type, reward.ConfigId, reward.Num));
             }
+        }
+
+        await services.SaveAccountAsync(account, ct);
+        byte[] ret = PlayerDataCodec.Encode(new BagTreasureInfoRet(rewards, arg.TreasureId));
+        // bag.UpdateBagData 是增量合并；完全耗尽时必须额外推送 Num=0 才会从客户端仓库删除。
+        return new(ret, true, "", remaining == 0 ? arg.TreasureId : 0);
+    }
+
+    /// <summary>config_item_selected.type：3 = 道具箱（本方法只处理这一类）。</summary>
+    private const int SelectedTypeItem = 3;
+
+    /// <summary>
+    /// 开启道具选择箱（bag.GetSelectTreasureInfo）。
+    ///
+    /// 客户端 SelectRandTreasurePage:_ClickSure 发来 {treasureId, position, num}，position 是
+    /// config_item_selected.item_id 的下标；item_id 为空而 drop_id &gt; 0 时是随机选择箱，
+    /// 客户端固定传 position=0，由服务端从掉落池抽取。
+    ///
+    /// 只处理 type == 3 的道具箱：舰船箱（type 1）与装备箱（type 2）另有实现，此处返回
+    /// Changed=false 且不带错误，交由调用方保持原有的空响应，行为与改动前一致。
+    /// </summary>
+    internal async Task<TreasureOpenResult> BuildOpenSelectTreasureRetAsync(
+        TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return new([], false, "select treasure request is missing");
+        BagSelectTreasureInfoArg arg = PlayerDataCodec.DecodeBagSelectTreasureInfoArg(request.Args);
+        int openNum = arg.Num <= 0 ? 1 : arg.Num;
+        // config_parameter[54]（box_open_num_max）规定单次最多开启 99 个。
+        if (arg.TreasureId <= 0 || openNum > 99)
+            return new([], false, "select treasure id or count is invalid");
+        if (!services.ItemSelected.TryGetValue(arg.TreasureId, out ConfigItemSelected? config))
+            return new([], false, "select treasure configuration was not found");
+        // 非道具箱不在本次实现范围内，保持原有空响应。
+        if (config.Type != SelectedTypeItem) return new([], false, "");
+
+        List<List<long>> options = config.ItemId ?? [];
+        var pending = new List<PendingReward>();
+        if (options.Count > 0)
+        {
+            // Position 由客户端按 Lua 表下标下发，从 1 开始计数。
+            if (arg.Position < 1 || arg.Position > options.Count)
+                return new([], false, "select treasure position is out of range");
+            List<long> option = options[arg.Position - 1];
+            if (option.Count < 3) return new([], false, "select treasure option is malformed");
+            int type = checked((int)option[0]);
+            int configId = checked((int)option[1]);
+            int num = checked((int)option[2]);
+            if (num <= 0) return new([], false, "select treasure option has a non-positive count");
+            // 舰船/装备的发放路径本次不动，避免与既有实现产生分歧。
+            if (type is GameServices.GoodsTypeShip or GameServices.GoodsTypeEquip)
+                return new([], false, "select treasure option type is not supported yet");
+            for (var i = 0; i < openNum; i++) pending.Add(new PendingReward(type, configId, num));
+        }
+        else
+        {
+            if (config.DropId <= 0) return new([], false, "select treasure has neither options nor a drop pool");
+            for (var i = 0; i < openNum; i++)
+            {
+                if (!TryDrawPool(checked((int)config.DropId), pending, [], 0))
+                    return new([], false, "select treasure drop pool is invalid");
+            }
+            if (pending.Any(x => x.Type is GameServices.GoodsTypeShip or GameServices.GoodsTypeEquip))
+                return new([], false, "select treasure reward type is not supported yet");
+        }
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+        PlayerBag bag = account.Bag ?? new PlayerBag([], 100);
+        int bagIndex = bag.Items.ToList().FindIndex(x => x.TemplateId == arg.TreasureId);
+        if (bagIndex < 0 || bag.Items[bagIndex].Num < openNum)
+            return new([], false, "select treasure count is insufficient");
+
+        var bagItems = bag.Items.ToList();
+        int remaining = bagItems[bagIndex].Num - openNum;
+        if (remaining == 0) bagItems.RemoveAt(bagIndex);
+        else bagItems[bagIndex] = bagItems[bagIndex] with { Num = remaining };
+        account = account with { Bag = bag with { Items = bagItems } };
+
+        var rewards = new List<CommonReward>();
+        foreach (PendingReward reward in pending)
+        {
+            if (reward.Type == GameServices.GoodsTypeCurrency)
+                account = GameServices.AddCurrency(account, reward.ConfigId, reward.Num);
+            else if (reward.Type == GameServices.GoodsTypeFashion)
+                // 道具箱里含时装奖励；走 AddBagItem 会让客户端按道具配置解析时装模板而出错。
+                for (var i = 0; i < reward.Num; i++) account = services.AddFashion(account, reward.ConfigId);
+            else
+                account = GameServices.AddBagItem(account, reward.ConfigId, reward.Num);
+            rewards.Add(new CommonReward(reward.Type, reward.ConfigId, reward.Num));
         }
 
         await services.SaveAccountAsync(account, ct);

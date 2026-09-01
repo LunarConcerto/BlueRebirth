@@ -198,7 +198,15 @@ public sealed record BagInfoRet(int BagType = 0, int BagSize = 0, IReadOnlyList<
 /// <summary>普通宝箱使用参数（TBagNormalTreasureInfoArg）。</summary>
 public sealed record BagNormalTreasureInfoArg(int TreasureId = 0, int TreasureNum = 0);
 
-/// <summary>宝箱开启结果（TBagTreasureInfoRet）。</summary>
+/// <summary>
+/// 自选/随机选择箱使用参数（TBagSelectTreasureInfoArg）。
+/// Position 是 config_item_selected.item_id 中玩家所选项的序号，<b>从 1 开始</b>——
+/// 客户端 SelectRandTreasurePage 把它当 Lua 表下标直接用（item_id[self.pos]），
+/// 且初值就是 1。当该箱只配了 drop_id 而 item_id 为空时，客户端固定传 0，由服务端随机抽取。
+/// </summary>
+public sealed record BagSelectTreasureInfoArg(int TreasureId = 0, int Position = 0, int Num = 0);
+
+/// <summary>宝箱开启结果（TBagTreasureInfoRet）。自选箱与普通宝箱共用该响应。</summary>
 public sealed record BagTreasureInfoRet(
     IReadOnlyList<CommonReward>? TreasuresInfo = null, int TreasureId = 0);
 
@@ -952,6 +960,25 @@ var reader = new GameLoginCodec.ProtoReader(payload);
             }
         }
         return new BagNormalTreasureInfoArg(treasureId, treasureNum);
+    }
+
+    public static BagSelectTreasureInfoArg DecodeBagSelectTreasureInfoArg(ReadOnlySpan<byte> payload)
+    {
+        var treasureId = 0;
+        var position = 0;
+        var num = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: treasureId = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: position = checked((int)reader.ReadVarint()); break;
+                case 3 when wire == 0: num = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return new BagSelectTreasureInfoArg(treasureId, position, num);
     }
 
     public static byte[] Encode(BagTreasureInfoRet value)
