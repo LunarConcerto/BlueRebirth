@@ -31,6 +31,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("building config, lifecycle and assignment codecs match the client", BuildingCodecTest),
     ("story unlock config includes event, side and personal stories", StoryUnlockConfigTest),
     ("illustrate entries unlock every configured behaviour", IllustrateBehaviourUnlockTest),
+    ("ship acquisition keeps the client illustrate snapshot in sync", ShipAcquisitionIllustrateSyncTest),
     ("Mubar battle start preserves CopyType 33", MubarBattleStartCodecTest),
     ("sea-copy entries include non-nil safe-area state", SeaCopySafeAreaCodecTest),
     ("illustrate payload encodes unlocked personal stories", HeroMemoryCodecTest),
@@ -127,6 +128,67 @@ foreach (var (name, run) in tests)
     catch (Exception e) { failed++; Console.Error.WriteLine($"FAIL {name}: {e.Message}"); }
 }
 return failed;
+
+// 客户端 IllustrateData:IsFirstGetHero() 判定的是 oldCurrId —— 应用某次 illustrate.IllustrateInfo
+// 之前的 currId 快照。ShowGirlPage 的 bNew（首次获得动画、上锁询问、NEW 角标）全部取自它。
+// 因此两件事必须成立，否则重复获得的舰船会被当成首次获得：
+//   1. 登录全量图鉴推送之后要补一条 illustrate.OldIllustrateInfo，把 oldCurrId 从空表同步成
+//      currId；登录时 currId 尚为空，SetIllustrateData 快照出来的 oldCurrId 必然是空的。
+//   2. 商店发放舰娘时要推 illustrate.IllustrateInfo，否则该 ship_info_id 永远进不了 currId。
+static async Task ShipAcquisitionIllustrateSyncTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-illustrate-sync-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "illustrate-sync";
+    const int shipTemplateId = 40110311;
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, 1) with
+        {
+            Dock = new HeroDock([new Hero(10, 10210511, 5)]),
+        });
+
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot,
+             "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
+             "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+
+        List<string> loginMethods = (await services.BuildSyncPushesAsync(profileId, 1, CancellationToken.None))
+            .Select(push => TMessageCodec.DecodeResponse(push).Method ?? "").ToList();
+        int infoIndex = loginMethods.IndexOf("illustrate.IllustrateInfo");
+        int oldIndex = loginMethods.IndexOf("illustrate.OldIllustrateInfo");
+        Assert(infoIndex >= 0 && oldIndex >= 0,
+            "login snapshot did not seed the client illustrate baseline");
+        Assert(oldIndex > infoIndex,
+            "illustrate.OldIllustrateInfo must follow the full illustrate snapshot it takes a copy of");
+
+        List<string> plainMethods =
+            (await services.BuildBuyPushesAsync(profileId, 1, CancellationToken.None))
+            .Select(push => TMessageCodec.DecodeResponse(push).Method ?? "").ToList();
+        Assert(!plainMethods.Contains("illustrate.IllustrateInfo"),
+            "a purchase without ships should not push illustrate data");
+
+        IReadOnlyList<byte[]> shipPushes = await services.BuildBuyPushesAsync(
+            profileId, 1, CancellationToken.None, newShipTemplateIds: [shipTemplateId]);
+        List<TResponse> shipResponses = shipPushes.Select(push => TMessageCodec.DecodeResponse(push)).ToList();
+        Assert(shipResponses.Any(push => push.Method == "hero.UpdateHeroBagData"),
+            "buying a ship did not refresh the dock");
+        TResponse illustratePush = shipResponses.SingleOrDefault(p => p.Method == "illustrate.IllustrateInfo")
+            ?? throw new InvalidDataException("buying a ship did not push illustrate data");
+        // IllustrateId = ship_info_id = (templateId - 1) / 10，客户端据此把该船并入 currId。
+        byte[] expected = new ProtocolPackage().Write(0x08, (ulong)((shipTemplateId - 1) / 10)).ToArray();
+        Assert(illustratePush.Ret is { Length: > 0 } && ContainsSequence(illustratePush.Ret, expected),
+            "illustrate push did not carry the purchased ship's illustrate id");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
 
 static async Task HeroAdvanceStateTest()
 {
