@@ -258,7 +258,13 @@ public sealed record PlayerAccount(
     PlayerTalent? Talent = null,
     PlayerBuildState? BuildState = null,
     PlayerDailyCopyProgress? DailyCopy = null,
-    PlayerTaskProgress? Tasks = null);
+    PlayerTaskProgress? Tasks = null,
+    /// <summary>
+    /// guide.Setting 通道保存的全局用户设置（TGuideSetting 的 Key/Value 均为字符串）。
+    /// 强化页的三个开关 LOGIC_HERO_INTENSIFY_TypeMatchCancel / _RHeroSelect / _MORESELECT
+    /// 都存在这里，客户端只通过 GuideData:GetSettingByKey 读取。
+    /// </summary>
+    IReadOnlyDictionary<string, string>? UserSettings = null);
 
 /// <summary>
 /// 账号实体的默认工厂：集中定义新档案的初始角色与船坞，便于后续调整默认数值。

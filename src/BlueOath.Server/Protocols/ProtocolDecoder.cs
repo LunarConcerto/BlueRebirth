@@ -234,6 +234,36 @@ internal static class ProtocolDecoder
         return (heroId, consumedHeros, superIntensify);
     }
 
+    /// <summary>
+    /// 解码 guide.Setting 参数（TGuideSettingArg）：param(1, repeated
+    /// TGuideSettingParam{Key=1 string, Value=2 string}）。Key 为空的条目直接丢弃。
+    /// </summary>
+    internal static List<(string Key, string Value)> DecodeGuideSettingArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        List<(string, string)> settings = [];
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 2)
+            {
+                ProtoReader item = new(reader.ReadBytes());
+                string key = "", value = "";
+                while (item.TryReadField(out int ifield, out int iwire))
+                {
+                    if (ifield == 1 && iwire == 2) key = item.ReadString();
+                    else if (ifield == 2 && iwire == 2) value = item.ReadString();
+                    else item.Skip(iwire);
+                }
+                if (key.Length > 0) settings.Add((key, value));
+            }
+            else
+            {
+                reader.Skip(wire);
+            }
+        }
+        return settings;
+    }
+
     /// <summary>解码 hero.HeroAdvanceMUB 参数：HeroId(1, uint32),
     /// ConsumeItems(2, repeated TAdvanceMubItemInfo{ItemId=1, ItemNum=2})。</summary>
     internal static (uint HeroId, List<(uint ItemId, int ItemNum)> ConsumeItems) DecodeAdvanceMubArg(byte[] args)

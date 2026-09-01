@@ -48,7 +48,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("item selection boxes grant the chosen option", SelectTreasureTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest),
-    ("ship intensify grants attribute levels and consumes materials", ShipIntensifyTest)
+    ("ship intensify grants attribute levels and consumes materials", ShipIntensifyTest),
+    ("guide user settings persist and ship on the login push", GuideUserSettingTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
@@ -3259,6 +3260,91 @@ static async Task ShipIntensifyTest()
         HeroService.IntensifyResult noGain = await heroService.BuildIntensifyRetAsync(
             Intensify(10, [20]), profileId, CancellationToken.None);
         Assert(!noGain.Changed, "intensify consumed an already-removed material");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+
+// 强化页的三个开关（LOGIC_HERO_INTENSIFY_TypeMatchCancel / _RHeroSelect / _MORESELECT）
+// 都通过 guide.Setting 存取，服务端此前是 "guide.Setting" => [] 直接丢弃，客户端
+// GuideData:GetSettingByKey 永远读到 nil，开关恒为关闭：筛选只认 N 品质、选择槽固定 6 格，
+// 「一斉追加」于是常年提示「条件を満たした戦姫はいません」。
+// 客户端 GuideService:_ReceiveUserSetting 按 TGuideInfo 解应答，所以应答必须带 Setting；
+// 登录的 guide.GuideInfo 也要带上，否则重登即丢。
+static async Task GuideUserSettingTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-guide-setting-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "guide-setting";
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, 1));
+
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot,
+             "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
+             "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var guide = new GuideModule(services);
+        var ctx = new GameContext
+        {
+            ProfileId = profileId,
+            Now = 1,
+            Ct = CancellationToken.None,
+            Services = services,
+        };
+
+        static byte[] SettingArgs(params (string Key, string Value)[] entries)
+        {
+            var package = new ProtocolPackage();
+            foreach ((string key, string value) in entries)
+            {
+                var body = new ProtocolPackage()
+                    .Write(0x0A, key)
+                    .Write(0x12, value);
+                package.Write(0x0A, body.ToArray());
+            }
+            return package.ToArray();
+        }
+
+        ModuleResult saved = await guide.HandleAsync(ctx, new TRequest("guide.Setting",
+            SettingArgs(("LOGIC_HERO_INTENSIFY_RHeroSelect", "true"),
+                        ("LOGIC_HERO_INTENSIFY_MORESELECT", "true"))));
+        // 应答必须是带 Setting 的 TGuideInfo：字段 3 的子消息里 Key/Value 都是 string。
+        Assert(saved.Ret is { Length: > 0 }, "guide.Setting returned an empty payload");
+        Assert(ContainsSequence(saved.Ret!,
+                   System.Text.Encoding.UTF8.GetBytes("LOGIC_HERO_INTENSIFY_RHeroSelect")) &&
+               ContainsSequence(saved.Ret!,
+                   System.Text.Encoding.UTF8.GetBytes("LOGIC_HERO_INTENSIFY_MORESELECT")),
+            "guide.Setting response did not echo the stored settings");
+
+        PlayerAccount stored = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("account missing");
+        Assert(stored.UserSettings?["LOGIC_HERO_INTENSIFY_RHeroSelect"] == "true" &&
+               stored.UserSettings?["LOGIC_HERO_INTENSIFY_MORESELECT"] == "true",
+            "guide.Setting did not persist the submitted keys");
+
+        // 再提交一次：同键覆盖、异键并入，不能整表替换。
+        await guide.HandleAsync(ctx, new TRequest("guide.Setting",
+            SettingArgs(("LOGIC_HERO_INTENSIFY_RHeroSelect", "false"),
+                        ("LOGIC_HERO_INTENSIFY_TypeMatchCancel", "true"))));
+        stored = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(stored.UserSettings?.Count == 3 &&
+               stored.UserSettings["LOGIC_HERO_INTENSIFY_RHeroSelect"] == "false" &&
+               stored.UserSettings["LOGIC_HERO_INTENSIFY_MORESELECT"] == "true" &&
+               stored.UserSettings["LOGIC_HERO_INTENSIFY_TypeMatchCancel"] == "true",
+            "guide.Setting replaced the map instead of merging keys");
+
+        // 登录推送必须带上存档里的设置，否则重登即丢。
+        byte[] push = services.BuildGuideInfoPush(1, stored);
+        Assert(ContainsSequence(push,
+                   System.Text.Encoding.UTF8.GetBytes("LOGIC_HERO_INTENSIFY_TypeMatchCancel")),
+            "guide.GuideInfo login push omitted the persisted user settings");
     }
     finally
     {

@@ -197,6 +197,14 @@ internal sealed class GameServices
             new("PlotUtcTime", "0"),
             new("PlotToggleSkipTip", "0"),
         };
+        // 玩家通过 guide.Setting 保存的设置必须一并下发，否则重登后 GuideData:GetSettingByKey
+        // 又变回 nil（强化页三个开关会退回关闭）。同名键以存档为准，覆盖上面的默认值。
+        if (account.UserSettings is { Count: > 0 } stored)
+        {
+            HashSet<string> overridden = [.. stored.Keys];
+            settings.RemoveAll(entry => overridden.Contains(entry.Key));
+            settings.AddRange(stored.Select(entry => new GuideSetting(entry.Key, entry.Value)));
+        }
         var plotList = PlotTriggerLoader.AllPlotIds;
         _fileLogger.LogInformation("guide.GuideInfo push PlotList count={Count}", plotList.Count);
         var guideInfo = new GuideInfo(PlotList: plotList, Setting: settings);
