@@ -8,7 +8,9 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
 {
     /// <summary>发放结果：更新后的账号 + 生成的奖励（无效商品 Type=0）。</summary>
     private sealed record GoodsGrant(PlayerAccount Account, CommonReward Reward);
-    private sealed record PurchaseResult(byte[] Ret, bool Changed, string Error);
+    /// <summary>本次购买发放的舰娘模板 ID，供推送侧同步图鉴（<see cref="GameServices.BuildBuyPushesAsync"/>）。</summary>
+    private sealed record PurchaseResult(byte[] Ret, bool Changed, string Error,
+        IReadOnlyList<int>? ShipTemplateIds = null);
 
     public IReadOnlyList<string> Prefixes => ["shop", "bag"];
 
@@ -29,7 +31,8 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
                     ErrMsg = purchase.Error,
                     // Lua 购买成功回调会立即读取背包/货币，必须先刷新缓存。
                     PrePushes = purchase.Changed
-                        ? await services.BuildBuyPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct)
+                        ? await services.BuildBuyPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct,
+                            newShipTemplateIds: purchase.ShipTemplateIds)
                         : [],
                 };
                 break;
@@ -86,7 +89,8 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
         if (grant.Reward.Type == 0) return new([], false, "shop goods could not be granted");
         await services.SaveAccountAsync(grant.Account, ctx.Ct);
 
-        return new(TMessageCodec.EncodeBuyGoodsRet(grant.Reward, arg.GoodId, arg.BuyNum), true, "");
+        return new(TMessageCodec.EncodeBuyGoodsRet(grant.Reward, arg.GoodId, arg.BuyNum), true, "",
+            grant.Reward.Type == GameServices.GoodsTypeShip ? [grant.Reward.ConfigId] : null);
     }
 
     /// <summary>处理 shop.QualityBuyGoods（多选/批量购买）：对每个 GoodId 免费发放。</summary>
@@ -112,7 +116,9 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
         if (rewards.Count == 0) return new([], false, "shop goods were not found");
         await services.SaveAccountAsync(account, ctx.Ct);
 
-        return new(TMessageCodec.EncodeQualityBuyGoodsRet(rewards, arg.GoodIdList), true, "");
+        return new(TMessageCodec.EncodeQualityBuyGoodsRet(rewards, arg.GoodIdList), true, "",
+            rewards.Where(reward => reward.Type == GameServices.GoodsTypeShip)
+                .Select(reward => reward.ConfigId).ToList());
     }
 
     /// <summary>发放单个 GM 商品，返回更新后的账号和奖励。无效商品返回 Type=0 的空奖励。</summary>

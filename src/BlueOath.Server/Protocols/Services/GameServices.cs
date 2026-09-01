@@ -324,6 +324,17 @@ internal sealed class GameServices
                     HeroMemoryList: CharacterStoryLoader.AllMemories)),
                 Time: now)),
 
+            // 图鉴「上一次快照」同步，必须紧跟在上面的全量图鉴推送之后。
+            // IllustrateData:IsFirstGetHero() 判定的是 oldCurrId（应用推送前的 currId），
+            // 而 SetIllustrateData 在登录这一次快照时 currId 还是空表，于是 oldCurrId 也为空，
+            // 任何舰船都会被判成首次获得。illustrate.OldIllustrateInfo 的客户端处理器忽略
+            // Ret，只把 oldCurrId 同步成当前 currId（该方法在 protobufTypeManager 中未注册
+            // 类型，不做 pb 解码，空 Ret 是安全的）。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "illustrate.OldIllustrateInfo",
+                Ret: [],
+                Time: now)),
+
             // 活动剧情回顾进度。Index 设为章节节点总数，使所有往期活动剧情均可重播。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "illustrate.Memory",
@@ -1262,11 +1273,11 @@ internal sealed class GameServices
 
     /// <summary>购买数据推送（货币 + 仓库 + 时装 + 装备），必须在 shop.BuyGoods 应答前发出。</summary>
     public async Task<IReadOnlyList<byte[]>> BuildBuyPushesAsync(string profileId, uint now, CancellationToken ct,
-        IReadOnlyList<int>? removedBagTemplateIds = null)
+        IReadOnlyList<int>? removedBagTemplateIds = null, IReadOnlyList<int>? newShipTemplateIds = null)
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
         List<HeroGrid> heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
-        return
+        List<byte[]> pushes =
         [
             await BuildUpdateUserInfoPushAsync(profileId, now, ct),
             // 购买舰娘后刷新船坞（hero.UpdateHeroBagData），使新船立即出现在船坞。
@@ -1274,10 +1285,30 @@ internal sealed class GameServices
                 Method: "hero.UpdateHeroBagData",
                 Ret: PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize)),
                 Time: now)),
-            BuildBagPush(account, now, removedBagTemplateIds),
-            BuildFashionPush(account, now),
-            BuildEquipPush(account, now),
         ];
+        // 购买舰娘还必须同步图鉴。客户端 IllustrateData 只在收到 illustrate.IllustrateInfo 时
+        // 才把 ship_info_id 并入 currId，并以「应用本次推送之前的 currId」作为 oldCurrId 快照；
+        // ShowGirlPage 的 bNew 取自 IsFirstGetHero()，判定的正是 oldCurrId。缺这条推送时该船
+        // 永远进不了 currId/oldCurrId，重复获得仍会播放首次获得动画、弹上锁询问并显示 NEW
+        // 角标，图鉴也要重登才解锁。
+        if (newShipTemplateIds is { Count: > 0 })
+        {
+            pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
+                Method: "illustrate.IllustrateInfo",
+                Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
+                    IllustrateList: newShipTemplateIds
+                        .Select(ToIllustrateId)
+                        .Distinct()
+                        .Select(illustrateId => BuildUnlockedIllustrateInfo(illustrateId, now))
+                        .ToList(),
+                    // repeated 字段必须非 nil，否则客户端 ipairs(nil) 崩溃。
+                    IllustrateEquipList: [new IllustrateEquipInfo()])),
+                Time: now)));
+        }
+        pushes.Add(BuildBagPush(account, now, removedBagTemplateIds));
+        pushes.Add(BuildFashionPush(account, now));
+        pushes.Add(BuildEquipPush(account, now));
+        return pushes;
     }
 
     /// <summary>换装/买时装后的数据推送（船坞 + 装备仓库），供会话在 hero.ChangeEquip 应答后发出。</summary>
