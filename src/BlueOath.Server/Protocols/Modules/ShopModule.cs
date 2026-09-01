@@ -59,6 +59,26 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
                         : [],
                 };
                 break;
+            case "bag.GetSelectTreasureInfo":
+                ShopService.TreasureOpenResult selected =
+                    await shop.BuildOpenSelectTreasureRetAsync(request, ctx.ProfileId, ctx.Ct);
+                // 非道具箱（舰船/装备选择箱）由 BuildOpenSelectTreasureRetAsync 返回
+                // Changed=false 且 Error 为空，此处保持改动前的空响应，不引入新的错误码。
+                result = !selected.Changed && selected.Error.Length == 0
+                    ? ModuleResult.Empty
+                    : new ModuleResult
+                    {
+                        Ret = selected.Ret,
+                        Err = selected.Changed ? 0 : 1,
+                        ErrMsg = selected.Error,
+                        PrePushes = selected.Changed
+                            ? await services.BuildBuyPushesAsync(ctx.ProfileId, (uint)ctx.Now, ctx.Ct,
+                                selected.RemovedTreasureTemplateId > 0
+                                    ? [selected.RemovedTreasureTemplateId]
+                                    : null)
+                            : [],
+                    };
+                break;
             case "shop.RefreshShop":
             default:
                 result = ModuleResult.Empty;
@@ -135,7 +155,7 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
         }
         else if (goods.Type == GameServices.GoodsTypeFashion)
         {
-            account = AddFashion(account, goods.ItemId);
+            account = services.AddFashion(account, goods.ItemId);
         }
         else if (goods.Type == GameServices.GoodsTypeShip)
         {
@@ -172,23 +192,4 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
         return account with { Equip = equip with { Items = items } };
     }
 
-    private PlayerAccount AddFashion(PlayerAccount account, int fashionTid)
-    {
-        var fashion = account.Fashion ?? new PlayerFashion([]);
-        var entries = fashion.Entries.ToList();
-        var sfId = services.FashionSfIdMap.GetValueOrDefault(fashionTid, fashionTid);
-        var idx = entries.FindIndex(e => e.SfId == sfId);
-        if (idx >= 0)
-        {
-            var tids = entries[idx].FashionTids.ToList();
-            if (!tids.Contains(fashionTid))
-                tids.Add(fashionTid);
-            entries[idx] = entries[idx] with { FashionTids = tids };
-        }
-        else
-        {
-            entries.Add(new FashionEntry(sfId, [fashionTid]));
-        }
-        return account with { Fashion = fashion with { Entries = entries } };
-    }
 }

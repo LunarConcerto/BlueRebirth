@@ -42,6 +42,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("mod manager filters target and orders mods", ModTest),
     ("equipment mod adds a client/server template and GM shop good", EquipmentModTest),
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
+    ("item selection boxes grant the chosen option", SelectTreasureTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
@@ -2705,6 +2706,116 @@ static Task SeaCopySafeAreaCodecTest()
 
     Assert(foundSafeAreaCopy, "sea-copy synchronization did not include safe-area copy 5011");
     return Task.CompletedTask;
+}
+
+// 自选箱（config_item_selected，物品类型 8）此前完全没有服务端实现：bag.GetSelectTreasureInfo
+// 落到 ShopModule 的 default 分支返回空 Ret 且 Err=0，客户端 SelectRandTreasurePage 解出空的
+// treasuresInfo，表现为「选好点确认后什么都没有」。
+// item_id 是 [GoodsType, ConfigId, Num] 三元组列表；position 是其中的序号，<b>从 1 开始</b>：
+// 客户端 SelectRandTreasurePage 把它当 Lua 表下标直接用（item_id[self.pos]），初值即为 1。
+// 按 0 基解析会整体偏移一位——选第 1 项拿到第 2 项，选末项则越界被拒。
+// 本次只实现 type==3 的道具箱；type 1/2（舰船箱、装备箱）另有实现，必须保持空响应不变。
+static async Task SelectTreasureTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-select-box-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "select-box";
+    const int itemBoxId = 80134;     // 祈願特注石選択箱（精選版）：[[11,110037,18],[11,110050,18]]
+    const int fashionBoxId = 80240;  // 大破着せ替え+α選択箱：首项 [18,4044015,1]
+    const int shipBoxId = 80324;     // 指定戦姫チケット（限定版）：下标 0 是舰船
+    const int heroBoxId = 80001;     // 舰船箱（type=1），必须保持空响应
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, 1) with
+        {
+            Bag = new PlayerBag(
+            [
+                new BagItem(itemBoxId, 5),
+                new BagItem(fashionBoxId, 1),
+                new BagItem(shipBoxId, 1),
+                new BagItem(heroBoxId, 1),
+            ], 200),
+        });
+
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot,
+             "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
+             "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var shop = new ShopService(services);
+
+        static byte[] Args(int treasureId, int position, int num) => new ProtocolPackage()
+            .Write(0x08, (ulong)treasureId)
+            .Write(0x10, (ulong)position)
+            .Write(0x18, (ulong)num)
+            .ToArray();
+
+        // 80134 的选项是 [[11,110037,18],[11,110050,18]]。position=1 必须给第 1 项。
+        ShopService.TreasureOpenResult first = await shop.BuildOpenSelectTreasureRetAsync(
+            new TRequest("bag.GetSelectTreasureInfo", Args(itemBoxId, 1, 1)), profileId, CancellationToken.None);
+        Assert(first.Changed, $"item selection box was rejected at position 1: {first.Error}");
+        PlayerAccount afterFirst = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("select-box account disappeared");
+        Assert(afterFirst.Bag!.Items.Single(i => i.TemplateId == 110037).Num == 18,
+            "position 1 did not grant the first option (off-by-one in the option index?)");
+        Assert(afterFirst.Bag.Items.All(i => i.TemplateId != 110050),
+            "position 1 granted the second option instead of the first");
+        Assert(afterFirst.Bag.Items.Single(i => i.TemplateId == itemBoxId).Num == 4,
+            "item selection box consumed the wrong number of boxes");
+
+        // position=2 是该箱的末项，必须同样可选——按 0 基解析时这里会越界被拒。
+        ShopService.TreasureOpenResult last = await shop.BuildOpenSelectTreasureRetAsync(
+            new TRequest("bag.GetSelectTreasureInfo", Args(itemBoxId, 2, 1)), profileId, CancellationToken.None);
+        Assert(last.Changed, $"the last option was rejected: {last.Error}");
+        PlayerAccount afterLast = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("select-box account disappeared");
+        Assert(afterLast.Bag!.Items.Single(i => i.TemplateId == 110050).Num == 18,
+            "the last option did not grant its reward");
+
+        // 两侧越界都必须被拒绝，且不能扣除箱子。
+        foreach (int badPosition in new[] { 0, 3 })
+        {
+            ShopService.TreasureOpenResult outOfRange = await shop.BuildOpenSelectTreasureRetAsync(
+                new TRequest("bag.GetSelectTreasureInfo", Args(itemBoxId, badPosition, 1)),
+                profileId, CancellationToken.None);
+            Assert(!outOfRange.Changed,
+                $"item selection box accepted an out-of-range position {badPosition}");
+            PlayerAccount afterBad = await repo.LoadAccountAsync(profileId)
+                ?? throw new InvalidDataException("select-box account disappeared");
+            Assert(afterBad.Bag!.Items.Single(i => i.TemplateId == itemBoxId).Num == 3,
+                $"a rejected selection at position {badPosition} still consumed a box");
+        }
+
+        // 时装奖励必须进时装表，不能按道具入包。
+        ShopService.TreasureOpenResult fashion = await shop.BuildOpenSelectTreasureRetAsync(
+            new TRequest("bag.GetSelectTreasureInfo", Args(fashionBoxId, 1, 1)), profileId, CancellationToken.None);
+        Assert(fashion.Changed, $"fashion option was rejected: {fashion.Error}");
+        PlayerAccount afterFashion = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("select-box account disappeared");
+        Assert(afterFashion.Fashion?.Entries.Any(e => e.FashionTids.Contains(4044015)) == true,
+            "fashion option did not unlock the skin");
+        Assert(afterFashion.Bag!.Items.All(i => i.TemplateId != 4044015),
+            "fashion option polluted the item bag");
+
+        // 舰船选项本次不实现，必须明确拒绝而不是静默发放。
+        ShopService.TreasureOpenResult ship = await shop.BuildOpenSelectTreasureRetAsync(
+            new TRequest("bag.GetSelectTreasureInfo", Args(shipBoxId, 1, 1)), profileId, CancellationToken.None);
+        Assert(!ship.Changed && ship.Error.Length > 0,
+            "ship option inside an item box should be rejected with an error");
+
+        // 舰船箱（type=1）必须维持改动前的空响应：Changed=false 且 Error 为空。
+        ShopService.TreasureOpenResult heroBox = await shop.BuildOpenSelectTreasureRetAsync(
+            new TRequest("bag.GetSelectTreasureInfo", Args(heroBoxId, 1, 1)), profileId, CancellationToken.None);
+        Assert(!heroBox.Changed && heroBox.Error.Length == 0,
+            "hero selection box must keep its previous empty response");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
 }
 
 static string FindClientConfigDir()

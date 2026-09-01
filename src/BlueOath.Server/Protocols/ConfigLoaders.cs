@@ -264,6 +264,19 @@ internal static class ItemInfoLoader
     }
 }
 
+/// <summary>
+/// 选择箱配置（config_item_selected，物品类型 8）。item_id 为 [GoodsType, ConfigId, Num]
+/// 三元组列表，玩家按下标选择其一；item_id 为空而 drop_id &gt; 0 的条目是随机选择箱。
+/// type：1=舰船箱 2=装备箱 3=道具箱 4=时装箱。
+/// </summary>
+internal static class ItemSelectedLoader
+{
+    public static Dictionary<int, ConfigItemSelected> Load(string configDir)
+    {
+        return ConfigDbLoader.LoadAll<ConfigItemSelected>(configDir, "config_item_selected.db");
+    }
+}
+
 internal static class ShipLevelupLoader
 {
     public static (Dictionary<int, int> ExpPerItem, Dictionary<int, int> ExpNeeded) Load(string configDir)
