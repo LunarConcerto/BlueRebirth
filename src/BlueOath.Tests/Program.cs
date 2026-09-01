@@ -2914,28 +2914,8 @@ static async Task DailyCopyGameplayTest()
     Assert(ProtocolDecoder.DecodeVarintField(startPayload, 7) == 9,
         "copy.StartBase did not preserve DailyCopy type 9");
 
-    byte[] copyPayload = ProtocolEncoder.EncodeDailyCopyInfo();
-    int baseInfoCount = 0;
-    bool foundFirstDestroyerLevel = false, foundDestroyerTreaty = false;
-    ProtocolDecoder.ProtoReader copyReader = new(copyPayload);
-    while (copyReader.TryReadField(out int field, out int wire))
-    {
-        if (field != 1 || wire != 2)
-        {
-            copyReader.Skip(wire);
-            continue;
-        }
-        baseInfoCount++;
-        int baseId = 0;
-        ProtocolDecoder.ProtoReader baseInfo = new(copyReader.ReadBytes());
-        while (baseInfo.TryReadField(out int baseField, out int baseWire))
-        {
-            if (baseField == 1 && baseWire == 0) baseId = checked((int)baseInfo.ReadVarint());
-            else baseInfo.Skip(baseWire);
-        }
-        if (baseId == 20101) foundFirstDestroyerLevel = true;
-        if (baseId == 20518) foundDestroyerTreaty = true;
-    }
+    var (baseInfoCount, foundFirstDestroyerLevel, foundDestroyerTreaty) =
+        ScanDailyCopyInfo(ProtocolEncoder.EncodeDailyCopyInfo());
     Assert(baseInfoCount == 44 && foundFirstDestroyerLevel && foundDestroyerTreaty,
         "DailyCopy synchronization omitted configured normal or treaty levels");
 
@@ -2988,20 +2968,8 @@ static async Task DailyCopyGameplayTest()
             "destroyer treaty clear did not increment daily group success count");
         await services.SaveAccountAsync(account, CancellationToken.None);
 
-        byte[] statePayload = DailyCopyService.EncodeSnapshot(account.DailyCopy, today);
-        int chapterRows = 0, groupRows = 0, extraRows = 0;
-        ProtocolDecoder.ProtoReader stateReader = new(statePayload);
-        while (stateReader.TryReadField(out int stateField, out int stateWire))
-        {
-            if (stateWire == 2 && stateField is >= 1 and <= 3)
-            {
-                _ = stateReader.ReadBytes();
-                if (stateField == 1) chapterRows++;
-                else if (stateField == 2) groupRows++;
-                else extraRows++;
-            }
-            else stateReader.Skip(stateWire);
-        }
+        var (chapterRows, groupRows, extraRows) =
+            CountDailyCopySnapshotRows(DailyCopyService.EncodeSnapshot(account.DailyCopy, today));
         Assert(chapterRows == 4 && groupRows == 4 && extraRows == 4,
             "dailycopy.UpdateDailyCopyData omitted a repeated array required by the client");
 
@@ -3165,6 +3133,52 @@ static Task TaskCompletionRequiresProgressTest()
     Assert(TaskProtocolCodec.GetEventProgress([definition], partialProgress) == 2,
         "partial task event progress was not preserved");
     return Task.CompletedTask;
+}
+
+// ProtocolDecoder.ProtoReader 是 ref struct，C# 12 不允许它出现在 async 方法体内
+// （CS8652）。DailyCopyGameplayTest 是 async，两处解析必须提到独立的同步方法里。
+static (int BaseInfoCount, bool FirstDestroyerLevel, bool DestroyerTreaty) ScanDailyCopyInfo(byte[] copyPayload)
+{
+    int baseInfoCount = 0;
+    bool foundFirstDestroyerLevel = false, foundDestroyerTreaty = false;
+    ProtocolDecoder.ProtoReader copyReader = new(copyPayload);
+    while (copyReader.TryReadField(out int field, out int wire))
+    {
+        if (field != 1 || wire != 2)
+        {
+            copyReader.Skip(wire);
+            continue;
+        }
+        baseInfoCount++;
+        int baseId = 0;
+        ProtocolDecoder.ProtoReader baseInfo = new(copyReader.ReadBytes());
+        while (baseInfo.TryReadField(out int baseField, out int baseWire))
+        {
+            if (baseField == 1 && baseWire == 0) baseId = checked((int)baseInfo.ReadVarint());
+            else baseInfo.Skip(baseWire);
+        }
+        if (baseId == 20101) foundFirstDestroyerLevel = true;
+        if (baseId == 20518) foundDestroyerTreaty = true;
+    }
+    return (baseInfoCount, foundFirstDestroyerLevel, foundDestroyerTreaty);
+}
+
+static (int ChapterRows, int GroupRows, int ExtraRows) CountDailyCopySnapshotRows(byte[] statePayload)
+{
+    int chapterRows = 0, groupRows = 0, extraRows = 0;
+    ProtocolDecoder.ProtoReader stateReader = new(statePayload);
+    while (stateReader.TryReadField(out int stateField, out int stateWire))
+    {
+        if (stateWire == 2 && stateField is >= 1 and <= 3)
+        {
+            _ = stateReader.ReadBytes();
+            if (stateField == 1) chapterRows++;
+            else if (stateField == 2) groupRows++;
+            else extraRows++;
+        }
+        else stateReader.Skip(stateWire);
+    }
+    return (chapterRows, groupRows, extraRows);
 }
 
 static string FindClientConfigDir()
