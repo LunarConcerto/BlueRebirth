@@ -819,7 +819,10 @@ static Task AccountProfileBootstrapTest()
 
     using JsonDocument plData = JsonDocument.Parse(
         responder.BuildResponse("GET /phone/getPlData/getPlData HTTP/1.1").Body);
-    Assert(plData.RootElement.GetProperty("pid").GetString() == profileId,
+    // 事件 1007 的信封是 errornu/errordesc/data，平台字段（含 pid）都在 data 之下，
+    // 见 BootstrapHttpResponder 的 getPlData 分支；摊到根对象会让 SDK 走 111111
+    // 未知错误分支，因此响应体是对的，断言需跟随该结构。
+    Assert(plData.RootElement.GetProperty("data").GetProperty("pid").GetString() == profileId,
         "getPlData did not expose selected profile");
 
     using JsonDocument login = JsonDocument.Parse(

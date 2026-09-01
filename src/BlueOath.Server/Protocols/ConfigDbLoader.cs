@@ -18,13 +18,45 @@ internal static class ConfigDbLoader
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
-    /// 直接由启动参数传入的客户端路径计算游戏配置目录
+    /// 直接由启动参数传入的客户端路径计算游戏基础配置目录
     /// （<c>{clientPath}/blueoath_Data/StreamingAssets/config</c>），不再向上逐级查找。
+    /// 注意实际生效的配置还要叠加热更目录，见 <see cref="ResolveDbPath"/>。
     /// </summary>
     public static string BuildConfigDir(string clientPath)
     {
         if (string.IsNullOrEmpty(clientPath)) return "";
         return Path.Combine(clientPath, "blueoath_Data", "StreamingAssets", "config");
+    }
+
+    /// <summary>
+    /// 解析某张配置表的实际路径。官方启动器把热更下发的增量配置写到安装根目录的
+    /// <c>config/</c>（与游戏目录平级），客户端运行时按「热更优先、StreamingAssets 兜底」
+    /// 合并——热更目录只包含被改动过的表，其余仍走整包内的基础表。服务端必须遵循同一
+    /// 优先级，否则会和客户端读到不同版本的配置（例如日服停服前最后一次热更新增的
+    /// 舰船与突破链，在基础表里并不存在）。
+    /// </summary>
+    public static string ResolveDbPath(string configDir, string dbFile)
+    {
+        var hotpatch = BuildHotpatchPath(configDir, dbFile);
+        if (hotpatch is not null && File.Exists(hotpatch)) return hotpatch;
+        return Path.Combine(configDir, dbFile);
+    }
+
+    /// <summary>
+    /// 由基础配置目录反推热更配置路径：
+    /// <c>{install}/{client}/blueoath_Data/StreamingAssets/config</c> → <c>{install}/config/{dbFile}</c>。
+    /// 目录层级不符合该形状时返回 <c>null</c>，避免对自定义配置目录做出错误推断。
+    /// </summary>
+    private static string? BuildHotpatchPath(string configDir, string dbFile)
+    {
+        var streamingAssets = Path.GetDirectoryName(configDir);
+        if (streamingAssets is null || !string.Equals(
+                Path.GetFileName(streamingAssets), "StreamingAssets", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var dataDir = Path.GetDirectoryName(streamingAssets);
+        var clientDir = dataDir is null ? null : Path.GetDirectoryName(dataDir);
+        var installDir = clientDir is null ? null : Path.GetDirectoryName(clientDir);
+        return installDir is null ? null : Path.Combine(installDir, "config", dbFile);
     }
 
     /// <summary>
@@ -69,7 +101,7 @@ internal static class ConfigDbLoader
     /// </summary>
     public static void LoadRows(string configDir, string dbFile, Action<int, SqliteDataReader, string> callback)
     {
-        var path = Path.Combine(configDir, dbFile);
+        var path = ResolveDbPath(configDir, dbFile);
         if (!File.Exists(path)) return;
         using var c = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
         c.Open();
