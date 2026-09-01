@@ -394,7 +394,7 @@ static class ConfigDatabaseTool
     private static string BuildReport(ConfigCatalog catalog)
     {
         var report = new StringBuilder();
-        report.AppendLine("# 苍蓝誓约客户端配置目录");
+        report.AppendLine("# 某游戏客户端配置目录");
         report.AppendLine();
         report.AppendLine($"> 生成时间 `{catalog.GeneratedUtc:O}`。所有数据库均以只读方式访问，原始客户端文件未修改。");
         report.AppendLine();

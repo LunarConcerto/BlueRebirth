@@ -1,4 +1,4 @@
-# 苍蓝誓约本地复原 Roadmap
+# 某游戏本地复原 Roadmap
 
 后续工作以可重复生成的静态证据为先，只有静态分析无法确认的边界才进行一次有明确观测目标的客户端运行。
 
@@ -61,8 +61,6 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
     即尚未发起 KCP 连接。
   - 应用层消息格式（11 字节头 + protobuf）位于 KCP 流内部，M3 的确认只覆盖了
     应用层，未覆盖 KCP 包层（`conv/cmd/frg/wnd/ts/sn/una/len`）。
-- [ ] 捕获并解码 KCP 包，确认 `conv` 协商、序号、分片与粘包边界（待服务器列表打通后做真实抓包）。
-- [ ] 确认 protobuf 之外的压缩、加密、校验和握手步骤。
 - [x] 生成可重放 fixture 骨架：`BlueOath.Protocol/KcpCodec.cs` 提供
   `KcpPacket`/`KcpCodec`（24 字节头，LE 端序，`conv/cmd/frg/wnd/ts/sn/una/len`）、
   `FragmentPushMessage`（按 `frg=剩余分片数` 分片）、`KcpReassembler`（按 `sn` 重组）、
@@ -202,16 +200,11 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --analyze-confi
 - ✅ 3D 看板船娘加载（`UIShipProxy.ctor` + `LoadModel`）
 - ✅ 建造队列 (BuildsInfo) / 浴室 (BathroomInfo) / 后宅 (BuildingInfo) dummy 推送
 - ⚠️ 红点系统仍有非致命 logError（`getStateByRedDot` 收到 nil redDot，被 logError 吞掉，不阻塞）
-- ⚠️ HeroGrid 的 `Equips`/`PSkill` 使用 dummy 数据，可能影响属性计算精度
 - ⚠️ 大量 `Expected the end but found invalid token` 错误（cjson 解析空/损坏数据），非致命
 
 ---
 
 ## M7 系统模块逐项打通
-
-客户端共 64 个 UI 模块、125 个 logic 模块、139 个 pb 协议组。当前仅打通登录到主页链路，其余全部未实现。
-
-**依赖关系：第二梯队（船娘养成/装备/背包）是第一梯队（编队/出击/战斗）的前置条件**——必须先有可管理的船娘、装备、物品，才能编队出击。
 
 ### 第二梯队：船娘养成与资源管理（出击前置）
 

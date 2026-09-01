@@ -34,6 +34,7 @@ internal sealed class GameServices
     private readonly Dictionary<int, ConfigExtractShip> _extractShips;
     private readonly Dictionary<int, ConfigDropItem> _dropItems;
     private readonly Dictionary<int, ConfigItemInfo> _itemInfos;
+    private readonly Dictionary<int, ConfigItemSelected> _itemSelected;
     private readonly Dictionary<int, ConfigSpecialdraw> _specialDraws;
     private readonly Dictionary<int, ConfigShipInfo> _shipInfos;
     private readonly Dictionary<int, int> _expPerItem;
@@ -67,10 +68,15 @@ internal sealed class GameServices
         ConstructionConfigLoader.Load(configDir);
         BuildingConfigLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
+        _itemSelected = ItemSelectedLoader.Load(configDir);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
         DailyCopyRewardCatalog.Load(configDir);
+        CopyDisplayLoader.Load(configDir);
+        StrategyConfigLoader.Load(configDir);
+        MubConversionLoader.Load(configDir);
+        TalentConfigLoader.Load(configDir);
         TaskConfigCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
@@ -115,6 +121,7 @@ internal sealed class GameServices
 
     /// <summary>道具配置（宝箱道具通过 DropId 指向 config_drop_item）。</summary>
     internal IReadOnlyDictionary<int, ConfigItemInfo> ItemInfos => _itemInfos;
+    internal IReadOnlyDictionary<int, ConfigItemSelected> ItemSelected => _itemSelected;
 
     /// <summary>船信息配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigShipInfo> ShipInfos => _shipInfos;
@@ -320,6 +327,17 @@ internal sealed class GameServices
                     HeroMemoryList: CharacterStoryLoader.AllMemories)),
                 Time: now)),
 
+            // 图鉴「上一次快照」同步，必须紧跟在上面的全量图鉴推送之后。
+            // IllustrateData:IsFirstGetHero() 判定的是 oldCurrId（应用推送前的 currId），
+            // 而 SetIllustrateData 在登录这一次快照时 currId 还是空表，于是 oldCurrId 也为空，
+            // 任何舰船都会被判成首次获得。illustrate.OldIllustrateInfo 的客户端处理器忽略
+            // Ret，只把 oldCurrId 同步成当前 currId（该方法在 protobufTypeManager 中未注册
+            // 类型，不做 pb 解码，空 Ret 是安全的）。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "illustrate.OldIllustrateInfo",
+                Ret: [],
+                Time: now)),
+
             // 活动剧情回顾进度。Index 设为章节节点总数，使所有往期活动剧情均可重播。
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "illustrate.Memory",
@@ -364,7 +382,72 @@ internal sealed class GameServices
             TMessageCodec.EncodeResponse(new TResponse(
                 Method: "payback.newPayback",
                 Time: now)),
+
+            // 战术数据推送：strategy.GetStrategy 一次性解锁全部战术（Level=1），
+            // 否则客户端战术页面 Data.strategyData 为空，全部显示"未解锁"。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "strategy.GetStrategy",
+                Ret: ProtocolEncoder.EncodeStrategyRet(
+                    StrategyConfigLoader.All.Select(s => ((int)s.Id, 1)), resetNum: 0),
+                Time: now)),
+
+            // 实验室（天赋树）数据推送：talentTree.TalentTreeAllList 填充 Data.talentData，
+            // 否则 TalentPage 的 GetCurSubTalentId 返回 0 → config_talent 查 nil → 崩溃。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "talentTree.TalentTreeAllList",
+                Ret: ProtocolEncoder.EncodeTalentTreeAllList(BuildTalentTreeList(account)),
+                Time: now)),
         ];
+    }
+
+    /// <summary>构建天赋树列表：每个根天赋返回下一个未解锁目标（IsOperate=0），
+    /// 已到链尾时返回最大天赋（IsOperate=1）。全新账号从根节点开始手动解锁。</summary>
+    internal static IReadOnlyList<(int TalentId, IReadOnlyList<int> PreCondition, int IsOperate)> BuildTalentTreeList(
+        PlayerAccount account)
+    {
+        var reached = account.Talent?.ActiveTalents ?? new Dictionary<int, int>();
+        return TalentConfigLoader.RootTalents
+            .Select(root =>
+            {
+                int rootId = checked((int)root.Id);
+                reached.TryGetValue(rootId, out int reachedSub);
+                return ComputeTalentTarget(rootId, reachedSub != 0 ? reachedSub : (int?)null);
+            })
+            .ToList();
+    }
+
+    /// <summary>计算某根天赋链当前应展示的目标天赋：
+    /// 未解锁 → 根（IsOperate=0，显示解锁按钮）；已到链中 → 下一级（IsOperate=0，可升级）；
+    /// 已到链尾 → 自身（IsOperate=1，显示最大等级）。</summary>
+    internal static (int TalentId, IReadOnlyList<int> PreCondition, int IsOperate) ComputeTalentTarget(
+        int rootId, int? reached)
+    {
+        int targetId;
+        int isOperate;
+        if (reached is int r)
+        {
+            ConfigTalent? cfg = TalentConfigLoader.Get(r);
+            int nextId = cfg is { Nexttalent: > 0 } ? checked((int)cfg.Nexttalent) : 0;
+            if (nextId != 0)
+            {
+                targetId = nextId;
+                isOperate = 0;
+            }
+            else
+            {
+                targetId = r;
+                isOperate = 1;
+            }
+        }
+        else
+        {
+            targetId = rootId;
+            isOperate = 0;
+        }
+
+        IReadOnlyList<int> pre = TalentConfigLoader.Get(targetId)?.Precondition
+            ?.Select(p => checked((int)p)).ToList() ?? [];
+        return (targetId, pre, isOperate);
     }
 
     /// <summary>加载账号；不存在时按默认工厂创建并落盘。优先从内存缓存读取。</summary>
@@ -631,6 +714,30 @@ internal sealed class GameServices
     /// <summary>序列化 GUIDE_DONE_STAGES（Serialize 生成的字符串，key 为字符串）。</summary>
     private static string BuildDoneGuideStages() =>
         "{" + string.Join(",", DoneGuideStages.Select(id => $"[\"{id}\"]=1")) + "}";
+
+    /// <summary>
+    /// 时装解锁：按 config_ship_info.sf_id 归组写入玩家时装表，重复解锁不会产生重复项。
+    /// 商店购买与选择箱开启共用（选择箱的道具类里含时装奖励，不能走 AddBagItem）。
+    /// </summary>
+    internal PlayerAccount AddFashion(PlayerAccount account, int fashionTid)
+    {
+        var fashion = account.Fashion ?? new PlayerFashion([]);
+        var entries = fashion.Entries.ToList();
+        var sfId = FashionSfIdMap.GetValueOrDefault(fashionTid, fashionTid);
+        var idx = entries.FindIndex(e => e.SfId == sfId);
+        if (idx >= 0)
+        {
+            var tids = entries[idx].FashionTids.ToList();
+            if (!tids.Contains(fashionTid))
+                tids.Add(fashionTid);
+            entries[idx] = entries[idx] with { FashionTids = tids };
+        }
+        else
+        {
+            entries.Add(new FashionEntry(sfId, [fashionTid]));
+        }
+        return account with { Fashion = fashion with { Entries = entries } };
+    }
 
     /// <summary>设置装备的 HeroId（装备/卸下）。</summary>
     internal static PlayerAccount SetEquipHeroId(PlayerAccount account, uint equipId, uint heroId)
@@ -1193,11 +1300,11 @@ internal sealed class GameServices
 
     /// <summary>购买数据推送（货币 + 仓库 + 时装 + 装备），必须在 shop.BuyGoods 应答前发出。</summary>
     public async Task<IReadOnlyList<byte[]>> BuildBuyPushesAsync(string profileId, uint now, CancellationToken ct,
-        IReadOnlyList<int>? removedBagTemplateIds = null)
+        IReadOnlyList<int>? removedBagTemplateIds = null, IReadOnlyList<int>? newShipTemplateIds = null)
     {
         var account = await GetOrCreateAccountAsync(profileId, ct);
         List<HeroGrid> heroes = account.Dock.Heroes.Select(ToHeroGrid).ToList();
-        return
+        List<byte[]> pushes =
         [
             await BuildUpdateUserInfoPushAsync(profileId, now, ct),
             // 购买舰娘后刷新船坞（hero.UpdateHeroBagData），使新船立即出现在船坞。
@@ -1205,10 +1312,30 @@ internal sealed class GameServices
                 Method: "hero.UpdateHeroBagData",
                 Ret: PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize)),
                 Time: now)),
-            BuildBagPush(account, now, removedBagTemplateIds),
-            BuildFashionPush(account, now),
-            BuildEquipPush(account, now),
         ];
+        // 购买舰娘还必须同步图鉴。客户端 IllustrateData 只在收到 illustrate.IllustrateInfo 时
+        // 才把 ship_info_id 并入 currId，并以「应用本次推送之前的 currId」作为 oldCurrId 快照；
+        // ShowGirlPage 的 bNew 取自 IsFirstGetHero()，判定的正是 oldCurrId。缺这条推送时该船
+        // 永远进不了 currId/oldCurrId，重复获得仍会播放首次获得动画、弹上锁询问并显示 NEW
+        // 角标，图鉴也要重登才解锁。
+        if (newShipTemplateIds is { Count: > 0 })
+        {
+            pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
+                Method: "illustrate.IllustrateInfo",
+                Ret: PlayerDataCodec.Encode(new IllustrateInfoRet(
+                    IllustrateList: newShipTemplateIds
+                        .Select(ToIllustrateId)
+                        .Distinct()
+                        .Select(illustrateId => BuildUnlockedIllustrateInfo(illustrateId, now))
+                        .ToList(),
+                    // repeated 字段必须非 nil，否则客户端 ipairs(nil) 崩溃。
+                    IllustrateEquipList: [new IllustrateEquipInfo()])),
+                Time: now)));
+        }
+        pushes.Add(BuildBagPush(account, now, removedBagTemplateIds));
+        pushes.Add(BuildFashionPush(account, now));
+        pushes.Add(BuildEquipPush(account, now));
+        return pushes;
     }
 
     /// <summary>换装/买时装后的数据推送（船坞 + 装备仓库），供会话在 hero.ChangeEquip 应答后发出。</summary>

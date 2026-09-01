@@ -51,7 +51,7 @@ static class ConfigClassTool
     private static int GenerateTable(string dbPath, string outputDir, string ns, HashSet<string> usedClassNames)
     {
         var table = Path.GetFileNameWithoutExtension(dbPath);
-        var root = new SchemaNode();
+        var root = new ConfigSchema.Node();
         var rows = 0;
 
         using (var connection = OpenReadOnly(dbPath))
@@ -62,7 +62,7 @@ static class ConfigClassTool
             while (reader.Read())
             {
                 using var document = JsonDocument.Parse(Xor(ReadBytes(reader, 0)));
-                MergeNode(root, document.RootElement);
+                ConfigSchema.Merge(root, document.RootElement);
                 rows++;
             }
         }
@@ -98,82 +98,17 @@ static class ConfigClassTool
         return fieldCount;
     }
 
-    private static string RenderField(SchemaNode node)
+    private static string RenderField(ConfigSchema.Node node)
     {
-        var baseType = RenderBase(node);
+        var baseType = ConfigSchema.CSharpType(node);
         if (node.HasNull || IsReference(baseType)) return baseType + "?";
         return baseType;
-    }
-
-    private static string RenderElement(SchemaNode node)
-    {
-        var baseType = RenderBase(node);
-        if (node.HasNull && IsValueType(baseType)) return baseType + "?";
-        return baseType;
-    }
-
-    private static string RenderBase(SchemaNode node)
-    {
-        var kinds = node.Kinds.Where(k => k != "null").ToHashSet(StringComparer.Ordinal);
-        if (kinds.Count == 0) return "object";
-        if (kinds.Count == 1)
-            return kinds.Single() switch
-            {
-                "integer" => "long",
-                "number" => "double",
-                "string" => "string",
-                "bool" => "bool",
-                "object" => "object",
-                "array" => "List<" + RenderElement(node.Element ?? new SchemaNode()) + ">",
-                _ => "object"
-            };
-        if (kinds.SetEquals(["integer", "number"])) return "double";
-        return "object";
     }
 
     private static bool IsValueType(string baseType) =>
         baseType is "long" or "double" or "bool";
 
     private static bool IsReference(string baseType) => !IsValueType(baseType);
-
-    private static void MergeNode(SchemaNode node, JsonElement element)
-    {
-        switch (element.ValueKind)
-        {
-            case JsonValueKind.Null:
-            case JsonValueKind.Undefined:
-                node.Kinds.Add("null");
-                break;
-            case JsonValueKind.String:
-                node.Kinds.Add("string");
-                break;
-            case JsonValueKind.Number:
-                node.Kinds.Add(element.TryGetInt64(out _) ? "integer" : "number");
-                break;
-            case JsonValueKind.True:
-            case JsonValueKind.False:
-                node.Kinds.Add("bool");
-                break;
-            case JsonValueKind.Object:
-                node.Kinds.Add("object");
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (!node.Fields.TryGetValue(property.Name, out var child))
-                    {
-                        child = new SchemaNode();
-                        node.Fields[property.Name] = child;
-                    }
-                    MergeNode(child, property.Value);
-                }
-                break;
-            case JsonValueKind.Array:
-                node.Kinds.Add("array");
-                node.Element ??= new SchemaNode();
-                foreach (var item in element.EnumerateArray())
-                    MergeNode(node.Element, item);
-                break;
-        }
-    }
 
     private static readonly HashSet<string> ReservedPropertyNames = new(StringComparer.Ordinal)
     {
@@ -267,14 +202,6 @@ static class ConfigClassTool
 
     private static string? ReadArg(string[] args, string prefix) =>
         args.FirstOrDefault(x => x.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))?[prefix.Length..];
-
-    private sealed class SchemaNode
-    {
-        public HashSet<string> Kinds { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string, SchemaNode> Fields { get; } = new(StringComparer.Ordinal);
-        public SchemaNode? Element { get; set; }
-        public bool HasNull => Kinds.Contains("null");
-    }
 
     private sealed record GenerationSummary(int Classes, int Fields);
 }

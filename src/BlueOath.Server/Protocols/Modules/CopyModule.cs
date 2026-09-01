@@ -28,6 +28,7 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                 var account = await ctx.GetAccountAsync();
                 int copyId = ProtocolDecoder.DecodePassBaseCopyId(request.Args ?? []);
                 int copyType = ChapterCopyLoader.GetCopyType(copyId);
+                uint now = (uint)ctx.Now;
                 byte[] copyPush = TMessageCodec.EncodeResponse(new TResponse(
                     Method: "copy.GetCopy",
                     Ret: copyType switch
@@ -37,15 +38,25 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                         33 => ProtocolEncoder.EncodeMubarCopyInfo(),
                         _ => ProtocolEncoder.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
                     },
-                    Time: (uint)ctx.Now));
-                List<byte[]> postPushes = [copyPush];
+                    Time: now));
+                // 战斗结算会落盘角色生命值（战损）与战利品，需推送船坞/仓库/装备让客户端立即刷新。
+                var heroes = account.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
+                byte[] heroPush = TMessageCodec.EncodeResponse(new TResponse(
+                    Method: "hero.UpdateHeroBagData",
+                    Ret: PlayerDataCodec.Encode(new HeroBag(heroes, account.Dock.BagSize)),
+                    Time: now));
+                List<byte[]> postPushes =
+                [
+                    copyPush,
+                    heroPush,
+                    ctx.Services.BuildBagPush(account, now),
+                    ctx.Services.BuildEquipPush(account, now),
+                ];
                 if (copyType == 9)
                 {
-                    postPushes.Add(DailyCopyService.BuildUpdatePush(account.DailyCopy, (uint)ctx.Now));
-                    postPushes.Add(ctx.Services.BuildBagPush(account, (uint)ctx.Now));
-                    postPushes.Add(ctx.Services.BuildEquipPush(account, (uint)ctx.Now));
+                    postPushes.Add(DailyCopyService.BuildUpdatePush(account.DailyCopy, now));
                     postPushes.Add(await ctx.Services.BuildUpdateUserInfoPushAsync(
-                        ctx.ProfileId, (uint)ctx.Now, ctx.Ct));
+                        ctx.ProfileId, now, ctx.Ct));
                 }
                 result = new ModuleResult { Ret = ret, PostPushes = postPushes };
                 break;

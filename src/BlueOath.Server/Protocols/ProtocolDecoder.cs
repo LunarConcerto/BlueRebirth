@@ -208,6 +208,38 @@ internal static class ProtocolDecoder
         return (heroId, consumedHeros, consumeItems);
     }
 
+    /// <summary>解码 hero.HeroAdvanceMUB 参数：HeroId(1, uint32),
+    /// ConsumeItems(2, repeated TAdvanceMubItemInfo{ItemId=1, ItemNum=2})。</summary>
+    internal static (uint HeroId, List<(uint ItemId, int ItemNum)> ConsumeItems) DecodeAdvanceMubArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        uint heroId = 0;
+        List<(uint, int)> consumeItems = [];
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 0)
+            {
+                heroId = checked((uint)reader.ReadVarint());
+            }
+            else if (field == 2 && wire == 2)
+            {
+                ProtoReader item = new(reader.ReadBytes());
+                uint itemId = 0;
+                int itemNum = 0;
+                while (item.TryReadField(out int ifield, out int iwire))
+                {
+                    if (ifield == 1 && iwire == 0) itemId = checked((uint)item.ReadVarint());
+                    else if (ifield == 2 && iwire == 0) itemNum = checked((int)item.ReadVarint());
+                    else item.Skip(iwire);
+                }
+                if (itemId != 0)
+                    consumeItems.Add((itemId, itemNum));
+            }
+            else reader.Skip(wire);
+        }
+        return (heroId, consumeItems);
+    }
+
     /// <summary>解码 equip.Dismantle 参数：ConsumeIds(1, repeated uint32)。</summary>
     internal static List<uint> DecodeEquipDismantle(byte[] args)
     {
@@ -255,6 +287,49 @@ internal static class ProtocolDecoder
             else reader.Skip(wire);
         }
         return result;
+    }
+
+    /// <summary>解码 repair.RepairHero 参数：HeroIds(1, repeated uint32), Type(2, uint32)。</summary>
+    internal static (List<uint> HeroIds, uint Type) DecodeRepairArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        List<uint> heroIds = [];
+        uint type = 0;
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (field == 1 && wire == 0) heroIds.Add(checked((uint)reader.ReadVarint()));
+            else if (field == 2 && wire == 0) type = checked((uint)reader.ReadVarint());
+            else reader.Skip(wire);
+        }
+        return (heroIds, type);
+    }
+
+    /// <summary>解码 strategy.Apply 参数：Id(1, int32), Level(2, int32), FleetId(3, int32), TacticType(4, int32)。</summary>
+    internal static (int Id, int Level, int FleetId, int TacticType) DecodeStrategyApplyArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        int id = 0, level = 0, fleetId = 0, tacticType = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            switch (field)
+            {
+                case 1 when wire == 0: id = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: level = checked((int)reader.ReadVarint()); break;
+                case 3 when wire == 0: fleetId = checked((int)reader.ReadVarint()); break;
+                case 4 when wire == 0: tacticType = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        return (id, level, fleetId, tacticType);
+    }
+
+    /// <summary>解码 talentTree.GetTalentData / UnLockTalent / UpgradeTalent 参数：TalentId(1, int32)。</summary>
+    internal static int DecodeTalentIdArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        int talentId = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            if (field == 1 && wire == 0) talentId = checked((int)reader.ReadVarint());
+            else reader.Skip(wire);
+        return talentId;
     }
 
     /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>

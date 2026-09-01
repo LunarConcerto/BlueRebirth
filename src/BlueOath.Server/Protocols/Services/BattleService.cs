@@ -52,6 +52,18 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
         int passTime = battleTime > 0 ? battleTime : 60;
         int copyType = ChapterCopyLoader.GetCopyType(copyId);
 
+        // 保存战斗结束后的角色生命值（客户端回传 HerosInfo.Hp，与 StartBase 的 HpCoefficient 同尺度）。
+        // 无论胜负都要落盘——战败也会掉血。
+        account = SaveHeroHp(account, passArg.HerosInfo);
+
+        // 评级（config_copy_grade_type）：SSS=1..E=8，F=9 为失败。失败不结算战利品、不记录通关进度。
+        bool isVictory = grade < 9;
+        if (!isVictory)
+        {
+            await services.SaveAccountAsync(account, ct);
+            return ProtocolEncoder.EncodePassBaseRet(copyId, grade, 0, passTime);
+        }
+
         if (copyType == 2)
         {
             PlayerSeaCopyProgress seaProgress = account.SeaProgress ?? new PlayerSeaCopyProgress([]);
@@ -75,8 +87,9 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
             }
 
             account = account with { SeaProgress = new PlayerSeaCopyProgress(seaRecords) };
+            (account, List<CommonReward> seaRewards) = GrantCopyRewards(account, copyId, isFirstPass, now);
             await services.SaveAccountAsync(account, ct);
-            return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isFirstPass ? 1 : 0, passTime);
+            return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isFirstPass ? 1 : 0, passTime, seaRewards);
         }
 
         if (copyType == 9)
@@ -120,7 +133,152 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
             account = account with { Character = c };
         }
 
+        (account, List<CommonReward> plotRewards) = GrantCopyRewards(account, copyId, isPlotFirstPass, now);
         await services.SaveAccountAsync(account, ct);
-        return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isPlotFirstPass ? 1 : 0, passTime);
+        return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isPlotFirstPass ? 1 : 0, passTime, plotRewards);
+    }
+
+    /// <summary>把客户端回传的战斗后生命值写回对应舰娘（HerosInfo.HeroId → Hero.CurHp）。</summary>
+    private static PlayerAccount SaveHeroHp(PlayerAccount account, IReadOnlyList<BaseHeroInfo>? herosInfo)
+    {
+        if (herosInfo is null || herosInfo.Count == 0) return account;
+        List<Hero> heroes = account.Dock.Heroes.ToList();
+        bool changed = false;
+        foreach (BaseHeroInfo info in herosInfo)
+        {
+            if (info.HeroId == 0) continue;
+            int idx = heroes.FindIndex(h => h.HeroId == info.HeroId);
+            if (idx < 0) continue;
+            heroes[idx] = heroes[idx] with { CurHp = checked((long)info.Hp) };
+            changed = true;
+        }
+        return changed ? account with { Dock = account.Dock with { Heroes = heroes } } : account;
+    }
+
+    /// <summary>
+    /// 从 config_copy_display 读取掉落表（drop_info_id → config_drop_item 池）与首通奖励
+    /// （first_reward → config_rewards），抽取并发放战利品，返回更新后的账号与奖励列表。
+    /// </summary>
+    private (PlayerAccount Account, List<CommonReward> Rewards) GrantCopyRewards(
+        PlayerAccount account, int copyId, bool isFirstPass, int now)
+    {
+        CopyDisplayLoader.CopyDropInfo? dropInfo = CopyDisplayLoader.Get(copyId);
+        if (dropInfo is null) return (account, []);
+
+        var pending = new List<(int Type, int ConfigId, int Num)>();
+        var path = new HashSet<int>();
+
+        if (isFirstPass)
+            foreach (int rewardId in dropInfo.FirstReward)
+                AppendReward(rewardId, pending);
+
+        foreach (int dropId in dropInfo.DropInfoId)
+            DrawDropPool(dropId, pending, path, 0);
+
+        var rewards = new List<CommonReward>();
+        foreach ((int type, int configId, int num) in pending)
+        {
+            if (type == GameServices.GoodsTypeCurrency)
+            {
+                account = GameServices.AddCurrency(account, configId, num);
+                rewards.Add(new CommonReward(type, configId, num));
+            }
+            else if (type == GameServices.GoodsTypeEquip)
+            {
+                for (int i = 0; i < num; i++)
+                {
+                    (account, uint equipId) = AddEquip(account, configId);
+                    rewards.Add(new CommonReward(type, configId, 1, checked((int)equipId)));
+                }
+            }
+            else if (type == GameServices.GoodsTypeShip)
+            {
+                uint heroId = services.NextHeroId();
+                account = services.AddShip(account, heroId, configId, now);
+                rewards.Add(new CommonReward(type, configId, 1, checked((int)heroId)));
+            }
+            else
+            {
+                account = GameServices.AddBagItem(account, configId, num);
+                rewards.Add(new CommonReward(type, configId, num));
+            }
+        }
+        return (account, rewards);
+    }
+
+    private static void AppendReward(int rewardId, List<(int Type, int ConfigId, int Num)> pending)
+    {
+        if (rewardId <= 0 ||
+            DailyCopyRewardCatalog.GetReward(rewardId) is not { Rewards: { } rewards })
+            return;
+        foreach (List<long> entry in rewards)
+            if (entry.Count >= 3 && entry[2] > 0)
+                pending.Add((checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
+    }
+
+    private bool DrawDropPool(
+        int dropId, List<(int Type, int ConfigId, int Num)> result, HashSet<int> path, int depth)
+    {
+        if (depth >= 16 || !path.Add(dropId) || !services.DropItems.TryGetValue(dropId, out var pool))
+            return false;
+        try
+        {
+            if (pool.DropRate > 0 && pool.Drop is { Count: > 0 })
+                for (int i = 0; i < Math.Max(1, checked((int)pool.DropCount)); i++)
+                    if (WeightedPick(pool.Drop) is { } entry)
+                        ResolveDropEntry(entry, result, path, depth + 1);
+            if (pool.DropAloneCount > 0 && pool.DropAlone is { Count: > 0 })
+                for (int i = 0; i < pool.DropAloneCount; i++)
+                    if (WeightedPick(pool.DropAlone) is { } entry)
+                        ResolveDropEntry(entry, result, path, depth + 1);
+            return true;
+        }
+        finally
+        {
+            path.Remove(dropId);
+        }
+    }
+
+    private void ResolveDropEntry(
+        List<long> entry, List<(int Type, int ConfigId, int Num)> result, HashSet<int> path, int depth)
+    {
+        if (entry.Count < 5) return;
+        int type = checked((int)entry[0]);
+        int configId = checked((int)entry[1]);
+        int min = checked((int)entry[2]);
+        int max = checked((int)entry[3]);
+        if (min <= 0 || max < min) return;
+        int num = min == max ? min : services.Rng.Next(min, checked(max + 1));
+        if (type == GameServices.GoodsTypeDrop)
+        {
+            for (int i = 0; i < num; i++) DrawDropPool(configId, result, path, depth);
+            return;
+        }
+        result.Add((type, configId, num));
+    }
+
+    private List<long>? WeightedPick(List<List<long>> entries)
+    {
+        int totalWeight = entries.Sum(e => e.Count > 4 ? checked((int)e[4]) : 0);
+        if (totalWeight <= 0) return entries.Count > 0 ? entries[0] : null;
+        int roll = services.Rng.Next(totalWeight);
+        int cumulative = 0;
+        foreach (List<long> e in entries)
+        {
+            int w = e.Count > 4 ? checked((int)e[4]) : 0;
+            cumulative += w;
+            if (roll < cumulative) return e;
+        }
+        return entries[^1];
+    }
+
+    private (PlayerAccount Account, uint EquipId) AddEquip(PlayerAccount account, int templateId)
+    {
+        var equip = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
+        var items = equip.Items.ToList();
+        uint equipId = services.NextEquipId();
+        items.Add(new EquipItem(EquipId: equipId, TemplateId: templateId));
+        account = account with { Equip = equip with { Items = items } };
+        return (account, equipId);
     }
 }

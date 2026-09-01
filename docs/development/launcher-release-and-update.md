@@ -38,7 +38,7 @@ dotnet run --project src\BlueOath.Publisher\BlueOath.Publisher.csproj -- --incre
 CI 工作流配置文件：`.github/workflows/ci.yml`
 
 - **触发器（`on`）**：
-  - `push`：`master` / `WakabaMutsumi` 分支和 `v*` 标签；当前没有文件路径过滤；
+  - `push`：`master` / `WakabaMutsumi` 分支、`v*` 标签，且仅当 `version.txt` 或 `VersionInfo.g.cs` 变更时；
   - `pull_request`：全分支；
   - `workflow_dispatch`：手动触发。
 - **build 作业**（`windows-latest`）：安装 .NET 8 SDK → `dotnet restore` → `dotnet build`（仅 Debug）→ `dotnet test`。

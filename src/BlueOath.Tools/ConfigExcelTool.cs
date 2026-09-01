@@ -1,13 +1,16 @@
 using ClosedXML.Excel;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 static class ConfigExcelTool
 {
     private const byte XorKey = 0x55;
-    private const string ManifestVersion = "1.0";
+    private const string ManifestVersion = "2.0";
+    private const string EmptyStringMarker = "\"\"";
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -64,6 +67,7 @@ static class ConfigExcelTool
         var table = Path.GetFileNameWithoutExtension(dbPath);
         var data = new List<ConfigRow>();
         var meta = new List<MetaRow>();
+        var schema = new ConfigSchema.Node();
 
         using (var connection = OpenReadOnly(dbPath))
         using (var command = connection.CreateCommand())
@@ -76,30 +80,62 @@ static class ConfigExcelTool
                 var indexId = ReadNullableString(reader, 1);
                 var decoded = Xor(ReadBytes(reader, 2));
                 if (string.Equals(id, "nill", StringComparison.OrdinalIgnoreCase) || !IsValidJson(decoded))
+                {
                     meta.Add(new MetaRow(id ?? "nill", indexId, decoded));
-                else
-                    data.Add(new ConfigRow(id!, indexId ?? string.Empty, Encoding.UTF8.GetString(decoded)));
+                    continue;
+                }
+                using var document = JsonDocument.Parse(decoded);
+                ConfigSchema.Merge(schema, document.RootElement);
+                data.Add(new ConfigRow(id!, indexId ?? string.Empty, Encoding.UTF8.GetString(decoded)));
             }
+        }
+
+        var columns = new List<FieldColumn>();
+        var usedHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "_id", "_indexid" };
+        foreach (var field in schema.Fields.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        {
+            var header = field;
+            while (!usedHeaders.Add(header)) header += "_json";
+            columns.Add(new FieldColumn(header, field, ConfigSchema.Classify(schema.Fields[field])));
         }
 
         var outputPath = Path.Combine(outputDir, table + ".xlsx");
         using (var workbook = new XLWorkbook())
         {
             var sheet = workbook.AddWorksheet("data");
-            sheet.Cell(1, 1).Value = "id";
-            sheet.Cell(1, 2).Value = "indexid";
-            sheet.Cell(1, 3).Value = "json";
+            sheet.Cell(1, 1).Value = "_id";
+            sheet.Cell(1, 2).Value = "_indexid";
+            for (var c = 0; c < columns.Count; c++)
+                sheet.Cell(1, c + 3).Value = columns[c].Header;
             sheet.Column(1).Style.NumberFormat.Format = "@";
             sheet.Column(2).Style.NumberFormat.Format = "@";
-            sheet.Column(3).Width = 120;
             sheet.SheetView.FreezeRows(1);
+
             var rowIndex = 2;
             foreach (var row in data)
             {
                 sheet.Cell(rowIndex, 1).Value = row.Id;
                 sheet.Cell(rowIndex, 2).Value = row.IndexId;
-                sheet.Cell(rowIndex, 3).Value = row.Json;
+                using var document = JsonDocument.Parse(row.Json);
+                var element = document.RootElement;
+                for (var c = 0; c < columns.Count; c++)
+                {
+                    if (!element.TryGetProperty(columns[c].Field, out var value)) continue;
+                    WriteValue(sheet.Cell(rowIndex, c + 3), value);
+                }
                 rowIndex++;
+            }
+
+            var schemaSheet = workbook.AddWorksheet("_schema");
+            schemaSheet.Cell(1, 1).Value = "header";
+            schemaSheet.Cell(1, 2).Value = "field";
+            schemaSheet.Cell(1, 3).Value = "type";
+            schemaSheet.SheetView.FreezeRows(1);
+            for (var c = 0; c < columns.Count; c++)
+            {
+                schemaSheet.Cell(c + 2, 1).Value = columns[c].Header;
+                schemaSheet.Cell(c + 2, 2).Value = columns[c].Field;
+                schemaSheet.Cell(c + 2, 3).Value = ConfigSchema.CSharpType(schema.Fields[columns[c].Field]);
             }
 
             var metaSheet = workbook.AddWorksheet("_meta");
@@ -120,6 +156,30 @@ static class ConfigExcelTool
         }
 
         return new TableSummary(table, Path.GetFileName(outputPath), Sha256(dbPath), data.Count, meta.Count);
+    }
+
+    private static void WriteValue(IXLCell cell, JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Number:
+                cell.Value = value.TryGetInt64(out var integer) ? integer : value.GetDouble();
+                break;
+            case JsonValueKind.String:
+                var text = value.GetString() ?? string.Empty;
+                cell.Value = text.Length == 0 ? EmptyStringMarker : text;
+                break;
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+                cell.Value = value.GetBoolean() ? "true" : "false";
+                break;
+            case JsonValueKind.Null:
+            case JsonValueKind.Undefined:
+                break;
+            default:
+                cell.Value = value.GetRawText();
+                break;
+        }
     }
 
     private static async Task WriteManifestAsync(string outputDir, string region, string configRoot,
@@ -201,47 +261,15 @@ static class ConfigExcelTool
 
         using (var workbook = new XLWorkbook(xlsxPath))
         {
-            var sheet = FindWorksheet(workbook, "data")
-                ?? workbook.Worksheets.FirstOrDefault()
-                ?? throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} has no worksheet");
-            var lastRow = sheet.LastRowUsed()?.RowNumber() ?? 1;
-            for (var r = 2; r <= lastRow; r++)
-            {
-                var id = ReadCellText(sheet.Cell(r, 1)).Trim();
-                var indexId = ReadCellText(sheet.Cell(r, 2));
-                var json = ReadCellText(sheet.Cell(r, 3));
-                if (id.Length == 0 && indexId.Length == 0 && json.Length == 0) continue;
-                if (string.Equals(id, "nill", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} row {r}: id 'nill' is reserved for metadata");
-                if (!IsValidJson(Encoding.UTF8.GetBytes(json)))
-                    throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} row {r} (id={id}): json cell is not valid JSON");
-                data.Add(new ConfigRow(id, indexId, json));
-            }
+            var schemaSheet = FindWorksheet(workbook, "_schema");
+            if (schemaSheet is not null)
+                ReadExpandedData(workbook, schemaSheet, xlsxPath, data);
+            else
+                ReadLegacyData(workbook, xlsxPath, data);
 
             var metaSheet = FindWorksheet(workbook, "_meta");
             if (metaSheet is not null)
-            {
-                var metaLastRow = metaSheet.LastRowUsed()?.RowNumber() ?? 1;
-                for (var r = 2; r <= metaLastRow; r++)
-                {
-                    var id = ReadCellText(metaSheet.Cell(r, 1)).Trim();
-                    var indexId = ReadCellText(metaSheet.Cell(r, 2));
-                    var base64 = ReadCellText(metaSheet.Cell(r, 3)).Trim();
-                    if (id.Length == 0 && indexId.Length == 0 && base64.Length == 0) continue;
-                    if (base64.Length == 0)
-                        throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} _meta row {r}: empty jsonbytes_base64");
-                    byte[] decoded;
-                    try
-                    {
-                        decoded = Convert.FromBase64String(base64);
-                    }
-                    catch (FormatException exception)
-                    {
-                        throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} _meta row {r}: invalid base64", exception);
-                    }
-                    meta.Add(new MetaRow(id.Length == 0 ? "nill" : id, indexId.Length == 0 ? null : indexId, decoded));
-                }
-            }
+                ReadMeta(metaSheet, xlsxPath, meta);
         }
 
         var duplicate = data.GroupBy(x => x.Id).FirstOrDefault(g => g.Count() > 1);
@@ -258,6 +286,194 @@ static class ConfigExcelTool
         {
             if (File.Exists(tmp)) File.Delete(tmp);
         }
+    }
+
+    private static void ReadExpandedData(IXLWorkbook workbook, IXLWorksheet schemaSheet, string xlsxPath,
+        List<ConfigRow> data)
+    {
+        var fields = new List<FieldColumn>();
+        var schemaLast = schemaSheet.LastRowUsed()?.RowNumber() ?? 1;
+        for (var r = 2; r <= schemaLast; r++)
+        {
+            var header = ReadCellText(schemaSheet.Cell(r, 1)).Trim();
+            var field = ReadCellText(schemaSheet.Cell(r, 2)).Trim();
+            var type = ReadCellText(schemaSheet.Cell(r, 3)).Trim();
+            if (header.Length == 0 && field.Length == 0) continue;
+            if (field.Length == 0)
+                throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} _schema row {r}: empty field");
+            fields.Add(new FieldColumn(header, field, DeriveKind(type)));
+        }
+
+        var sheet = FindWorksheet(workbook, "data")
+            ?? workbook.Worksheets.FirstOrDefault()
+            ?? throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} has no data worksheet");
+
+        var headerLast = 1;
+        var maxHeaderRow = Math.Min(sheet.LastRowUsed()?.RowNumber() ?? 1, 20);
+        for (var r = 1; r <= maxHeaderRow; r++)
+        {
+            if (string.Equals(ReadCellText(sheet.Cell(r, 1)).Trim(), "_id", StringComparison.OrdinalIgnoreCase))
+            {
+                headerLast = r;
+                break;
+            }
+        }
+
+        var headerIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var c = 1; c <= 1000; c++)
+        {
+            var header = ReadCellText(sheet.Cell(headerLast, c)).Trim();
+            if (header.Length == 0) break;
+            headerIndex[header] = c;
+        }
+        if (!headerIndex.TryGetValue("_id", out var idColumn))
+            throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} data sheet is missing the '_id' column");
+        headerIndex.TryGetValue("_indexid", out var indexIdColumn);
+
+        var lastRow = sheet.LastRowUsed()?.RowNumber() ?? headerLast;
+        for (var r = headerLast + 1; r <= lastRow; r++)
+        {
+            var id = ReadCellText(sheet.Cell(r, idColumn)).Trim();
+            var indexId = indexIdColumn > 0 ? ReadCellText(sheet.Cell(r, indexIdColumn)) : string.Empty;
+            if (string.Equals(id, "nill", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} row {r}: id 'nill' is reserved for metadata");
+
+            var jsonObject = new JsonObject();
+            foreach (var field in fields)
+            {
+                if (!headerIndex.TryGetValue(field.Header, out var column)) continue;
+                var value = ReadFieldCell(sheet.Cell(r, column), field.Kind,
+                    $"{Path.GetFileName(xlsxPath)} row {r} column '{field.Header}'");
+                if (value is null) continue;
+                jsonObject[field.Field] = value;
+            }
+
+            if (id.Length == 0 && jsonObject.Count == 0) continue;
+            data.Add(new ConfigRow(id, indexId, jsonObject.ToJsonString()));
+        }
+    }
+
+    private static void ReadLegacyData(IXLWorkbook workbook, string xlsxPath, List<ConfigRow> data)
+    {
+        var sheet = FindWorksheet(workbook, "data")
+            ?? workbook.Worksheets.FirstOrDefault()
+            ?? throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} has no worksheet");
+        var lastRow = sheet.LastRowUsed()?.RowNumber() ?? 1;
+        for (var r = 2; r <= lastRow; r++)
+        {
+            var id = ReadCellText(sheet.Cell(r, 1)).Trim();
+            var indexId = ReadCellText(sheet.Cell(r, 2));
+            var json = ReadCellText(sheet.Cell(r, 3));
+            if (id.Length == 0 && indexId.Length == 0 && json.Length == 0) continue;
+            if (string.Equals(id, "nill", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} row {r}: id 'nill' is reserved for metadata");
+            if (!IsValidJson(Encoding.UTF8.GetBytes(json)))
+                throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} row {r} (id={id}): json cell is not valid JSON");
+            data.Add(new ConfigRow(id, indexId, json));
+        }
+    }
+
+    private static void ReadMeta(IXLWorksheet metaSheet, string xlsxPath, List<MetaRow> meta)
+    {
+        var metaLastRow = metaSheet.LastRowUsed()?.RowNumber() ?? 1;
+        for (var r = 2; r <= metaLastRow; r++)
+        {
+            var id = ReadCellText(metaSheet.Cell(r, 1)).Trim();
+            var indexId = ReadCellText(metaSheet.Cell(r, 2));
+            var base64 = ReadCellText(metaSheet.Cell(r, 3)).Trim();
+            if (id.Length == 0 && indexId.Length == 0 && base64.Length == 0) continue;
+            if (base64.Length == 0)
+                throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} _meta row {r}: empty jsonbytes_base64");
+            byte[] decoded;
+            try
+            {
+                decoded = Convert.FromBase64String(base64);
+            }
+            catch (FormatException exception)
+            {
+                throw new InvalidDataException($"{Path.GetFileName(xlsxPath)} _meta row {r}: invalid base64", exception);
+            }
+            meta.Add(new MetaRow(id.Length == 0 ? "nill" : id, indexId.Length == 0 ? null : indexId, decoded));
+        }
+    }
+
+    private static JsonNode? ReadFieldCell(IXLCell cell, ConfigSchema.Kind kind, string context)
+    {
+        if (cell.IsEmpty()) return null;
+        switch (kind)
+        {
+            case ConfigSchema.Kind.Integer:
+            case ConfigSchema.Kind.Number:
+            {
+                var number = ReadNumber(cell, context);
+                if (kind == ConfigSchema.Kind.Integer)
+                {
+                    if (!double.IsFinite(number) || Math.Truncate(number) != number ||
+                        number < long.MinValue || number >= 9223372036854775808.0)
+                        throw new InvalidDataException($"{context}: expected an integer value");
+                    return JsonValue.Create((long)number);
+                }
+                return JsonValue.Create(number);
+            }
+            case ConfigSchema.Kind.String:
+            {
+                var text = ReadCellText(cell);
+                return JsonValue.Create(text == EmptyStringMarker ? string.Empty : text);
+            }
+            case ConfigSchema.Kind.Bool:
+            {
+                var text = ReadCellText(cell).Trim().ToLowerInvariant();
+                if (text is "true" or "1") return JsonValue.Create(true);
+                if (text is "false" or "0") return JsonValue.Create(false);
+                throw new InvalidDataException($"{context}: expected true/false");
+            }
+            case ConfigSchema.Kind.Array:
+            {
+                var text = ReadCellText(cell);
+                var node = JsonNode.Parse(text)
+                    ?? throw new InvalidDataException($"{context}: empty JSON array cell");
+                if (node is not JsonArray)
+                    throw new InvalidDataException($"{context}: expected a JSON array like [1,2,3]");
+                return node;
+            }
+            case ConfigSchema.Kind.Object:
+            {
+                var text = ReadCellText(cell);
+                try
+                {
+                    return JsonNode.Parse(text);
+                }
+                catch (JsonException)
+                {
+                    return JsonValue.Create(text);
+                }
+            }
+            default:
+                return null;
+        }
+    }
+
+    private static double ReadNumber(IXLCell cell, string context)
+    {
+        if (cell.DataType == XLDataType.Number)
+            return cell.GetDouble();
+        var text = ReadCellText(cell).Trim();
+        if (double.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out var value))
+            return value;
+        throw new InvalidDataException($"{context}: expected a number, got '{text}'");
+    }
+
+    private static ConfigSchema.Kind DeriveKind(string type)
+    {
+        if (type.StartsWith("List<", StringComparison.Ordinal)) return ConfigSchema.Kind.Array;
+        return type switch
+        {
+            "long" => ConfigSchema.Kind.Integer,
+            "double" => ConfigSchema.Kind.Number,
+            "string" => ConfigSchema.Kind.String,
+            "bool" => ConfigSchema.Kind.Bool,
+            _ => ConfigSchema.Kind.Object
+        };
     }
 
     private static void BuildDatabase(string path, IReadOnlyList<ConfigRow> rows, IReadOnlyList<MetaRow> metaRows)
@@ -366,10 +582,11 @@ static class ConfigExcelTool
         {
             BuildDatabase(Path.Combine(src, "config_alpha.db"), new[]
             {
-                new ConfigRow("1", "", "{\"name\":\"ok\",\"n\":1}"),
-                new ConfigRow("2", "idx", "{\"name\":\"测试中文\",\"arr\":[1,2,3],\"nested\":{\"a\":true}}"),
-                new ConfigRow("10", "", "{\"empty\":\"\",\"f\":1.5}"),
-                new ConfigRow("", "", "{\"legacyEmptyId\":true}")
+                new ConfigRow("1", "", "{\"id\":\"1\",\"name\":\"ok\",\"n\":1,\"arr\":[1,2,3],\"nested_arr\":[[1,2],[3]],\"empty_str\":\"\",\"empty_arr\":[],\"flag\":true}"),
+                new ConfigRow("2", "idx", "{\"id\":\"2\",\"name\":\"测试中文\",\"n\":2,\"arr\":[],\"nested_arr\":[],\"empty_str\":\"x\",\"empty_arr\":[5],\"flag\":false,\"bracket\":\"[not json\"}"),
+                new ConfigRow("3", "", "{\"id\":\"3\",\"name\":\"\",\"n\":3,\"arr\":[\"a\",\"b\"],\"bracket\":\"[1,2]\",\"ratio\":1.5}"),
+                new ConfigRow("4", "", "{\"id\":\"4\",\"name\":\"d\",\"n\":4,\"ratio\":2}"),
+                new ConfigRow("9", "", "{\"id\":\"99\",\"name\":\"mismatch-id\",\"n\":9}")
             }, [new MetaRow("nill", null, Encoding.ASCII.GetBytes("abcdef0123456789abcdef0123456789"))]);
 
             BuildDatabase(Path.Combine(src, "config_beta.db"),
@@ -380,6 +597,15 @@ static class ConfigExcelTool
             if (exported.Count != 2) throw new InvalidOperationException("export produced unexpected table count");
             if (!File.Exists(Path.Combine(excel, "_manifest.json")))
                 throw new InvalidOperationException("export did not write _manifest.json");
+            using (var workbook = new XLWorkbook(Path.Combine(excel, "config_alpha.xlsx")))
+            {
+                if (FindWorksheet(workbook, "_schema") is null)
+                    throw new InvalidOperationException("export did not write the _schema sheet");
+                var dataSheet = workbook.Worksheet("data");
+                if (!string.Equals(ReadCellText(dataSheet.Cell(1, 1)), "_id", StringComparison.Ordinal) ||
+                    !string.Equals(ReadCellText(dataSheet.Cell(1, 2)), "_indexid", StringComparison.Ordinal))
+                    throw new InvalidOperationException("export header row is missing _id/_indexid");
+            }
 
             var imported = Import(excel, restored, backup: false);
             if (imported.ImportedTables != 2) throw new InvalidOperationException("import table count mismatch");
@@ -387,7 +613,7 @@ static class ConfigExcelTool
             AssertDatabasesEqual(Path.Combine(src, "config_alpha.db"), Path.Combine(restored, "config_alpha.db"));
             AssertDatabasesEqual(Path.Combine(src, "config_beta.db"), Path.Combine(restored, "config_beta.db"));
 
-            Console.WriteLine("config-excel self-test passed (export + import round-trips byte-for-byte)");
+            Console.WriteLine("config-excel self-test passed (export + import round-trips JSON values)");
             return 0;
         }
         finally
@@ -403,8 +629,21 @@ static class ConfigExcelTool
         if (expectedRows.Count != actualRows.Count)
             throw new InvalidOperationException($"{Path.GetFileName(expected)} row count {expectedRows.Count} != {actualRows.Count}");
         foreach (var (key, value) in expectedRows)
-            if (!actualRows.TryGetValue(key, out var actualValue) || !value.SequenceEqual(actualValue))
-                throw new InvalidOperationException($"{Path.GetFileName(expected)} row '{key}' mismatch");
+        {
+            if (!actualRows.TryGetValue(key, out var actualValue))
+                throw new InvalidOperationException($"{Path.GetFileName(expected)} row '{key}' missing");
+            if (IsValidJson(value) && IsValidJson(actualValue))
+            {
+                var expectedNode = JsonNode.Parse(Encoding.UTF8.GetString(value));
+                var actualNode = JsonNode.Parse(Encoding.UTF8.GetString(actualValue));
+                if (!JsonNode.DeepEquals(expectedNode, actualNode))
+                    throw new InvalidOperationException($"{Path.GetFileName(expected)} row '{key}' JSON value mismatch");
+            }
+            else if (!value.SequenceEqual(actualValue))
+            {
+                throw new InvalidOperationException($"{Path.GetFileName(expected)} row '{key}' raw bytes mismatch");
+            }
+        }
     }
 
     private static Dictionary<string, byte[]> ReadDatabaseRows(string path)
@@ -532,6 +771,7 @@ static class ConfigExcelTool
 
     private sealed record ConfigRow(string Id, string IndexId, string Json);
     private sealed record MetaRow(string Id, string? IndexId, byte[] Decoded);
+    private sealed record FieldColumn(string Header, string Field, ConfigSchema.Kind Kind);
     private sealed record TableSummary(string Table, string File, string DbSha256, int Rows, int MetadataRows);
     private sealed record ImportResult(int ImportedTables, string? BackupDir);
 }

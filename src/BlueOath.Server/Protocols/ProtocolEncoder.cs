@@ -121,6 +121,54 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 TStrategy: StrategyList(1, repeated TStrategyInfo{Id=1,Level=2}) / CurCost(2) / ResetNum(3)。</summary>
+    internal static byte[] EncodeStrategyRet(IEnumerable<(int Id, int Level)> strategies, int resetNum = 0)
+    {
+        ProtocolPackage output = new();
+        foreach ((int id, int level) in strategies)
+        {
+            ProtocolPackage info = new();
+            info.Write(0x08, unchecked((ulong)id));     // Id
+            info.Write(0x10, unchecked((ulong)level));  // Level
+            output.Write(0x0A, info.ToArray());          // StrategyList(1)
+        }
+        output.Write(0x10, 0UL); // CurCost(2) = 0
+        if (resetNum != 0) output.Write(0x18, unchecked((ulong)resetNum));
+        return output.ToArray();
+    }
+
+    /// <summary>编码 TTalentTreeAllList{TalentList(1)=[TTalentData]}。TTalentData: TalentId(1)/
+    /// PreCondition(2, repeated int32)/IsOperate(3)。</summary>
+    internal static byte[] EncodeTalentTreeAllList(
+        IEnumerable<(int TalentId, IReadOnlyList<int> PreCondition, int IsOperate)> talents)
+    {
+        ProtocolPackage output = new();
+        foreach ((int talentId, IReadOnlyList<int> pre, int isOperate) in talents)
+            output.Write(0x0A, EncodeTalentData(talentId, pre, isOperate));
+        return output.ToArray();
+    }
+
+    /// <summary>编码单个 TTalentData。</summary>
+    internal static byte[] EncodeTalentData(int talentId, IReadOnlyList<int> preCondition, int isOperate)
+    {
+        ProtocolPackage td = new();
+        td.Write(0x08, unchecked((ulong)talentId)); // TalentId(1)
+        if (preCondition is { Count: > 0 })
+            foreach (int p in preCondition)
+                td.Write(0x10, unchecked((ulong)p)); // PreCondition(2)
+        td.Write(0x18, unchecked((ulong)isOperate)); // IsOperate(3)
+        return td.ToArray();
+    }
+
+    /// <summary>编码 TTalentChange{TalentDataList(1)=[TTalentData]}。</summary>
+    internal static byte[] EncodeTalentChange(IEnumerable<(int TalentId, IReadOnlyList<int> PreCondition, int IsOperate)> talents)
+    {
+        ProtocolPackage output = new();
+        foreach ((int talentId, IReadOnlyList<int> pre, int isOperate) in talents)
+            output.Write(0x0A, EncodeTalentData(talentId, pre, isOperate));
+        return output.ToArray();
+    }
+
     /// <summary>编码 TVowHeroRet: Type(1)/ConfigId(2)/Num(3)/Id(4)，均为 int32。</summary>
     internal static byte[] EncodeVowHeroRet(int type, int configId, int num, int id)
     {
@@ -893,6 +941,12 @@ internal static class ProtocolEncoder
             baseInfo.Write(0x20, 0UL); // IsRunningFight(4)
             baseInfo.Write(0x28, 0UL); // LBPoint(5)
             baseInfo.Write(0x30, isPassed ? 1UL : 0UL); // FirstPassTime(6)
+            // SfLv/SfPoint/SfLvChoose 必须编码：LevelDetailsPage._SafeArea 直接用
+            // tabSerData.SfLv/SfPoint 调 GetCurrSafeConfig→GetSafeCurrProgress，
+            // 缺失时 SfLv 为 nil → stageConfig.safe_area 找不到 → safe_area_score[0]=nil → 算术崩溃。
+            baseInfo.Write(0x40, 1UL); // SfLv(8)=1
+            baseInfo.WriteFixed32(0x4D, 0U); // SfPoint(9)=0.0f
+            baseInfo.Write(0x60, 1UL); // SfLvChoose(12)=1
             ms.Write(0x0A, baseInfo.ToArray());
             if (isPassed && cid > maxCopyId) maxCopyId = cid;
         }

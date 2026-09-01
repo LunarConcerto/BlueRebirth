@@ -39,8 +39,22 @@ internal sealed class BathroomModule(GameServices services) : IGameModule
                 ret = [];
                 break;
         }
-        return ModuleResult.Ok(ret);
+        // 浴室各操作的 C2S 应答回调（_BathStartRet/_GetBathroomInfoRet 等）在客户端是空实现，
+        // 只有 bathroom.BathroomInfo 推送会经 _BathroomInfoRet 写入 Data.bathroomData。
+        // 因此每次操作后补发一条 BathroomInfo 推送，保证客户端数据与存档同步（含重启后显示）。
+        var account = await ctx.GetAccountAsync();
+        return new ModuleResult
+        {
+            Ret = ret,
+            PostPushes = [BuildBathroomInfoPush(account, (uint)ctx.Now)],
+        };
     }
+
+    private static byte[] BuildBathroomInfoPush(PlayerAccount account, uint now) =>
+        TMessageCodec.EncodeResponse(new TResponse(
+            Method: "bathroom.BathroomInfo",
+            Ret: PlayerDataCodec.Encode(GameServices.ToBathroomInfo(account.Bath)),
+            Time: now));
 
     private async Task<byte[]> BuildBathStartRetAsync(GameContext ctx, TRequest request)
     {

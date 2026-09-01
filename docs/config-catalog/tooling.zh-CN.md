@@ -47,12 +47,26 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel-
 
 ### 2.2 Excel 格式
 
-导出目录内每个表一个 `.xlsx`（文件名 `config_<表>.xlsx`），含两个工作表：
+导出目录内每个表一个 `.xlsx`（文件名 `config_<表>.xlsx`），含三个工作表：
 
-- `data`：业务行，列 `id` / `indexid` / `json`。`json` 为已解密的明文 JSON，直接编辑即可；增删行即增删配置。
+- `data`：业务行，JSON 已**展开为表头列**。前两列为数据库键 `_id` / `_indexid`，其余每列对应一个 JSON 字段（列名即原 JSON 字段名，`id` 字段与数据库 `_id` 列互不冲突）。增删行即增删配置。
+- `_schema`：字段类型说明，列 `header` / `field` / `type`（`type` 为推断出的 C# 风格类型）。导入时据此把单元格值还原为正确的 JSON 类型。
 - `_meta`：元数据行（`id='nill'`），列 `id` / `indexid` / `jsonbytes_base64`。base64 保存的是**已解密**字节，一般无需改动。
 
-目录根另生成 `_manifest.json`，记录 `schemaVersion`、`region`、`xorKey`、每表源库 SHA-256 与行数，供审计核对。
+单元格取值规则：
+
+| JSON 值 | 单元格表示 |
+| --- | --- |
+| 整数 | 数字单元格（如 `100`） |
+| 浮点 | 数字单元格（如 `1.5`） |
+| 字符串 | 文本单元格；空字符串写作 `""` |
+| 布尔 | 文本 `true` / `false` |
+| 数组 / 数组套数组 / 结构不明 | JSON 文本（如 `[1,2,3]`、`[[1,2],[3]]`，空数组为 `[]`） |
+| 字段缺失 | 空单元格（反导时省略该键） |
+
+目录根另生成 `_manifest.json`（`schemaVersion = 2.0`），记录 `region`、`xorKey`、每表源库 SHA-256 与行数，供审计核对。
+
+**兼容性**：反导同时支持旧版单列 `json` 格式（`data` 表为 `id` / `indexid` / `json` 三列），旧导出的 Excel 可直接导入。
 
 ### 2.3 备份
 
@@ -66,11 +80,17 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel-
 - 保留空 `id` 边界（实测 `config_pskill_dict_buff_cb_con` 等 4 张表存在 `id=''` 的合法业务行）。
 - 反导为**全量重建**：按 Excel 内容重建 DB（原 schema `DBObject` 表 + `DBObject_indexid` 索引），临时文件写好后原子替换。
 - `id` 在主键上唯一，反导会检测重复 `id` 并报错。
+- 展开成列后依赖 `_schema` 类型信息区分「字符串 vs 数组」等歧义（如字符串值恰好以 `[` 开头时仍按字符串还原）。
 
 ### 2.5 验证
 
-- `--config-excel-self-test` 通过（含空 id、中文/嵌套 JSON 用例）。
-- jp 全量：导出 492 表、292347 业务行、492 元数据行；反导后 **492/492 表字节级一致（0 差异）**；备份目录生成正确。
+- `--config-excel-self-test` 通过（覆盖空字符串、空数组、数组套数组、以 `[` 开头的字符串、DB `id` 与 JSON `id` 不一致、整浮混用、字段缺失等用例）。
+- jp 全量（497 表 / 316166 业务行 / 497 元数据行）：导出→反导后 **497/497 表 JSON 值一致**，仅 2 个字符串单元内的 `\r\n` 被 xlsx 规范化为 `\n`（见 2.6），元数据行字节级一致。
+
+### 2.6 已知限制
+
+- **换行符规范化**：xlsx 单元格无法保留 `\r\n`，往返后字符串内的 CRLF 会变为 LF。实测仅 `config_language`、`config_navmesh` 各 1 个单元格受影响（大段文本/OBJ 网格数据），对客户端解析无影响。
+- 数组/嵌套结构以 JSON 文本形式存在于单元格中，编辑时按 JSON 语法填写。
 
 ## 3. 一键脚本
 
@@ -86,7 +106,7 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-excel-
 
 ## 4. 功能二：配置 JSON 结构 → C# 强类型类
 
-实现：`src\BlueOath.Tools\ConfigClassTool.cs`（`--config-cs` 子命令）。解析每张表**全部业务行**的 JSON、跨行合并推断字段类型，只生成结构、不导数据。
+实现：`src\BlueOath.Tools\ConfigClassTool.cs`（`--config-cs` 子命令）。与 Excel 工具共用 `src\BlueOath.Tools\ConfigSchema.cs` 的类型推断。解析每张表**全部业务行**的 JSON、跨行合并推断字段类型，只生成结构、不导数据。
 
 ### 4.1 命令
 
@@ -136,8 +156,9 @@ dotnet run --project src\BlueOath.Tools\BlueOath.Tools.csproj -- --config-cs --r
 
 | 文件 | 状态 | 说明 |
 | --- | --- | --- |
-| `src\BlueOath.Tools\ConfigExcelTool.cs` | 新增 | SQLite ↔ Excel 转换（导出/反导/备份/自检） |
+| `src\BlueOath.Tools\ConfigExcelTool.cs` | 新增 | SQLite ↔ Excel 转换（导出/反导/备份/自检），展开 JSON 为列 |
 | `src\BlueOath.Tools\ConfigClassTool.cs` | 新增 | JSON 结构 → C# 类生成 |
+| `src\BlueOath.Tools\ConfigSchema.cs` | 新增 | 共享类型推断（两个工具共用） |
 | `src\BlueOath.Tools\Program.cs` | 修改 | 接入 `--config-excel*` 与 `--config-cs` 分发 |
 | `src\BlueOath.Tools\BlueOath.Tools.csproj` | 修改 | 新增 `ClosedXML` 依赖 |
 | `tools\config-excel.ps1` | 新增 | 共享 PowerShell 脚本（export/import/backup/selftest/cs） |

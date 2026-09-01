@@ -7,9 +7,15 @@ on:
       - WakabaMutsumi
     tags:
       - 'v*'
+    paths:
+      - 'src/BlueOath.Launcher.Wpf/version.txt'
+      - 'src/BlueOath.Launcher.Wpf/VersionInfo.g.cs'
   pull_request:
     branches:
       - '**'
+    paths:
+      - 'src/BlueOath.Launcher.Wpf/version.txt'
+      - 'src/BlueOath.Launcher.Wpf/VersionInfo.g.cs'
   workflow_dispatch:
 
 permissions:

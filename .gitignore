@@ -21,7 +21,6 @@ __pycache__/
 
 # ---- Reverse-engineering artifacts (regenerable via Il2CppDumper) ----
 /il2cppdump/
-/lua_tools/
 
 # ---- Runtime / temp artifacts ----
 /runtime/
@@ -30,6 +29,7 @@ __pycache__/
 /excel/
 /config-backup/
 /release/
+/lua_tools/
 
 # ---- Native build outputs and backups ----
 /native/bin-x86/

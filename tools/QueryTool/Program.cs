@@ -2,7 +2,7 @@ using Microsoft.Data.Sqlite;
 using System.Text;
 
 const byte XorKey = 0x55;
-var path = @"E:\逆向工程\苍蓝誓约项目\blueoath\blueoath\blueoath_Data\StreamingAssets\config\config_talent.db";
+var path = @"blueoath\blueoath\blueoath_Data\StreamingAssets\config\config_talent.db";
 var builder = new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false };
 using var conn = new SqliteConnection(builder.ConnectionString);
 conn.Open();

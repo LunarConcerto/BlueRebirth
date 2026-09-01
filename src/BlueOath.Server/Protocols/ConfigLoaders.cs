@@ -264,6 +264,19 @@ internal static class ItemInfoLoader
     }
 }
 
+/// <summary>
+/// 选择箱配置（config_item_selected，物品类型 8）。item_id 为 [GoodsType, ConfigId, Num]
+/// 三元组列表，玩家按下标选择其一；item_id 为空而 drop_id &gt; 0 的条目是随机选择箱。
+/// type：1=舰船箱 2=装备箱 3=道具箱 4=时装箱。
+/// </summary>
+internal static class ItemSelectedLoader
+{
+    public static Dictionary<int, ConfigItemSelected> Load(string configDir)
+    {
+        return ConfigDbLoader.LoadAll<ConfigItemSelected>(configDir, "config_item_selected.db");
+    }
+}
+
 internal static class ShipLevelupLoader
 {
     public static (Dictionary<int, int> ExpPerItem, Dictionary<int, int> ExpNeeded) Load(string configDir)
@@ -1017,6 +1030,45 @@ internal static class DailyCopyRewardCatalog
         => _rewards.GetValueOrDefault(rewardId);
 }
 
+/// <summary>关卡掉落配置（config_copy_display）：副本 id → 掉落表 id 列表 + 首通奖励 id 列表。
+/// 掉落表 id 指向 config_drop_item；首通奖励 id 指向 config_rewards。</summary>
+internal static class CopyDisplayLoader
+{
+    public sealed record CopyDropInfo(IReadOnlyList<int> DropInfoId, IReadOnlyList<int> FirstReward);
+
+    private static readonly Dictionary<int, CopyDropInfo> _drops = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _drops.Clear();
+            ConfigDbLoader.LoadRows(configDir, "config_copy_display.db", (id, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                var dropInfo = new List<int>();
+                var firstReward = new List<int>();
+                if (doc.RootElement.TryGetProperty("drop_info_id", out var dropProp)
+                    && dropProp.ValueKind == JsonValueKind.Array)
+                    foreach (var item in dropProp.EnumerateArray())
+                        if (item.TryGetInt32(out var v)) dropInfo.Add(v);
+                if (doc.RootElement.TryGetProperty("first_reward", out var firstProp)
+                    && firstProp.ValueKind == JsonValueKind.Array)
+                    foreach (var item in firstProp.EnumerateArray())
+                        if (item.TryGetInt32(out var v)) firstReward.Add(v);
+                _drops[id] = new CopyDropInfo(dropInfo, firstReward);
+            });
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static CopyDropInfo? Get(int copyDisplayId)
+        => _drops.TryGetValue(copyDisplayId, out var info) ? info : null;
+}
+
 /// <summary>从个人剧情配置生成图鉴协议所需的完整 THeroMemory 列表。</summary>
 internal static class CharacterStoryLoader
 {
@@ -1051,6 +1103,117 @@ internal static class CharacterStoryLoader
     }
 
     public static IReadOnlyList<HeroMemory> AllMemories => _allMemories;
+}
+
+/// <summary>加载战术（config_strategy）配置，供 strategy.GetStrategy 解锁推送使用。</summary>
+internal static class StrategyConfigLoader
+{
+    private static readonly List<ConfigStrategy> _strategies = [];
+    private static readonly HashSet<int> _ids = [];
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _strategies.Clear();
+            _ids.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigStrategy>(configDir, "config_strategy.db"))
+            {
+                _strategies.Add(cfg);
+                _ids.Add(checked((int)id));
+            }
+            _strategies.Sort((a, b) => checked((int)a.Order).CompareTo(checked((int)b.Order)));
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>全部战术（按 order 排序），用于一次性解锁。</summary>
+    public static IReadOnlyList<ConfigStrategy> All => _strategies;
+}
+
+/// <summary>彩色船（MUB）突破的碎片换算：config_parameter[507]/[508] 决定可用道具的等效碎片数。</summary>
+internal static class MubConversionLoader
+{
+    private static int _coreToOmnipotent = 30;
+    private static int _omnipotentToFragment = 1;
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            var parameters = ConfigDbLoader.LoadAll<ConfigParameter>(configDir, "config_parameter.db");
+            if (parameters.TryGetValue(507, out ConfigParameter? p507)) _coreToOmnipotent = checked((int)p507.Value);
+            if (parameters.TryGetValue(508, out ConfigParameter? p508)) _omnipotentToFragment = checked((int)p508.Value);
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>道具 → 碎片等效数量（对应 shiplogic.GetBreakItemsNumMubo）。</summary>
+    public static int GetConversion(int itemId) => itemId switch
+    {
+        18051 => _omnipotentToFragment,                 // 万能碎片 → 彩色碎片
+        17512 => _coreToOmnipotent * _omnipotentToFragment, // 核心 → 彩色碎片
+        _ => 1,
+    };
+}
+
+/// <summary>加载实验室（天赋树）配置：config_talent 全部天赋 + config_talentmain 主天赋。</summary>
+internal static class TalentConfigLoader
+{
+    private static readonly Dictionary<int, ConfigTalent> _talents = new();
+    private static readonly List<ConfigTalent> _rootTalents = [];
+    private static readonly HashSet<int> _rootIds = [];
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _talents.Clear();
+            _rootTalents.Clear();
+            _rootIds.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigTalent>(configDir, "config_talent.db"))
+            {
+                _talents[id] = cfg;
+                if (cfg.Belongtalent == 0)
+                {
+                    _rootTalents.Add(cfg);
+                    _rootIds.Add(checked((int)id));
+                }
+            }
+
+            // 合并 config_talentmain.talentlist 里的根天赋（个别条目可能 belongtalent≠0，但仍作根）。
+            var rootOrder = new List<ConfigTalent>(_rootTalents);
+            ConfigDbLoader.LoadRows(configDir, "config_talentmain.db", (_, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("talentlist", out var list)
+                    || list.ValueKind != JsonValueKind.Array) return;
+                foreach (var item in list.EnumerateArray())
+                {
+                    if (!item.TryGetInt32(out int tid) || tid <= 0 || _rootIds.Contains(tid)) continue;
+                    if (_talents.TryGetValue(tid, out ConfigTalent? cfg))
+                        _rootTalents.Add(cfg);
+                    _rootIds.Add(tid);
+                }
+            });
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigTalent? Get(int talentId)
+        => _talents.TryGetValue(talentId, out var cfg) ? cfg : null;
+
+    /// <summary>全部根天赋（config_talent.belongtalent=0 ∪ config_talentmain.talentlist）。</summary>
+    public static IReadOnlyList<ConfigTalent> RootTalents => _rootTalents;
 }
 
 internal static class ShipHandbookLoader

@@ -198,7 +198,15 @@ public sealed record BagInfoRet(int BagType = 0, int BagSize = 0, IReadOnlyList<
 /// <summary>普通宝箱使用参数（TBagNormalTreasureInfoArg）。</summary>
 public sealed record BagNormalTreasureInfoArg(int TreasureId = 0, int TreasureNum = 0);
 
-/// <summary>宝箱开启结果（TBagTreasureInfoRet）。</summary>
+/// <summary>
+/// 自选/随机选择箱使用参数（TBagSelectTreasureInfoArg）。
+/// Position 是 config_item_selected.item_id 中玩家所选项的序号，<b>从 1 开始</b>——
+/// 客户端 SelectRandTreasurePage 把它当 Lua 表下标直接用（item_id[self.pos]），
+/// 且初值就是 1。当该箱只配了 drop_id 而 item_id 为空时，客户端固定传 0，由服务端随机抽取。
+/// </summary>
+public sealed record BagSelectTreasureInfoArg(int TreasureId = 0, int Position = 0, int Num = 0);
+
+/// <summary>宝箱开启结果（TBagTreasureInfoRet）。自选箱与普通宝箱共用该响应。</summary>
 public sealed record BagTreasureInfoRet(
     IReadOnlyList<CommonReward>? TreasuresInfo = null, int TreasureId = 0);
 
@@ -390,15 +398,16 @@ public static class PlayerDataCodec
     public static byte[] Encode(BathHeroInfo value)
     {
         using var output = new MemoryStream();
-        // HeroId/StartTime are written explicitly so the client never sees nil; the notice
-        // handler indexes args[1].HeroId and reads v.StartTime.
+        // HeroId/StartTime/BuffId 无条件编码：客户端 GetBathAttrBuff 用 `heroBath.BuffId == 0`
+        // 判断，缺失字段解码为 nil 时 `nil == 0` 为 false，会误入 else 分支查 config_value_effect(nil) 崩溃。
+        // BathTime/BuffTime 在算术中出现（`heroBath.BuffTime + buffInfo.time`），nil 也会崩。
         WriteVarintField(output, 1, value.HeroId);
         if (value.Pos != 0) WriteVarintField(output, 2, unchecked((ulong)value.Pos));
         if (value.IsAuto != 0) WriteVarintField(output, 3, unchecked((ulong)value.IsAuto));
         WriteVarintField(output, 4, unchecked((ulong)value.StartTime));
-        if (value.BathTime != 0) WriteVarintField(output, 5, unchecked((ulong)value.BathTime));
-        if (value.BuffId != 0) WriteVarintField(output, 6, unchecked((ulong)value.BuffId));
-        if (value.BuffTime != 0) WriteVarintField(output, 7, unchecked((ulong)value.BuffTime));
+        WriteVarintField(output, 5, unchecked((ulong)value.BathTime));
+        WriteVarintField(output, 6, unchecked((ulong)value.BuffId));
+        WriteVarintField(output, 7, unchecked((ulong)value.BuffTime));
         if (value.Power != 0) WriteVarintField(output, 8, unchecked((ulong)value.Power));
         return output.ToArray();
     }
@@ -662,7 +671,9 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         using var output = new MemoryStream();
         if (hero.Pos != 0) WriteVarintField(output, 1, unchecked((ulong)hero.Pos));
         WriteVarintField(output, 2, hero.HeroId);
-        if (buffId != 0) WriteVarintField(output, 3, unchecked((ulong)buffId));
+        // BuffId 无条件编码：客户端 _SendGiftRet 把 shipInfo.BuffId = param.BuffId，
+        // nil 时 GetBathAttrBuff 的 `heroBath.BuffId == 0` 判断为 false 会崩。
+        WriteVarintField(output, 3, unchecked((ulong)buffId));
         if (isCrit) WriteVarintField(output, 4, 1);
         return output.ToArray();
     }
@@ -949,6 +960,25 @@ var reader = new GameLoginCodec.ProtoReader(payload);
             }
         }
         return new BagNormalTreasureInfoArg(treasureId, treasureNum);
+    }
+
+    public static BagSelectTreasureInfoArg DecodeBagSelectTreasureInfoArg(ReadOnlySpan<byte> payload)
+    {
+        var treasureId = 0;
+        var position = 0;
+        var num = 0;
+        var reader = new GameLoginCodec.ProtoReader(payload);
+        while (reader.TryReadField(out var field, out var wire))
+        {
+            switch (field)
+            {
+                case 1 when wire == 0: treasureId = checked((int)reader.ReadVarint()); break;
+                case 2 when wire == 0: position = checked((int)reader.ReadVarint()); break;
+                case 3 when wire == 0: num = checked((int)reader.ReadVarint()); break;
+                default: reader.Skip(wire); break;
+            }
+        }
+        return new BagSelectTreasureInfoArg(treasureId, position, num);
     }
 
     public static byte[] Encode(BagTreasureInfoRet value)
