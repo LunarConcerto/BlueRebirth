@@ -97,7 +97,9 @@ internal sealed class ShopService(GameServices services)
         return new(ret, true, "", remaining == 0 ? arg.TreasureId : 0);
     }
 
-    /// <summary>config_item_selected.type：3 = 道具箱（本方法只处理这一类）。</summary>
+    /// <summary>config_item_selected.type：2 = 装备箱，3 = 道具箱（本方法处理这两类）。</summary>
+    private const int SelectedTypeEquip = 2;
+
     private const int SelectedTypeItem = 3;
 
     /// <summary>
@@ -107,8 +109,9 @@ internal sealed class ShopService(GameServices services)
     /// config_item_selected.item_id 的下标；item_id 为空而 drop_id &gt; 0 时是随机选择箱，
     /// 客户端固定传 position=0，由服务端从掉落池抽取。
     ///
-    /// 只处理 type == 3 的道具箱：舰船箱（type 1）与装备箱（type 2）另有实现，此处返回
-    /// Changed=false 且不带错误，交由调用方保持原有的空响应，行为与改动前一致。
+    /// 处理 type == 3 的道具箱与 type == 2 的装备箱。装备箱共 75 个（46 个带 item_id、
+    /// 29 个是 drop_id 随机箱），其 558 条选项的 GoodsType 全部是 2，不存在混合类型。
+    /// 舰船箱（type 1）仍未实现，返回 Changed=false 且不带错误，交由调用方保持空响应。
     /// </summary>
     internal async Task<TreasureOpenResult> BuildOpenSelectTreasureRetAsync(
         TRequest request, string profileId, CancellationToken ct)
@@ -121,8 +124,8 @@ internal sealed class ShopService(GameServices services)
             return new([], false, "select treasure id or count is invalid");
         if (!services.ItemSelected.TryGetValue(arg.TreasureId, out ConfigItemSelected? config))
             return new([], false, "select treasure configuration was not found");
-        // 非道具箱不在本次实现范围内，保持原有空响应。
-        if (config.Type != SelectedTypeItem) return new([], false, "");
+        // 舰船箱尚未实现，保持原有空响应。
+        if (config.Type is not (SelectedTypeItem or SelectedTypeEquip)) return new([], false, "");
 
         List<List<long>> options = config.ItemId ?? [];
         var pending = new List<PendingReward>();
@@ -137,8 +140,7 @@ internal sealed class ShopService(GameServices services)
             int configId = checked((int)option[1]);
             int num = checked((int)option[2]);
             if (num <= 0) return new([], false, "select treasure option has a non-positive count");
-            // 舰船/装备的发放路径本次不动，避免与既有实现产生分歧。
-            if (type is GameServices.GoodsTypeShip or GameServices.GoodsTypeEquip)
+            if (type == GameServices.GoodsTypeShip)
                 return new([], false, "select treasure option type is not supported yet");
             for (var i = 0; i < openNum; i++) pending.Add(new PendingReward(type, configId, num));
         }
@@ -150,7 +152,7 @@ internal sealed class ShopService(GameServices services)
                 if (!TryDrawPool(checked((int)config.DropId), pending, [], 0))
                     return new([], false, "select treasure drop pool is invalid");
             }
-            if (pending.Any(x => x.Type is GameServices.GoodsTypeShip or GameServices.GoodsTypeEquip))
+            if (pending.Any(x => x.Type == GameServices.GoodsTypeShip))
                 return new([], false, "select treasure reward type is not supported yet");
         }
 
@@ -161,6 +163,18 @@ internal sealed class ShopService(GameServices services)
         if (bagIndex < 0 || bag.Items[bagIndex].Num < openNum)
             return new([], false, "select treasure count is insufficient");
 
+        // 装备仓库容量与模板校验必须在扣除箱子之前完成，失败时不能消耗道具。
+        int newEquipCount = pending.Where(x => x.Type == GameServices.GoodsTypeEquip).Sum(x => x.Num);
+        if (newEquipCount > 0)
+        {
+            PlayerEquip equipBag = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
+            if (equipBag.Items.Count + newEquipCount > equipBag.EquipBagSize)
+                return new([], false, "equipment bag is full");
+            if (pending.Any(x => x.Type == GameServices.GoodsTypeEquip &&
+                                 services.GetEquipConfig(x.ConfigId) is null))
+                return new([], false, "select treasure contains an unknown equipment template");
+        }
+
         var bagItems = bag.Items.ToList();
         int remaining = bagItems[bagIndex].Num - openNum;
         if (remaining == 0) bagItems.RemoveAt(bagIndex);
@@ -170,6 +184,21 @@ internal sealed class ShopService(GameServices services)
         var rewards = new List<CommonReward>();
         foreach (PendingReward reward in pending)
         {
+            if (reward.Type == GameServices.GoodsTypeEquip)
+            {
+                // 装备是逐件生成实例的：每件分配一个 EquipsId，奖励里必须带上它，
+                // 否则客户端 ShowCommonReward 拿不到实例、装备也进不了仓库。
+                for (var i = 0; i < reward.Num; i++)
+                {
+                    uint equipId = services.NextEquipId();
+                    PlayerEquip equipBag = account.Equip ?? new PlayerEquip([], EquipBagSize: 2000);
+                    var equipItems = equipBag.Items.ToList();
+                    equipItems.Add(new EquipItem(equipId, reward.ConfigId));
+                    account = account with { Equip = equipBag with { Items = equipItems } };
+                    rewards.Add(new CommonReward(reward.Type, reward.ConfigId, 1, checked((int)equipId)));
+                }
+                continue;
+            }
             if (reward.Type == GameServices.GoodsTypeCurrency)
                 account = GameServices.AddCurrency(account, reward.ConfigId, reward.Num);
             else if (reward.Type == GameServices.GoodsTypeFashion)

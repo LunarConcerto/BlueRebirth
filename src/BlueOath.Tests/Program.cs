@@ -47,7 +47,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("fashion shop previews tolerate an unlocked skin without its hero", FashionPreviewModTest),
     ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("item selection boxes grant the chosen option", SelectTreasureTest),
-    ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest)
+    ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest),
+    ("equipment selection boxes grant an equipment instance", EquipSelectTreasureTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
@@ -3165,6 +3166,90 @@ static Task TaskCompletionRequiresProgressTest()
     Assert(TaskProtocolCodec.GetEventProgress([definition], partialProgress) == 2,
         "partial task event progress was not preserved");
     return Task.CompletedTask;
+}
+
+// 装备自选箱（config_item_selected.type == 2）此前和舰船箱一起被挡在实现之外：
+// BuildOpenSelectTreasureRetAsync 对非 type==3 直接返回 Changed=false 且不带错误，
+// ShopModule 据此保持 ModuleResult.Empty，客户端 err==0 解出空 treasuresInfo，
+// 表现为「选了装备点收取却什么都没拿到」，箱子也不消耗。
+// 装备与道具的区别在于它是逐件生成实例的：每件要分配 EquipsId 并随奖励下发。
+static async Task EquipSelectTreasureTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-equip-box-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "equip-box";
+    // 80190：type=2，16 个选项，全部 [2, equipTemplateId, 1]；第 1 项 30444、第 2 项 30154。
+    const int equipBoxId = 80190;
+    const int firstEquipTid = 30444;
+    const int secondEquipTid = 30154;
+    const int optionCount = 16;
+    const int itemBoxId = 80134;   // type=3 道具箱，确认改动没有影响原有路径
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, 1) with
+        {
+            Bag = new PlayerBag([new BagItem(equipBoxId, 3), new BagItem(itemBoxId, 1)], 200),
+            Equip = new PlayerEquip([], 2000),
+        });
+
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot,
+             "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
+             "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var shop = new ShopService(services);
+
+        static TRequest Open(int treasureId, int position, int num = 1) =>
+            new("bag.GetSelectTreasureInfo", new ProtocolPackage()
+                .Write(0x08, (ulong)treasureId).Write(0x10, (ulong)position).Write(0x18, (ulong)num).ToArray());
+
+        // 第 1 项：拿到 30444 而不是 30154（序号是 1 基）。
+        ShopService.TreasureOpenResult first = await shop.BuildOpenSelectTreasureRetAsync(
+            Open(equipBoxId, 1), profileId, CancellationToken.None);
+        Assert(first.Changed, $"equipment box was not opened: {first.Error}");
+        PlayerAccount after = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("account missing");
+        Assert(after.Equip!.Items.Count == 1 && after.Equip.Items[0].TemplateId == firstEquipTid,
+            "equipment box did not grant the selected option as an equipment instance");
+        Assert(after.Equip.Items[0].EquipId != 0,
+            "granted equipment has no instance id");
+        Assert(after.Bag!.Items.All(x => x.TemplateId != secondEquipTid) &&
+               after.Bag.Items.All(x => x.TemplateId != firstEquipTid),
+            "equipment reward polluted the item bag");
+        Assert(after.Bag.Items.Single(x => x.TemplateId == equipBoxId).Num == 2,
+            "equipment box was not consumed exactly once");
+
+        // 末项可选；两侧越界被拒且不扣箱子。
+        Assert((await shop.BuildOpenSelectTreasureRetAsync(
+                    Open(equipBoxId, optionCount), profileId, CancellationToken.None)).Changed,
+            "equipment box rejected its last option");
+        foreach (int bad in new[] { 0, optionCount + 1 })
+        {
+            ShopService.TreasureOpenResult rejected = await shop.BuildOpenSelectTreasureRetAsync(
+                Open(equipBoxId, bad), profileId, CancellationToken.None);
+            Assert(!rejected.Changed && rejected.Error.Length > 0,
+                $"equipment box accepted an out-of-range position {bad}");
+        }
+        PlayerAccount afterBad = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("account missing");
+        Assert(afterBad.Bag!.Items.Single(x => x.TemplateId == equipBoxId).Num == 1,
+            "an out-of-range position still consumed the equipment box");
+        Assert(afterBad.Equip!.Items.Count == 2 &&
+               afterBad.Equip.Items.Select(x => x.EquipId).Distinct().Count() == 2,
+            "equipment instances collided or were not persisted");
+
+        // 道具箱路径不受影响。
+        Assert((await shop.BuildOpenSelectTreasureRetAsync(
+                    Open(itemBoxId, 1), profileId, CancellationToken.None)).Changed,
+            "item selection box regressed");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
 }
 
 static string FindClientConfigDir()
