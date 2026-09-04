@@ -81,6 +81,7 @@ internal sealed class GameServices
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);
         ShipBreakLoader.Load(configDir);
+        ShipIntensifyLoader.Load(configDir);
         ShipMainLoader.Load(configDir);
         AssistShipLoader.Load(configDir);
         EquipLoader.Load(configDir, equipmentMods.Equipment);
@@ -196,6 +197,14 @@ internal sealed class GameServices
             new("PlotUtcTime", "0"),
             new("PlotToggleSkipTip", "0"),
         };
+        // 玩家通过 guide.Setting 保存的设置必须一并下发，否则重登后 GuideData:GetSettingByKey
+        // 又变回 nil（强化页三个开关会退回关闭）。同名键以存档为准，覆盖上面的默认值。
+        if (account.UserSettings is { Count: > 0 } stored)
+        {
+            HashSet<string> overridden = [.. stored.Keys];
+            settings.RemoveAll(entry => overridden.Contains(entry.Key));
+            settings.AddRange(stored.Select(entry => new GuideSetting(entry.Key, entry.Value)));
+        }
         var plotList = PlotTriggerLoader.AllPlotIds;
         _fileLogger.LogInformation("guide.GuideInfo push PlotList count={Count}", plotList.Count);
         var guideInfo = new GuideInfo(PlotList: plotList, Setting: settings);
@@ -690,7 +699,7 @@ internal sealed class GameServices
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
             hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType,
             hero.EquipSlots, hero.Name, hero.ChangeNameTime, hero.Lock, hero.Advance, hero.AdvLv, hero.PSkills,
-            hero.RemouldEffects, hero.RemouldLevel);
+            hero.RemouldEffects, hero.RemouldLevel, hero.Intensify);
 
     /// <summary>
     /// 由舰娘 TemplateId（config_ship_main 的 key）推导图鉴 IllustrateId

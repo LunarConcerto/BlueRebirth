@@ -38,6 +38,14 @@ internal sealed class HeroService(GameServices services)
         bool Changed,
         string Error);
 
+    internal sealed record IntensifyResult(
+        byte[] Ret,
+        Hero? UpdatedHero,
+        IReadOnlyList<uint> ConsumedHeroIds,
+        bool Changed,
+        string Error,
+        int SpentDiamond = 0);
+
     internal sealed record AdvanceResult(
         byte[] Ret,
         Hero? UpdatedHero,
@@ -403,6 +411,140 @@ internal sealed class HeroService(GameServices services)
     }
 
     /// <summary>处理 hero.HeroAdvance：按 config_ship_break 校验并执行突破。</summary>
+    /// <summary>同 enhance_type 素材的强化值加成，config_parameter[110] match_enhance_ratio = 15000（×1e-4）。</summary>
+    private const double IntensifyMatchRatio = 1.5;
+
+    /// <summary>钻石强化（SuperIntensify）的强化值倍率，strengthen_page 的 data.ratio。</summary>
+    private const int SuperIntensifyRatio = 2;
+
+    /// <summary>钻石强化每条素材的钻石花费，config_parameter[31] diamond_num_per_girl = 5。</summary>
+    private const int SuperIntensifyDiamondPerMaterial = 5;
+
+    /// <summary>
+    /// 处理 hero.HeroIntensify（舰船强化）：消耗素材舰娘，按属性累加强化值。
+    /// 数值口径以客户端 Strengthen_Page.GenPropertyData 为准：
+    ///   提供量 = Σ int(provide_power_exp[attr] × (素材与目标同 enhance_type ? 1.5 : 1))
+    ///   钻石强化再 ×2，并按每条素材扣 5 钻石
+    ///   总量   = IntensifyLvl × need + CurExp + 提供量，上限 max_power_prop[attr] × need
+    ///   新等级 = 总量 / need，余量 = 总量 % need
+    /// 客户端 HeroAttr:_GetIntensify 按 AddAttr(AttrType, IntensifyLvl) 加算属性，即 1 级 = 1 点。
+    /// 三张表的键都是随突破变化的 TemplateId（sm_id），必须按舰娘当前模板取。
+    /// </summary>
+    internal async Task<IntensifyResult> BuildIntensifyRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return new([], null, [], false, "");
+        var (heroId, consumedHeros, superIntensify) = ProtocolDecoder.DecodeIntensifyArg(request.Args);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+
+        List<Hero> heroList = account.Dock.Heroes.ToList();
+        if (heroList.Count(h => h.HeroId == heroId) != 1)
+            return new([], null, [], false, "intensify target not found");
+        Hero hero = heroList.First(h => h.HeroId == heroId);
+
+        ConfigShipNeedPowerExp? need = ShipIntensifyLoader.GetNeed(hero.TemplateId);
+        ConfigShipMaxPower? max = ShipIntensifyLoader.GetMax(hero.TemplateId);
+        if (need?.NeedPowerExp is null || max?.MaxPowerProp is null)
+            return new([], null, [], false, "intensify config missing");
+
+        // 素材校验与突破一致：非零、不重复、不含目标本身、实际存在、未上锁、未被占用。
+        // Lvl/Advance/已有强化进度三项对应客户端 Strengthen_PageLogic:ScreenShip 中无条件
+        // 生效的筛选；同型与稀有度两项受界面开关影响，不在服务端强制。
+        if (consumedHeros.Count == 0 || consumedHeros.Any(id => id == 0) ||
+            consumedHeros.Distinct().Count() != consumedHeros.Count || consumedHeros.Contains(heroId))
+            return new([], null, [], false, "invalid intensify materials");
+        HashSet<uint> consumedIdSet = consumedHeros.ToHashSet();
+        List<Hero> materials = heroList.Where(h => consumedIdSet.Contains(h.HeroId)).ToList();
+        if (materials.Count != consumedHeros.Count ||
+            materials.Any(m => m.Lock || m.Level != 1 || m.Advance > 1 ||
+                m.Intensify is { Count: > 0 } || IsHeroInUse(account, m.HeroId)))
+            return new([], null, [], false, "invalid intensify materials");
+
+        int diamondCost = superIntensify ? SuperIntensifyDiamondPerMaterial * materials.Count : 0;
+        if (diamondCost > 0 && account.Character.Diamond < diamondCost)
+            return new([], null, [], false, "not enough diamond");
+
+        long targetType = need.EnhanceType;
+        Dictionary<int, int> maxLevels = ToAttrMap(max.MaxPowerProp);
+        Dictionary<int, AttrIntensify> current = (hero.Intensify ?? [])
+            .GroupBy(entry => entry.AttrType)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        var updated = new List<AttrIntensify>();
+        bool anyGain = false;
+        foreach (List<long> entry in need.NeedPowerExp)
+        {
+            if (entry is not { Count: >= 2 }) continue;
+            int attrType = checked((int)entry[0]);
+            long perLevel = entry[1];
+            AttrIntensify existing = current.TryGetValue(attrType, out AttrIntensify? found)
+                ? found
+                : new AttrIntensify(attrType);
+            // need 为 0 的属性无法换算等级（基础包里确有此类行），保持原样不动。
+            if (perLevel <= 0 || !maxLevels.TryGetValue(attrType, out int maxLevel) || maxLevel <= 0)
+            {
+                updated.Add(existing);
+                continue;
+            }
+
+            long gain = 0;
+            foreach (Hero material in materials)
+            {
+                ConfigShipProvidePowerExp? provide = ShipIntensifyLoader.GetProvide(material.TemplateId);
+                if (provide?.ProvidePowerExp is null) continue;
+                bool sameType = ShipIntensifyLoader.GetNeed(material.TemplateId)?.EnhanceType == targetType;
+                double factor = sameType ? IntensifyMatchRatio : 1.0;
+                foreach (List<long> provided in provide.ProvidePowerExp)
+                    if (provided is { Count: >= 2 } && provided[0] == attrType)
+                        gain = (long)(gain + provided[1] * factor);
+            }
+            if (superIntensify) gain *= SuperIntensifyRatio;
+
+            long total = (long)existing.IntensifyLvl * perLevel + existing.CurExp + gain;
+            long cap = (long)maxLevel * perLevel;
+            if (total > cap) total = cap;
+            var next = new AttrIntensify(attrType, checked((int)(total / perLevel)), checked((int)(total % perLevel)));
+            if (next.IntensifyLvl != existing.IntensifyLvl || next.CurExp != existing.CurExp) anyGain = true;
+            updated.Add(next);
+        }
+
+        // 全属性均已满级时客户端本就用 _CheckNoGains 拦住，这里再兜一层，避免白吃素材。
+        if (!anyGain) return new([], null, [], false, "intensify produced no gain");
+
+        List<uint> consumedIds = materials.Select(m => m.HeroId).ToList();
+        heroList.RemoveAll(h => consumedIdSet.Contains(h.HeroId));
+        Hero updatedHero = hero with { Intensify = updated };
+        int updatedIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (updatedIdx < 0) return new([], null, [], false, "intensify target not found");
+        heroList[updatedIdx] = updatedHero;
+
+        // 素材可能携带装备，与突破同样先安全卸下，避免 EquipItem.HeroId 指向已不存在的舰娘。
+        PlayerEquip equip = account.Equip ?? new PlayerEquip([], 2000);
+        List<EquipItem> equipItems = equip.Items
+            .Select(item => consumedIdSet.Contains(item.HeroId) ? item with { HeroId = 0 } : item).ToList();
+
+        account = account with
+        {
+            Dock = account.Dock with { Heroes = heroList },
+            Equip = equip with { Items = equipItems },
+        };
+        if (diamondCost > 0) account = GameServices.AddCurrency(account, 2, -diamondCost);
+
+        await services.SaveAccountAsync(account, ct);
+        return new([], updatedHero, consumedIds, true, "", diamondCost);
+    }
+
+    /// <summary>把 [[attr, value], ...] 形式的配置列摊平成字典，重复项取先出现的一条。</summary>
+    private static Dictionary<int, int> ToAttrMap(List<List<long>> pairs)
+    {
+        var map = new Dictionary<int, int>();
+        foreach (List<long> pair in pairs)
+            if (pair is { Count: >= 2 })
+                map.TryAdd(checked((int)pair[0]), checked((int)pair[1]));
+        return map;
+    }
+
     internal async Task<AdvanceResult> BuildAdvanceRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return new([], null, [], false);

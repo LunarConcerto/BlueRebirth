@@ -256,6 +256,49 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     ],
                 };
                 break;
+            case "hero.HeroIntensify":
+                HeroService.IntensifyResult intensify =
+                    await hero.BuildIntensifyRetAsync(request, ctx.ProfileId, ctx.Ct);
+                if (!intensify.Changed || intensify.UpdatedHero is null)
+                {
+                    result = new ModuleResult
+                    {
+                        Ret = intensify.Ret,
+                        Err = 1,
+                        ErrMsg = intensify.Error.Length > 0 ? intensify.Error : "intensify failed",
+                    };
+                    break;
+                }
+                PlayerAccount intensifyAccount = await ctx.GetAccountAsync();
+                uint intensifyNow = (uint)ctx.Now;
+                // 与突破同理：素材舰娘被消耗，HeroData.SetData 只按增量合并，
+                // 必须为每条素材推送 TemplateId=0 的删除标记，再带上更新后的主舰娘。
+                List<HeroGrid> intensifyHeroGrids =
+                [
+                    GameServices.ToHeroGrid(intensify.UpdatedHero),
+                    .. intensify.ConsumedHeroIds.Select(id => new HeroGrid(HeroId: id, TemplateId: 0)),
+                ];
+                // 客户端 _HeroIntensify 只看 err、完全忽略 ret，界面数值全部取自
+                // hero.UpdateHeroBagData 里的 Intensify 字段；缺这条推送就是「动画播了但数值不变」。
+                List<byte[]> intensifyPushes =
+                [
+                    TMessageCodec.EncodeResponse(new TResponse(
+                        Method: "hero.UpdateHeroBagData",
+                        Ret: PlayerDataCodec.Encode(new HeroBag(intensifyHeroGrids, intensifyAccount.Dock.BagSize)),
+                        Time: intensifyNow)),
+                ];
+                // 钻石强化会扣钻，需要刷新货币显示。
+                if (intensify.SpentDiamond > 0)
+                    intensifyPushes.Add(TMessageCodec.EncodeResponse(new TResponse(
+                        Method: "user.UpdateUserInfo",
+                        Ret: GameServices.EncodeGetUserInfo(intensifyAccount),
+                        Time: intensifyNow)));
+                result = new ModuleResult
+                {
+                    Ret = intensify.Ret,
+                    PrePushes = intensifyPushes,
+                };
+                break;
             case "hero.HeroAdvanceMUB":
                 HeroService.AdvanceResult advanceMub =
                     await hero.BuildAdvanceMubRetAsync(request, ctx.ProfileId, ctx.Ct);
@@ -287,7 +330,6 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     ],
                 };
                 break;
-            case "hero.HeroIntensify":
             case "hero.AutoEquip":
             case "hero.AutoUnEquip":
             case "hero.HeroAdvMaxLv":
