@@ -25,6 +25,14 @@ public sealed class PSkillEntry
     }
 }
 
+/// <summary>
+/// 单条属性的强化进度（TAttrIntensify）。AttrType 为 config_attribute 的属性 id；
+/// IntensifyLvl 是已获得的强化等级——客户端 HeroAttr:_GetIntensify 按
+/// AddAttr(attrType, IntensifyLvl) 直接加算，即 1 级 = 1 点属性；
+/// CurExp 是当前等级内尚未凑满一级的强化值余量。
+/// </summary>
+public sealed record AttrIntensify(int AttrType = 0, int IntensifyLvl = 0, int CurExp = 0);
+
 /// <summary>Resources consumed by a single traditional build formula.</summary>
 public sealed record BuildItem(int ResId = 0, int Count = 0);
 
@@ -117,7 +125,7 @@ public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, 
     long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "",
     int ChangeNameTime = 0, bool Lock = false, int Advance = 0, int AdvLv = 0,
     IReadOnlyList<PSkillEntry>? PSkills = null, IReadOnlyList<int>? ArrRemouldEffect = null,
-    int RemouldLV = 0);
+    int RemouldLV = 0, IReadOnlyList<AttrIntensify>? Intensify = null);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -725,6 +733,22 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         // Exp 必须无条件编码：girlinfo GirlShowPage._LoadPropertInfo 里
         // math.tointeger(Exp) .. "/" .. needExp 拼接，Exp 为 nil 会崩。
         WriteVarintField(output, 5, unchecked((ulong)value.Exp));
+        // Intensify (field 7, repeated TAttrIntensify)：舰船强化进度。客户端
+        // HeroAttr:_GetIntensify 遍历该数组并 AddAttr(AttrType, IntensifyLvl)，
+        // 字段缺失时 Lua 侧拿到空表、属性加成恒为 0（强化后数值不变）。
+        // 三个子字段无条件编码：strengthen_page 里 purelv * needExp 等算术直接使用
+        // IntensifyLvl/CurExp，取到 nil 会崩。
+        if (value.Intensify is { Count: > 0 } intensifyEntries)
+        {
+            foreach (AttrIntensify attr in intensifyEntries)
+            {
+                using var attrBody = new MemoryStream();
+                WriteVarintField(attrBody, 1, unchecked((ulong)attr.AttrType));
+                WriteVarintField(attrBody, 2, unchecked((ulong)attr.IntensifyLvl));
+                WriteVarintField(attrBody, 3, unchecked((ulong)attr.CurExp));
+                WriteMessage(output, 7, attrBody.ToArray());
+            }
+        }
         if (value.CreateTime != 0) WriteVarintField(output, 8, unchecked((ulong)value.CreateTime));
         if (value.CurHp != 0) WriteVarintField(output, 9, unchecked((ulong)value.CurHp));
         // PSkill (field 13, repeated TMapFiledPSkillExp)：编码所有实际技能数据。

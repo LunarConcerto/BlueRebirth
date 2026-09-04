@@ -48,7 +48,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("native draw results only prompt to lock a genuinely new ship", BuildShipNewStateNativePatchTest),
     ("item selection boxes grant the chosen option", SelectTreasureTest),
     ("tls material loads in OpenSSL proxy runtime", TlsCaptureIntegrationTest),
-    ("equipment selection boxes grant an equipment instance", EquipSelectTreasureTest)
+    ("ship intensify grants attribute levels and consumes materials", ShipIntensifyTest),
+    ("guide user settings persist and ship on the login push", GuideUserSettingTest)
 };
 if (args.Contains("--integration", StringComparer.OrdinalIgnoreCase)) tests = [.. tests,
     ("tcp server completes local gameplay flow", TcpIntegrationTest),
@@ -2915,28 +2916,8 @@ static async Task DailyCopyGameplayTest()
     Assert(ProtocolDecoder.DecodeVarintField(startPayload, 7) == 9,
         "copy.StartBase did not preserve DailyCopy type 9");
 
-    byte[] copyPayload = ProtocolEncoder.EncodeDailyCopyInfo();
-    int baseInfoCount = 0;
-    bool foundFirstDestroyerLevel = false, foundDestroyerTreaty = false;
-    ProtocolDecoder.ProtoReader copyReader = new(copyPayload);
-    while (copyReader.TryReadField(out int field, out int wire))
-    {
-        if (field != 1 || wire != 2)
-        {
-            copyReader.Skip(wire);
-            continue;
-        }
-        baseInfoCount++;
-        int baseId = 0;
-        ProtocolDecoder.ProtoReader baseInfo = new(copyReader.ReadBytes());
-        while (baseInfo.TryReadField(out int baseField, out int baseWire))
-        {
-            if (baseField == 1 && baseWire == 0) baseId = checked((int)baseInfo.ReadVarint());
-            else baseInfo.Skip(baseWire);
-        }
-        if (baseId == 20101) foundFirstDestroyerLevel = true;
-        if (baseId == 20518) foundDestroyerTreaty = true;
-    }
+    var (baseInfoCount, foundFirstDestroyerLevel, foundDestroyerTreaty) =
+        ScanDailyCopyInfo(ProtocolEncoder.EncodeDailyCopyInfo());
     Assert(baseInfoCount == 44 && foundFirstDestroyerLevel && foundDestroyerTreaty,
         "DailyCopy synchronization omitted configured normal or treaty levels");
 
@@ -2989,20 +2970,8 @@ static async Task DailyCopyGameplayTest()
             "destroyer treaty clear did not increment daily group success count");
         await services.SaveAccountAsync(account, CancellationToken.None);
 
-        byte[] statePayload = DailyCopyService.EncodeSnapshot(account.DailyCopy, today);
-        int chapterRows = 0, groupRows = 0, extraRows = 0;
-        ProtocolDecoder.ProtoReader stateReader = new(statePayload);
-        while (stateReader.TryReadField(out int stateField, out int stateWire))
-        {
-            if (stateWire == 2 && stateField is >= 1 and <= 3)
-            {
-                _ = stateReader.ReadBytes();
-                if (stateField == 1) chapterRows++;
-                else if (stateField == 2) groupRows++;
-                else extraRows++;
-            }
-            else stateReader.Skip(stateWire);
-        }
+        var (chapterRows, groupRows, extraRows) =
+            CountDailyCopySnapshotRows(DailyCopyService.EncodeSnapshot(account.DailyCopy, today));
         Assert(chapterRows == 4 && groupRows == 4 && extraRows == 4,
             "dailycopy.UpdateDailyCopyData omitted a repeated array required by the client");
 
@@ -3168,29 +3137,36 @@ static Task TaskCompletionRequiresProgressTest()
     return Task.CompletedTask;
 }
 
-// 装备自选箱（config_item_selected.type == 2）此前和舰船箱一起被挡在实现之外：
-// BuildOpenSelectTreasureRetAsync 对非 type==3 直接返回 Changed=false 且不带错误，
-// ShopModule 据此保持 ModuleResult.Empty，客户端 err==0 解出空 treasuresInfo，
-// 表现为「选了装备点收取却什么都没拿到」，箱子也不消耗。
-// 装备与道具的区别在于它是逐件生成实例的：每件要分配 EquipsId 并随奖励下发。
-static async Task EquipSelectTreasureTest()
+// 舰船强化（hero.HeroIntensify）此前是空占位：返回空 Ret、Err=0、不推送，客户端
+// _HeroIntensify 只看 err 就播成功动画，属性却全部取自 THeroGrid.Intensify（字段 7），
+// 于是「强化后数值不变」。数值口径对齐客户端 Strengthen_Page.GenPropertyData。
+static async Task ShipIntensifyTest()
 {
     string root = FindRepositoryRoot();
-    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-equip-box-" + Guid.NewGuid().ToString("N"));
-    const string profileId = "equip-box";
-    // 80190：type=2，16 个选项，全部 [2, equipTemplateId, 1]；第 1 项 30444、第 2 项 30154。
-    const int equipBoxId = 80190;
-    const int firstEquipTid = 30444;
-    const int secondEquipTid = 30154;
-    const int optionCount = 16;
-    const int itemBoxId = 80134;   // type=3 道具箱，确认改动没有影响原有路径
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-ship-intensify-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "ship-intensify";
+    // 10210511：enhance_type=2，need_power_exp = 8:3750 9:5625 10:1125 11:5625 12:2812，
+    //           max_power_prop = 8:24 9:16 10:80 11:16 12:32，provide = 各属性 3000。
+    // 10110111：enhance_type=1（异型），provide = 各属性 1000。
+    const int targetTid = 10210511;
+    const int sameTypeTid = 10210511;
+    const int otherTypeTid = 10110111;
     try
     {
         var repo = new SqliteGameRepository(dataRoot);
-        await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, 1) with
+        PlayerAccount seed = PlayerAccountFactory.CreateDefault(profileId, 1);
+        await repo.SaveAccountAsync(seed with
         {
-            Bag = new PlayerBag([new BagItem(equipBoxId, 3), new BagItem(itemBoxId, 1)], 200),
-            Equip = new PlayerEquip([], 2000),
+            Character = seed.Character with { SecretaryId = 10 },
+            Dock = new HeroDock(
+            [
+                new Hero(10, targetTid, 5),
+                new Hero(20, sameTypeTid, 1),
+                new Hero(30, otherTypeTid, 1),
+                new Hero(40, sameTypeTid, 1, Lock: true),
+                new Hero(50, sameTypeTid, 9),
+            ]),
+            Fleet = new PlayerFleet([new FleetEntry(1, HeroInfo: [10])]),
         });
 
         ServerOptions options = ServerOptions.Parse(
@@ -3200,56 +3176,193 @@ static async Task EquipSelectTreasureTest()
         using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
             Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
         var services = new GameServices(repo, options, loggerFactory);
-        var shop = new ShopService(services);
+        var heroService = new HeroService(services);
 
-        static TRequest Open(int treasureId, int position, int num = 1) =>
-            new("bag.GetSelectTreasureInfo", new ProtocolPackage()
-                .Write(0x08, (ulong)treasureId).Write(0x10, (ulong)position).Write(0x18, (ulong)num).ToArray());
-
-        // 第 1 项：拿到 30444 而不是 30154（序号是 1 基）。
-        ShopService.TreasureOpenResult first = await shop.BuildOpenSelectTreasureRetAsync(
-            Open(equipBoxId, 1), profileId, CancellationToken.None);
-        Assert(first.Changed, $"equipment box was not opened: {first.Error}");
-        PlayerAccount after = await repo.LoadAccountAsync(profileId)
-            ?? throw new InvalidDataException("account missing");
-        Assert(after.Equip!.Items.Count == 1 && after.Equip.Items[0].TemplateId == firstEquipTid,
-            "equipment box did not grant the selected option as an equipment instance");
-        Assert(after.Equip.Items[0].EquipId != 0,
-            "granted equipment has no instance id");
-        Assert(after.Bag!.Items.All(x => x.TemplateId != secondEquipTid) &&
-               after.Bag.Items.All(x => x.TemplateId != firstEquipTid),
-            "equipment reward polluted the item bag");
-        Assert(after.Bag.Items.Single(x => x.TemplateId == equipBoxId).Num == 2,
-            "equipment box was not consumed exactly once");
-
-        // 末项可选；两侧越界被拒且不扣箱子。
-        Assert((await shop.BuildOpenSelectTreasureRetAsync(
-                    Open(equipBoxId, optionCount), profileId, CancellationToken.None)).Changed,
-            "equipment box rejected its last option");
-        foreach (int bad in new[] { 0, optionCount + 1 })
+        static TRequest Intensify(uint heroId, uint[] materials)
         {
-            ShopService.TreasureOpenResult rejected = await shop.BuildOpenSelectTreasureRetAsync(
-                Open(equipBoxId, bad), profileId, CancellationToken.None);
-            Assert(!rejected.Changed && rejected.Error.Length > 0,
-                $"equipment box accepted an out-of-range position {bad}");
+            var package = new ProtocolPackage().Write(0x08, heroId);
+            foreach (uint material in materials) package.Write(0x10, material);
+            return new TRequest("hero.HeroIntensify", package.ToArray());
         }
-        PlayerAccount afterBad = await repo.LoadAccountAsync(profileId)
-            ?? throw new InvalidDataException("account missing");
-        Assert(afterBad.Bag!.Items.Single(x => x.TemplateId == equipBoxId).Num == 1,
-            "an out-of-range position still consumed the equipment box");
-        Assert(afterBad.Equip!.Items.Count == 2 &&
-               afterBad.Equip.Items.Select(x => x.EquipId).Distinct().Count() == 2,
-            "equipment instances collided or were not persisted");
 
-        // 道具箱路径不受影响。
-        Assert((await shop.BuildOpenSelectTreasureRetAsync(
-                    Open(itemBoxId, 1), profileId, CancellationToken.None)).Changed,
-            "item selection box regressed");
+        // 上锁、非 1 级素材必须被拒（对应客户端 ScreenShip / FilterHero 的无条件筛选）。
+        foreach (uint rejected in new uint[] { 40, 50 })
+            Assert(!(await heroService.BuildIntensifyRetAsync(
+                        Intensify(10, [rejected]), profileId, CancellationToken.None)).Changed,
+                $"intensify accepted an ineligible material (hero {rejected})");
+        // 目标自身不能同时作素材。
+        Assert(!(await heroService.BuildIntensifyRetAsync(
+                    Intensify(10, [10]), profileId, CancellationToken.None)).Changed,
+            "intensify accepted the target itself as material");
+
+        HeroService.IntensifyResult result = await heroService.BuildIntensifyRetAsync(
+            Intensify(10, [20, 30]), profileId, CancellationToken.None);
+        Assert(result.Changed && result.UpdatedHero is not null, "intensify did not apply");
+
+        // 同型 3000×1.5=4500，异型 1000×1，合计 5500：
+        //   attr8  5500/3750 -> Lv1 余 1750
+        //   attr10 5500/1125 -> Lv4 余 1000
+        Dictionary<int, AttrIntensify> byAttr =
+            result.UpdatedHero!.Intensify!.ToDictionary(entry => entry.AttrType);
+        Assert(byAttr[8].IntensifyLvl == 1 && byAttr[8].CurExp == 1750,
+            $"attr 8 intensify drifted: Lv{byAttr[8].IntensifyLvl} exp{byAttr[8].CurExp}");
+        Assert(byAttr[10].IntensifyLvl == 4 && byAttr[10].CurExp == 1000,
+            $"attr 10 intensify drifted: Lv{byAttr[10].IntensifyLvl} exp{byAttr[10].CurExp}");
+        // 素材提供了 14/16 的强化值，但目标的 need_power_exp 不含这两项，不应被强化。
+        Assert(!byAttr.ContainsKey(14) && !byAttr.ContainsKey(16),
+            "intensify touched attributes outside the target's need_power_exp");
+        Assert(result.ConsumedHeroIds.Count == 2, "intensify did not consume both materials");
+
+        PlayerAccount after = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(after.Dock.Heroes.All(h => h.HeroId != 20 && h.HeroId != 30),
+            "consumed materials remain in the dock");
+
+        // THeroGrid.Intensify 是字段 7（wire 2）。缺这段编码，客户端 HeroAttr:_GetIntensify
+        // 拿到空表，属性加成恒为 0 —— 正是「强化后数值不变」的直接原因。
+        // attr8 子消息：08 08 (AttrType=8) 10 01 (Lv=1) 18 D6 0D (CurExp=1750)，共 7 字节。
+        byte[] encoded = PlayerDataCodec.Encode(GameServices.ToHeroGrid(result.UpdatedHero!));
+        Assert(ContainsSequence(encoded, [0x3A, 0x07, 0x08, 0x08, 0x10, 0x01, 0x18, 0xD6, 0x0D]),
+            "hero grid did not encode Intensify as field 7");
+
+        // 满级后再强化不应白吃素材。
+        HeroService.IntensifyResult noGain = await heroService.BuildIntensifyRetAsync(
+            Intensify(10, [20]), profileId, CancellationToken.None);
+        Assert(!noGain.Changed, "intensify consumed an already-removed material");
     }
     finally
     {
         if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
     }
+}
+
+// 强化页的三个开关（LOGIC_HERO_INTENSIFY_TypeMatchCancel / _RHeroSelect / _MORESELECT）
+// 都通过 guide.Setting 存取，服务端此前是 "guide.Setting" => [] 直接丢弃，客户端
+// GuideData:GetSettingByKey 永远读到 nil，开关恒为关闭：筛选只认 N 品质、选择槽固定 6 格，
+// 「一斉追加」于是常年提示「条件を満たした戦姫はいません」。
+// 客户端 GuideService:_ReceiveUserSetting 按 TGuideInfo 解应答，所以应答必须带 Setting；
+// 登录的 guide.GuideInfo 也要带上，否则重登即丢。
+static async Task GuideUserSettingTest()
+{
+    string root = FindRepositoryRoot();
+    string dataRoot = Path.Combine(Path.GetTempPath(), "blueoath-guide-setting-" + Guid.NewGuid().ToString("N"));
+    const string profileId = "guide-setting";
+    try
+    {
+        var repo = new SqliteGameRepository(dataRoot);
+        await repo.SaveAccountAsync(PlayerAccountFactory.CreateDefault(profileId, 1));
+
+        ServerOptions options = ServerOptions.Parse(
+            ["--data=" + dataRoot,
+             "--client-path=" + Path.Combine(root, "blueoath", "blueoath"),
+             "--profile-id=" + profileId]);
+        using Microsoft.Extensions.Logging.ILoggerFactory loggerFactory =
+            Microsoft.Extensions.Logging.LoggerFactory.Create(_ => { });
+        var services = new GameServices(repo, options, loggerFactory);
+        var guide = new GuideModule(services);
+        var ctx = new GameContext
+        {
+            ProfileId = profileId,
+            Now = 1,
+            Ct = CancellationToken.None,
+            Services = services,
+        };
+
+        static byte[] SettingArgs(params (string Key, string Value)[] entries)
+        {
+            var package = new ProtocolPackage();
+            foreach ((string key, string value) in entries)
+            {
+                var body = new ProtocolPackage()
+                    .Write(0x0A, key)
+                    .Write(0x12, value);
+                package.Write(0x0A, body.ToArray());
+            }
+            return package.ToArray();
+        }
+
+        ModuleResult saved = await guide.HandleAsync(ctx, new TRequest("guide.Setting",
+            SettingArgs(("LOGIC_HERO_INTENSIFY_RHeroSelect", "true"),
+                        ("LOGIC_HERO_INTENSIFY_MORESELECT", "true"))));
+        // 应答必须是带 Setting 的 TGuideInfo：字段 3 的子消息里 Key/Value 都是 string。
+        Assert(saved.Ret is { Length: > 0 }, "guide.Setting returned an empty payload");
+        Assert(ContainsSequence(saved.Ret!,
+                   System.Text.Encoding.UTF8.GetBytes("LOGIC_HERO_INTENSIFY_RHeroSelect")) &&
+               ContainsSequence(saved.Ret!,
+                   System.Text.Encoding.UTF8.GetBytes("LOGIC_HERO_INTENSIFY_MORESELECT")),
+            "guide.Setting response did not echo the stored settings");
+
+        PlayerAccount stored = await repo.LoadAccountAsync(profileId)
+            ?? throw new InvalidDataException("account missing");
+        Assert(stored.UserSettings?["LOGIC_HERO_INTENSIFY_RHeroSelect"] == "true" &&
+               stored.UserSettings?["LOGIC_HERO_INTENSIFY_MORESELECT"] == "true",
+            "guide.Setting did not persist the submitted keys");
+
+        // 再提交一次：同键覆盖、异键并入，不能整表替换。
+        await guide.HandleAsync(ctx, new TRequest("guide.Setting",
+            SettingArgs(("LOGIC_HERO_INTENSIFY_RHeroSelect", "false"),
+                        ("LOGIC_HERO_INTENSIFY_TypeMatchCancel", "true"))));
+        stored = await repo.LoadAccountAsync(profileId) ?? throw new InvalidDataException("account missing");
+        Assert(stored.UserSettings?.Count == 3 &&
+               stored.UserSettings["LOGIC_HERO_INTENSIFY_RHeroSelect"] == "false" &&
+               stored.UserSettings["LOGIC_HERO_INTENSIFY_MORESELECT"] == "true" &&
+               stored.UserSettings["LOGIC_HERO_INTENSIFY_TypeMatchCancel"] == "true",
+            "guide.Setting replaced the map instead of merging keys");
+
+        // 登录推送必须带上存档里的设置，否则重登即丢。
+        byte[] push = services.BuildGuideInfoPush(1, stored);
+        Assert(ContainsSequence(push,
+                   System.Text.Encoding.UTF8.GetBytes("LOGIC_HERO_INTENSIFY_TypeMatchCancel")),
+            "guide.GuideInfo login push omitted the persisted user settings");
+    }
+    finally
+    {
+        if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true);
+    }
+}
+// ProtocolDecoder.ProtoReader 是 ref struct，C# 12 不允许它出现在 async 方法体内
+// （CS8652）。DailyCopyGameplayTest 是 async，两处解析必须提到独立的同步方法里。
+static (int BaseInfoCount, bool FirstDestroyerLevel, bool DestroyerTreaty) ScanDailyCopyInfo(byte[] copyPayload)
+{
+    int baseInfoCount = 0;
+    bool foundFirstDestroyerLevel = false, foundDestroyerTreaty = false;
+    ProtocolDecoder.ProtoReader copyReader = new(copyPayload);
+    while (copyReader.TryReadField(out int field, out int wire))
+    {
+        if (field != 1 || wire != 2)
+        {
+            copyReader.Skip(wire);
+            continue;
+        }
+        baseInfoCount++;
+        int baseId = 0;
+        ProtocolDecoder.ProtoReader baseInfo = new(copyReader.ReadBytes());
+        while (baseInfo.TryReadField(out int baseField, out int baseWire))
+        {
+            if (baseField == 1 && baseWire == 0) baseId = checked((int)baseInfo.ReadVarint());
+            else baseInfo.Skip(baseWire);
+        }
+        if (baseId == 20101) foundFirstDestroyerLevel = true;
+        if (baseId == 20518) foundDestroyerTreaty = true;
+    }
+    return (baseInfoCount, foundFirstDestroyerLevel, foundDestroyerTreaty);
+}
+
+static (int ChapterRows, int GroupRows, int ExtraRows) CountDailyCopySnapshotRows(byte[] statePayload)
+{
+    int chapterRows = 0, groupRows = 0, extraRows = 0;
+    ProtocolDecoder.ProtoReader stateReader = new(statePayload);
+    while (stateReader.TryReadField(out int stateField, out int stateWire))
+    {
+        if (stateWire == 2 && stateField is >= 1 and <= 3)
+        {
+            _ = stateReader.ReadBytes();
+            if (stateField == 1) chapterRows++;
+            else if (stateField == 2) groupRows++;
+            else extraRows++;
+        }
+        else stateReader.Skip(stateWire);
+    }
+    return (chapterRows, groupRows, extraRows);
 }
 
 static string FindClientConfigDir()

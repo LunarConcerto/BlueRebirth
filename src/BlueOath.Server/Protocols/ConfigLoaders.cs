@@ -664,6 +664,56 @@ internal static class ShipBreakLoader
         _stages.TryGetValue(templateId, out ConfigShipBreak? config) ? config : null;
 }
 
+/// <summary>
+/// 舰船强化（hero.HeroIntensify）用到的三张表，键均为舰船 TemplateId（sm_id，随突破变化）：
+/// config_ship_need_power_exp    目标船每级所需强化值 + enhance_type（同型判定）
+/// config_ship_provide_power_exp 材料船各属性提供的强化值
+/// config_ship_max_power         各属性的强化等级上限
+/// </summary>
+internal static class ShipIntensifyLoader
+{
+    private static readonly Dictionary<int, ConfigShipNeedPowerExp> _need = new();
+    private static readonly Dictionary<int, ConfigShipProvidePowerExp> _provide = new();
+    private static readonly Dictionary<int, ConfigShipMaxPower> _max = new();
+    private static bool _loaded;
+
+    internal static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _need.Clear();
+            _provide.Clear();
+            _max.Clear();
+            foreach (var (id, config) in ConfigDbLoader.LoadAll<ConfigShipNeedPowerExp>(
+                         configDir, "config_ship_need_power_exp.db"))
+                _need[id] = config;
+            foreach (var (id, config) in ConfigDbLoader.LoadAll<ConfigShipProvidePowerExp>(
+                         configDir, "config_ship_provide_power_exp.db"))
+                _provide[id] = config;
+            foreach (var (id, config) in ConfigDbLoader.LoadAll<ConfigShipMaxPower>(
+                         configDir, "config_ship_max_power.db"))
+                _max[id] = config;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ShipIntensify] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    internal static ConfigShipNeedPowerExp? GetNeed(int templateId) =>
+        _need.TryGetValue(templateId, out ConfigShipNeedPowerExp? config) ? config : null;
+
+    internal static ConfigShipProvidePowerExp? GetProvide(int templateId) =>
+        _provide.TryGetValue(templateId, out ConfigShipProvidePowerExp? config) ? config : null;
+
+    internal static ConfigShipMaxPower? GetMax(int templateId) =>
+        _max.TryGetValue(templateId, out ConfigShipMaxPower? config) ? config : null;
+
+    internal static int Count => _need.Count;
+}
+
 internal static class AssistShipLoader
 {
     private static readonly Dictionary<int, ConfigAssistShipInfo> _ships = new();
