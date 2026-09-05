@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <SelfContained>true</SelfContained> <!-- 开启自包含 -->
+    <PublishSingleFile>true</PublishSingleFile> <!-- 打包为单文件 -->
     <TargetFramework>net8.0-windows</TargetFramework>
     <AssemblyName>BlueOath.Launcher.Wpf</AssemblyName>
     <RootNamespace>BlueOath.Launcher.Wpf</RootNamespace>
