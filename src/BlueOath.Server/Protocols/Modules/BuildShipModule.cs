@@ -47,6 +47,9 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                     // 新舰娘自带默认装备（config_ship_info.equip1..equip6），纯装备抽卡也会新增
                     // EquipItem，推送完整装备仓库让客户端 equipdata 拿到新增装备。
                     pre.Add(services.BuildEquipPush(account, now));
+                    // 卡池可能含道具（如伊168池），抽到道具走 AddBagItem 入背包，
+                    // 必须推送 bag.UpdateBagData，否则客户端要重启才能看到新道具。
+                    pre.Add(services.BuildBagPush(account, now));
                     // 推送最新累计抽数/领奖状态，客户端累计奖励 UI 无需重登即可刷新。
                     pre.Add(TMessageCodec.EncodeResponse(new TResponse(
                         Method: "buildship.BuildShipInfo",
@@ -154,6 +157,8 @@ internal sealed class BuildShipModule(BuildShipService buildShip, GameServices s
                 Time: now)));
         }
         pushes.Add(services.BuildEquipPush(account, now));
+        // 抽卡宝箱/领奖可能含道具，推送背包让客户端立即看到新增素材。
+        pushes.Add(services.BuildBagPush(account, now));
         // 推送最新累计抽数/领奖状态。
         pushes.Add(TMessageCodec.EncodeResponse(new TResponse(
             Method: "buildship.BuildShipInfo",
