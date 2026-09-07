@@ -1534,3 +1534,43 @@ internal static class BuildingConfigLoader
                 : 0;
     }
 }
+
+/// <summary>加载 config_shop 全部商店 id 与其货架（shelf_list）商品、config_shop_goods 配置。
+/// 客户端商店页会按 config_shop 导航到任意商店，ShopData.GetShopInfoById 在
+/// m_shopInfo[shopId] 缺失时崩溃，因此必须覆盖全部商店。</summary>
+internal static class ShopCatalogLoader
+{
+    private static int[] _shopIds = [];
+    private static Dictionary<int, List<int>> _shelfByShop = new();
+    private static Dictionary<int, ConfigShopGoods> _goods = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            var shopConfigs = ConfigDbLoader.LoadAll<ConfigShop>(configDir, "config_shop.db");
+            _shopIds = shopConfigs.Keys.OrderBy(x => x).ToArray();
+            _shelfByShop = shopConfigs.ToDictionary(
+                kv => kv.Key,
+                kv => (kv.Value.ShelfList ?? [])
+                    .Select(x => checked((int)x))
+                    .Where(x => x > 0)
+                    .Distinct()
+                    .ToList());
+            _goods = ConfigDbLoader.LoadAll<ConfigShopGoods>(configDir, "config_shop_goods.db");
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static int[] GetAllShopIds() => _shopIds;
+
+    /// <summary>指定商店货架上的商品 id（来自 config_shop.shelf_list）。</summary>
+    public static IReadOnlyList<int> GetShelfGoodIds(int shopId)
+        => _shelfByShop.TryGetValue(shopId, out var ids) ? ids : [];
+
+    public static ConfigShopGoods? GetGood(int goodId)
+        => _goods.TryGetValue(goodId, out var cfg) ? cfg : null;
+}

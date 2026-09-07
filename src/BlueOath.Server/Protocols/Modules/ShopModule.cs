@@ -88,7 +88,7 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
     }
 
     /// <summary>
-    /// 处理 shop.BuyGoods：免费发放商品内容到对应存储（GM 功能，不扣货币）。
+    /// 处理 shop.BuyGoods：免费发放商品内容到对应存储（GM/赤改造商店，不扣货币）。
     /// - ITEM/EQUIP_ENHANCE_ITEM → 仓库（bag）
     /// - CURRENCY → 货币（UserInfo 对应字段）
     /// - FASHION → 时装解锁
@@ -99,14 +99,11 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
         if (request.Args is null) return new([], false, "purchase request is missing");
         BuyGoodsArg arg = TMessageCodec.DecodeBuyGoodsArg(request.Args);
         if (arg.BuyNum <= 0) arg = arg with { BuyNum = 1 };
-        if (!services.GmGoodsMap.TryGetValue(arg.GoodId, out GmGoodConfig? goods) ||
-            goods.ShopId != arg.ShopId)
-            return new([], false, "shop goods were not found");
 
         using var _ = await services.LockAccountAsync(ctx.ProfileId, ctx.Ct);
         PlayerAccount account = await ctx.GetAccountAsync();
         GoodsGrant grant = ApplyGoods(account, arg.GoodId, arg.BuyNum, ctx.Now);
-        if (grant.Reward.Type == 0) return new([], false, "shop goods could not be granted");
+        if (grant.Reward.Type == 0) return new([], false, "shop goods were not found");
         await services.SaveAccountAsync(grant.Account, ctx.Ct);
 
         return new(TMessageCodec.EncodeBuyGoodsRet(grant.Reward, arg.GoodId, arg.BuyNum), true, "",
@@ -125,9 +122,6 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
         var rewards = new List<CommonReward>();
         foreach (var goodId in arg.GoodIdList)
         {
-            if (!services.GmGoodsMap.TryGetValue(goodId, out GmGoodConfig? goods) ||
-                goods.ShopId != arg.ShopId)
-                continue;
             var grant = ApplyGoods(account, goodId, 1, ctx.Now);
             if (grant.Reward.Type == 0) continue;
             account = grant.Account;
@@ -141,45 +135,84 @@ internal sealed class ShopModule(ShopService shop, GameServices services) : IGam
                 .Select(reward => reward.ConfigId).ToList());
     }
 
-    /// <summary>发放单个 GM 商品，返回更新后的账号和奖励。无效商品返回 Type=0 的空奖励。</summary>
+    /// <summary>发放单个商品，返回更新后的账号和奖励。无效商品返回 Type=0 的空奖励。
+    /// 优先 GM 商品（gm-goods.json），否则回落到 config_shop_goods（如赤改造商店）。
+    /// 均不扣货币，便于离线游玩。</summary>
     private GoodsGrant ApplyGoods(PlayerAccount account, int goodId, int buyNum, int now)
     {
-        if (!services.GmGoodsMap.TryGetValue(goodId, out var goods))
-            return new GoodsGrant(account, new CommonReward());
         if (buyNum <= 0) buyNum = 1;
-        var totalNum = goods.Num * buyNum;
+        if (services.GmGoodsMap.TryGetValue(goodId, out var goods))
+        {
+            var totalNum = goods.Num * buyNum;
 
-        if (goods.Type == GameServices.GoodsTypeCurrency)
-        {
-            account = GameServices.AddCurrency(account, goods.ItemId, totalNum);
-        }
-        else if (goods.Type == GameServices.GoodsTypeFashion)
-        {
-            account = services.AddFashion(account, goods.ItemId);
-        }
-        else if (goods.Type == GameServices.GoodsTypeShip)
-        {
-            // 舰娘购买 → 加入船坞（HeroDock），不能进背包（baglogic 按 config_table_index
-            // 解析模板会崩溃）。reward.Id 携带最后一个生成的 HeroId 供客户端渲染。
-            uint lastHeroId = 0;
-            for (var i = 0; i < totalNum; i++)
+            if (goods.Type == GameServices.GoodsTypeCurrency)
             {
-                uint heroId = services.NextHeroId();
-                account = services.AddShip(account, heroId, goods.ItemId, now);
-                lastHeroId = heroId;
+                account = GameServices.AddCurrency(account, goods.ItemId, totalNum);
             }
-            return new GoodsGrant(account, new CommonReward(goods.Type, goods.ItemId, 1, checked((int)lastHeroId)));
+            else if (goods.Type == GameServices.GoodsTypeFashion)
+            {
+                account = services.AddFashion(account, goods.ItemId);
+            }
+            else if (goods.Type == GameServices.GoodsTypeShip)
+            {
+                // 舰娘购买 → 加入船坞（HeroDock），不能进背包（baglogic 按 config_table_index
+                // 解析模板会崩溃）。reward.Id 携带最后一个生成的 HeroId 供客户端渲染。
+                uint lastHeroId = 0;
+                for (var i = 0; i < totalNum; i++)
+                {
+                    uint heroId = services.NextHeroId();
+                    account = services.AddShip(account, heroId, goods.ItemId, now);
+                    lastHeroId = heroId;
+                }
+                return new GoodsGrant(account, new CommonReward(goods.Type, goods.ItemId, 1, checked((int)lastHeroId)));
+            }
+            else if (goods.Type == GameServices.GoodsTypeEquip)
+            {
+                for (var i = 0; i < totalNum; i++)
+                    account = AddEquipItem(account, goods.ItemId);
+            }
+            else
+            {
+                account = GameServices.AddBagItem(account, goods.ItemId, totalNum);
+            }
+            return new GoodsGrant(account, new CommonReward(goods.Type, goods.ItemId, totalNum));
         }
-        else if (goods.Type == GameServices.GoodsTypeEquip)
+
+        // 回落：config_shop_goods（goods=[Type, ConfigId, Num?]）。
+        var shopGood = ShopCatalogLoader.GetGood(goodId);
+        if (shopGood?.Goods is not { Count: >= 2 })
+            return new GoodsGrant(account, new CommonReward());
+        int type = checked((int)shopGood.Goods[0]);
+        int configId = checked((int)shopGood.Goods[1]);
+        int perNum = shopGood.Goods.Count >= 3 ? checked((int)shopGood.Goods[2]) : 1;
+        int totalCount = perNum * buyNum;
+
+        switch (type)
         {
-            for (var i = 0; i < totalNum; i++)
-                account = AddEquipItem(account, goods.ItemId);
+            case GameServices.GoodsTypeCurrency:
+                account = GameServices.AddCurrency(account, configId, totalCount);
+                break;
+            case GameServices.GoodsTypeFashion:
+                account = services.AddFashion(account, configId);
+                break;
+            case GameServices.GoodsTypeShip:
+                uint lastHeroId = 0;
+                for (var i = 0; i < totalCount; i++)
+                {
+                    uint heroId = services.NextHeroId();
+                    account = services.AddShip(account, heroId, configId, now);
+                    lastHeroId = heroId;
+                }
+                return new GoodsGrant(account, new CommonReward(type, configId, 1, checked((int)lastHeroId)));
+            case GameServices.GoodsTypeEquip:
+                for (var i = 0; i < totalCount; i++)
+                    account = AddEquipItem(account, configId);
+                break;
+            default:
+                account = GameServices.AddBagItem(account, configId, totalCount);
+                break;
         }
-        else
-        {
-            account = GameServices.AddBagItem(account, goods.ItemId, totalNum);
-        }
-        return new GoodsGrant(account, new CommonReward(goods.Type, goods.ItemId, totalNum));
+        return new GoodsGrant(account, new CommonReward(type, configId, totalCount));
     }
 
     /// <summary>装备入库：创建一件装备实例（EquipId 自增），存入装备仓库。</summary>

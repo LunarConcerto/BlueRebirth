@@ -64,6 +64,7 @@ internal sealed class GameServices
         _gmGoodsMap = _gmGoods.Goods.ToDictionary(g => g.GoodId);
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
+        ShopCatalogLoader.Load(configDir);
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
         ConstructionConfigLoader.Load(configDir);
         BuildingConfigLoader.Load(configDir);
@@ -1044,27 +1045,31 @@ internal sealed class GameServices
     internal static Task<byte[]> BuildSimpleRet() => Task.FromResult(Array.Empty<byte>());
 
     /// <summary>config_shop 全部商店 id（104 个）。</summary>
-    internal static readonly int[] ShopIds =
-    [
-        1, 3, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-        26, 27, 29, 30, 101, 102, 104, 105, 106, 107, 110, 111, 200, 201, 202, 205,
-        206, 207, 208, 300, 302, 303, 305, 306, 401, 901, 902, 903, 911, 912, 913,
-        914, 915, 916, 917, 918, 919, 920, 924, 930, 931, 934, 935, 936, 940, 950,
-        951, 954, 955, 956, 957, 958, 1001, 1002, 1003, 1004, 1006, 1010, 1011, 1012,
-        1013, 1014, 1015, 1020, 1021, 1022, 1023, 1024, 1025, 1026, 1030, 1040, 1041,
-        1042, 1043, 1044, 1051, 1052, 1071, 1072, 1073, 1074, 1201, 1202,
-    ];
+    /// <summary>赤改造ショップ 及其分类（config_shop id 1110/1111/1112）。这些商店
+    /// 无 GM 商品配置，按货架 shelf_list 填充 config_shop_goods 全部商品。</summary>
+    private static readonly int[] RedModShopIds = [1110, 1111, 1112];
 
-    /// <summary>商店列表响应（shop.GetShopsInfo 使用）。</summary>
+    /// <summary>商店列表响应（shop.GetShopsInfo 使用）。覆盖 config_shop 全部商店 id，
+    /// 否则客户端商店页导航到未覆盖商店时 ShopData.GetShopInfoById 崩溃。</summary>
     internal byte[] BuildShopsInfoRet(uint now)
     {
         var goodsByShop = _gmGoods.Goods
             .GroupBy(g => g.ShopId)
             .ToDictionary(g => g.Key, g => g.Select(x => new ShopGoodsData(x.GoodId, 0, 0)).ToList());
-        var shopInfo = ShopIds.Select(id =>
-            goodsByShop.TryGetValue(id, out var goods)
+        var shopInfo = ShopCatalogLoader.GetAllShopIds().Select(id =>
+        {
+            if (RedModShopIds.Contains(id))
+            {
+                // 红改造商店分类：用 config_shop.shelf_list 的全部商品填充。
+                var shelfGoods = ShopCatalogLoader.GetShelfGoodIds(id)
+                    .Select(gid => new ShopGoodsData(gid, 0, 0))
+                    .ToList();
+                return new RetShopInfo(id, shelfGoods);
+            }
+            return goodsByShop.TryGetValue(id, out var goods)
                 ? new RetShopInfo(id, goods)
-                : new RetShopInfo(id)).ToList();
+                : new RetShopInfo(id);
+        }).ToList();
         return PlayerDataCodec.Encode(new RetShopsInfo(ShopInfo: shopInfo));
     }
 
