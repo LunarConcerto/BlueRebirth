@@ -1284,6 +1284,35 @@ internal static class TalentConfigLoader
     public static IReadOnlyList<ConfigTalent> RootTalents => _rootTalents;
 }
 
+/// <summary>加载角色等级上限突破阶段（config_ship_advance），key = 阶段 id（1..N）。</summary>
+internal static class ShipAdvanceLoader
+{
+    private static readonly Dictionary<int, ConfigShipAdvance> _stages = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _stages.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigShipAdvance>(configDir, "config_ship_advance.db"))
+                _stages[id] = cfg;
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static ConfigShipAdvance? Get(int stageId)
+        => _stages.GetValueOrDefault(stageId);
+
+    /// <summary>最大阶段 id（绝对等级上限所在阶段）。</summary>
+    public static int MaxStageId => _stages.Count > 0 ? _stages.Keys.Max() : 0;
+
+    /// <summary>基础等级上限（config_ship_advance[1].initial_level）。</summary>
+    public static int BaseMaxLevel => Get(1) is { } s ? checked((int)s.InitialLevel) : 0;
+}
+
 internal static class ShipHandbookLoader
 {
     private static readonly Dictionary<int, ConfigShipHandbook> _handbooks = new();

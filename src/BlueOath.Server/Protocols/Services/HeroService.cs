@@ -814,10 +814,77 @@ internal sealed class HeroService(GameServices services)
         return account.Building?.Buildings.Any(building => building.HeroIds.Contains(heroId)) == true;
     }
 
-    /// <summary>处理 hero.StudySkill：技能升级。SkillId 对应 PSkillId，Level 递增。</summary>
-    internal async Task<byte[]> BuildStudySkillRetAsync(TRequest request, string profileId, CancellationToken ct)
+    /// <summary>
+    /// 处理 hero.HeroAdvMaxLv（等级上限突破/further）：角色等级到达当前阶段上限后，
+    /// 消耗 config_ship_main.unlock_item[AdvLv] 道具，把 AdvLv 推进到下一阶段，提升等级上限。
+    /// </summary>
+    internal async Task<byte[]> BuildHeroAdvMaxLvRetAsync(TRequest request, string profileId, CancellationToken ct)
     {
         if (request.Args is null) return [];
+        uint heroId = ProtocolDecoder.DecodeHeroIdArg(request.Args);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+
+        HeroDock dock = account.Dock;
+        List<Hero> heroList = dock.Heroes.ToList();
+        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return [];
+        Hero hero = heroList[heroIdx];
+
+        int maxStage = ShipAdvanceLoader.MaxStageId;
+        int baseMax = ShipAdvanceLoader.BaseMaxLevel;
+        ConfigShipAdvance? lastStage = maxStage > 0 ? ShipAdvanceLoader.Get(maxStage) : null;
+        if (maxStage == 0 || baseMax == 0 || lastStage is null) return [];
+        int absMax = checked((int)lastStage.MaxLevel);
+
+        // 校验角色状态：等级 < 基础上限 → 正常升级（LEVELUP）；>= 绝对上限 → 已满（FULL）。
+        if (hero.Level < baseMax || hero.Level >= absMax) return [];
+
+        int cid = hero.AdvLv;
+        if (cid >= maxStage) return [];
+        // 当前阶段上限 = config_ship_advance[cid].max_level（cid=0 时为基础上限）。
+        int curCap = cid > 0
+            ? checked((int)(ShipAdvanceLoader.Get(cid)?.MaxLevel ?? baseMax))
+            : baseMax;
+        if (hero.Level < curCap) return []; // 未到达当前上限，无需突破。
+
+        // 下一阶段成本 = config_ship_main[TemplateId].unlock_item[cid]（0-indexed）。
+        ConfigShipMain? shipMain = ShipMainLoader.Get(hero.TemplateId);
+        if (shipMain?.UnlockItem is not { Count: > 0 } unlockItems || cid >= unlockItems.Count)
+            return [];
+        List<List<long>>? costList = unlockItems[cid];
+        if (costList is not { Count: > 0 }) return [];
+
+        foreach (List<long> cost in costList)
+        {
+            if (cost.Count < 3 || cost[0] <= 0 || cost[2] <= 0) return [];
+            int type = checked((int)cost[0]);
+            int configId = checked((int)cost[1]);
+            int num = checked((int)cost[2]);
+            if (type == GameServices.GoodsTypeCurrency)
+            {
+                if (configId != 1 || account.Character.Gold < num) return [];
+                account = GameServices.AddCurrency(account, configId, -num);
+            }
+            else
+            {
+                int owned = account.Bag?.Items.FirstOrDefault(i => i.TemplateId == configId)?.Num ?? 0;
+                if (owned < num) return [];
+                account = GameServices.AddBagItem(account, configId, -num);
+            }
+        }
+
+        int targetStage = cid + 1;
+        heroList[heroIdx] = hero with { AdvLv = targetStage };
+        account = account with { Dock = dock with { Heroes = heroList } };
+        await services.SaveAccountAsync(account, ct);
+        return [];
+    }
+
+    /// <summary>处理 hero.StudySkill：技能升级。SkillId 对应 PSkillId，Level 递增。</summary>
+    internal async Task<byte[]> BuildStudySkillRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {        if (request.Args is null) return [];
         var (heroId, skillId) = ProtocolDecoder.DecodeStudySkillArg(request.Args);
 
         using var _ = await services.LockAccountAsync(profileId, ct);

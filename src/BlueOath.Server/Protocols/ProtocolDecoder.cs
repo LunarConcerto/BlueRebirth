@@ -388,6 +388,17 @@ internal static class ProtocolDecoder
         return talentId;
     }
 
+    /// <summary>解码仅含 HeroId(1, uint32) 的请求（如 hero.HeroAdvMaxLv / hero.HeroCombine*）。</summary>
+    internal static uint DecodeHeroIdArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        uint heroId = 0;
+        while (reader.TryReadField(out int field, out int wire))
+            if (field == 1 && wire == 0) heroId = checked((uint)reader.ReadVarint());
+            else reader.Skip(wire);
+        return heroId;
+    }
+
     /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>
     internal static (uint HeroId, int SkillId) DecodeStudySkillArg(byte[] args)
     {

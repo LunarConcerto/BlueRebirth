@@ -330,9 +330,29 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
                     ],
                 };
                 break;
+            case "hero.HeroAdvMaxLv":
+                var maxLvRet = await hero.BuildHeroAdvMaxLvRetAsync(request, ctx.ProfileId, ctx.Ct);
+                var maxLvAccount = await ctx.GetAccountAsync();
+                uint maxLvNow = (uint)ctx.Now;
+                // 突破等级上限会消耗道具/货币，需推送船坞（AdvLv）+ 背包 + 用户信息。
+                var maxLvHero = maxLvAccount.Dock.Heroes
+                    .Select(GameServices.ToHeroGrid).ToList();
+                var maxLvPushes = new List<byte[]>
+                {
+                    TMessageCodec.EncodeResponse(new TResponse(
+                        Method: "hero.UpdateHeroBagData",
+                        Ret: PlayerDataCodec.Encode(new HeroBag(maxLvHero, maxLvAccount.Dock.BagSize)),
+                        Time: maxLvNow)),
+                    services.BuildBagPush(maxLvAccount, maxLvNow),
+                };
+                maxLvPushes.Add(TMessageCodec.EncodeResponse(new TResponse(
+                    Method: "user.UpdateUserInfo",
+                    Ret: GameServices.EncodeGetUserInfo(maxLvAccount),
+                    Time: maxLvNow)));
+                result = new ModuleResult { Ret = maxLvRet, PrePushes = maxLvPushes };
+                break;
             case "hero.AutoEquip":
             case "hero.AutoUnEquip":
-            case "hero.HeroAdvMaxLv":
             case "hero.HeroEquipEffect":
             case "hero.EquipBinding":
             case "hero.EquipUnBinding":
