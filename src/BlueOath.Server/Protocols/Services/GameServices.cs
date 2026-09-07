@@ -319,6 +319,14 @@ internal sealed class GameServices
                 Ret: ProtocolEncoder.EncodeDailyCopyInfo(account.DailyCopy),
                 Time: now)),
 
+            // 货物副本（GoodsCopy, CopyType=10）。GoodCopyPage 出击时按
+            // Data.copyData:GetGoodsCopyData()[copyId] 取 tabSerData；缺失时为 nil，
+            // 打开 LevelDetailsPage 会在 commoncopyleveldetailpage.Init 崩溃。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "copy.GetCopy",
+                Ret: ProtocolEncoder.EncodeGoodsCopyInfo(),
+                Time: now)),
+
             DailyCopyService.BuildUpdatePush(account.DailyCopy, now),
 
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目，

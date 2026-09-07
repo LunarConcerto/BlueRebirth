@@ -35,6 +35,7 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                     {
                         2 => ProtocolEncoder.EncodeSeaCopyInfo(account.SeaProgress),
                         9 => ProtocolEncoder.EncodeDailyCopyInfo(account.DailyCopy),
+                        10 => ProtocolEncoder.EncodeGoodsCopyInfo(),
                         33 => ProtocolEncoder.EncodeMubarCopyInfo(),
                         _ => ProtocolEncoder.EncodePlotCopyInfo(int.MaxValue, account.CopyProgress),
                     },

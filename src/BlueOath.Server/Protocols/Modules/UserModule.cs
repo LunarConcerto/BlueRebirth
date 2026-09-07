@@ -42,6 +42,10 @@ internal sealed class UserModule(UserService user, GameServices services) : IGam
                             Method: "copy.GetCopy",
                             Ret: ProtocolEncoder.EncodeDailyCopyInfo(loginAccount.DailyCopy),
                             Time: now)),
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "copy.GetCopy",
+                            Ret: ProtocolEncoder.EncodeGoodsCopyInfo(),
+                            Time: now)),
                         DailyCopyService.BuildUpdatePush(loginAccount.DailyCopy, now),
                     ],
                 };

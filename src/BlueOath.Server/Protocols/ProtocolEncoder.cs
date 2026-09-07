@@ -957,6 +957,37 @@ internal static class ProtocolEncoder
         return ms.ToArray();
     }
 
+    /// <summary>编码货物副本（GoodsCopy, CopyType=10）的关卡对象。
+    /// 客户端 copydata.SetData 按 CopyType==GoodsCopy 填充 GoodsCopy 表；
+    /// 缺失时 GoodCopyPage 出击打开 LevelDetailsPage 会拿到 nil 的 tabSerData 崩溃。</summary>
+    public static byte[] EncodeGoodsCopyInfo()
+    {
+        List<int> levels = ChapterCopyLoader.GetGoodsLevels();
+        ProtocolPackage ms = new();
+        int maxCopyId = 0;
+        foreach (int cid in levels)
+        {
+            ProtocolPackage baseInfo = new();
+            baseInfo.Write(0x08, unchecked((ulong)cid)); // BaseId(1)
+            baseInfo.Write(0x10, 0UL); // Rid(2)
+            baseInfo.Write(0x18, 0UL); // StarLevel(3)
+            baseInfo.Write(0x20, 0UL); // IsRunningFight(4)
+            baseInfo.Write(0x28, 0UL); // LBPoint(5)
+            baseInfo.Write(0x30, 1UL); // FirstPassTime(6)=1，使 tabSerData 非空且可进入
+            // SfLv/SfPoint/SfLvChoose 与每日副本一致，避免 _SafeArea 崩溃。
+            baseInfo.Write(0x40, 1UL); // SfLv(8)=1
+            baseInfo.WriteFixed32(0x4D, 0U); // SfPoint(9)=0.0f
+            baseInfo.Write(0x60, 1UL); // SfLvChoose(12)=1
+            ms.Write(0x0A, baseInfo.ToArray());
+            if (cid > maxCopyId) maxCopyId = cid;
+        }
+
+        if (maxCopyId == 0 && levels.Count > 0) maxCopyId = levels[0];
+        ms.Write(0x10, unchecked((ulong)maxCopyId)); // MaxCopyId(2)
+        ms.Write(0x18, 10UL); // CopyType(3)=GoodsCopy
+        return ms.ToArray();
+    }
+
     /// <summary>
     /// 回环 copy.AttackBase 请求（TAttackBaseArg: AttackType(1)/CopyId(2)/HeroIds(3)/EnemyId(4)）
     /// 并附带一个伤害值（字段5，按最大生命值比例的扣血，HpCoefficient 比例尺=1e10 下 10%=1e9）。

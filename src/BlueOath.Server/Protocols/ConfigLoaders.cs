@@ -875,6 +875,7 @@ internal static class ChapterCopyLoader
     private static readonly Dictionary<int, List<int>> _mubarChapterCopies = new();
     private static readonly Dictionary<int, List<int>> _dailyChapterCopies = new();
     private static readonly Dictionary<int, List<int>> _dailyTreatyCopies = new();
+    private static readonly Dictionary<int, List<int>> _goodsChapterCopies = new();
     private static readonly Dictionary<int, int> _dailyChapterByCopy = new();
     private static readonly Dictionary<int, int> _dailyGroupByChapter = new();
     private static readonly Dictionary<int, int> _dailyRelationByChapter = new();
@@ -965,6 +966,15 @@ internal static class ChapterCopyLoader
                         if (treatyIds.Count > 0) _dailyTreatyCopies[id] = treatyIds;
                     }
                 }
+                else if (ct == 10)
+                {
+                    // 货物副本（共斗/无自大战 chapter_id 由 config_parameter[174] 指定）。
+                    // 客户端 copydata.SetData 按 CopyType==GoodsCopy 填充 GoodsCopy 表，
+                    // 缺数据时 GoodCopyPage 出击打开 LevelDetailsPage 会拿到 nil 的 tabSerData。
+                    _goodsChapterCopies[id] = copies;
+                    foreach (var cid in copies)
+                        _copyTypeMap[cid] = 10;
+                }
             });
             _allChapterMemories.Sort(static (left, right) => left.ChapterId.CompareTo(right.ChapterId));
             Console.Error.WriteLine(
@@ -1053,6 +1063,14 @@ internal static class ChapterCopyLoader
 
     public static bool IsDailyTreatyCopy(int copyId)
         => _dailyTreatyCopies.Values.Any(copies => copies.Contains(copyId));
+
+    public static List<int> GetGoodsLevels()
+    {
+        var result = new List<int>();
+        foreach (var chapterId in _goodsChapterCopies.Keys.OrderBy(x => x))
+            result.AddRange(_goodsChapterCopies[chapterId]);
+        return result;
+    }
 
     public static int GetCopyType(int copyId)
         => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;
