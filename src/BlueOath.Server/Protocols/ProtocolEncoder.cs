@@ -169,6 +169,15 @@ internal static class ProtocolEncoder
         return output.ToArray();
     }
 
+    /// <summary>编码 TDIRECTBUYITEMRET: Reward(1, repeated TCommonReward)。</summary>
+    internal static byte[] EncodeDirectBuyItemRet(IReadOnlyList<CommonReward> rewards)
+    {
+        ProtocolPackage output = new();
+        foreach (CommonReward r in rewards)
+            output.Write(0x0A, PlayerDataCodec.Encode(r));
+        return output.ToArray();
+    }
+
     /// <summary>编码 TVowHeroRet: Type(1)/ConfigId(2)/Num(3)/Id(4)，均为 int32。</summary>
     internal static byte[] EncodeVowHeroRet(int type, int configId, int num, int id)
     {

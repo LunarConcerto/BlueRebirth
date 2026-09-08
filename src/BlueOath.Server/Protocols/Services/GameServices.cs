@@ -79,6 +79,7 @@ internal sealed class GameServices
         MubConversionLoader.Load(configDir);
         TalentConfigLoader.Load(configDir);
         ShipAdvanceLoader.Load(configDir);
+        RechargeConfigLoader.Load(configDir);
         TaskConfigCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
         MissionChainLoader.Load(configDir);

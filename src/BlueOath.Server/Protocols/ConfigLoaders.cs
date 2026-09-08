@@ -1313,6 +1313,30 @@ internal static class ShipAdvanceLoader
     public static int BaseMaxLevel => Get(1) is { } s ? checked((int)s.InitialLevel) : 0;
 }
 
+/// <summary>加载充值礼包配置（config_recharge），key = 礼包 id。</summary>
+internal static class RechargeConfigLoader
+{
+    private static readonly Dictionary<int, ConfigRecharge> _items = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _items.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigRecharge>(configDir, "config_recharge.db"))
+                _items[id] = cfg;
+            Console.Error.WriteLine($"[recharge] loaded {_items.Count} recharge items");
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"[recharge] load failed: {ex.Message}"); }
+        _loaded = true;
+    }
+
+    public static ConfigRecharge? Get(int rechargeId)
+        => _items.GetValueOrDefault(rechargeId);
+}
+
 internal static class ShipHandbookLoader
 {
     private static readonly Dictionary<int, ConfigShipHandbook> _handbooks = new();
