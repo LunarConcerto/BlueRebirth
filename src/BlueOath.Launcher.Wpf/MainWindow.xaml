@@ -24,6 +24,9 @@
         <DataTemplate DataType="{x:Type vm:AccountsViewModel}">
             <views:AccountsPage />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ModViewModel}">
+            <views:ModPage />
+        </DataTemplate>
     </Window.Resources>
 
     <Grid Background="{StaticResource BgDarkBrush}">
@@ -70,12 +73,19 @@
                             Command="{Binding NavigateToPageCommand}"
                             CommandParameter="2"
                             Margin="0,0,4,0" />
-                    <Button Content="设置"
+                    <Button Content="Mod"
                             Style="{StaticResource SecondaryButtonStyle}"
                             Height="30"
                             FontSize="12"
                             Command="{Binding NavigateToPageCommand}"
                             CommandParameter="3"
+                            Margin="0,0,4,0" />
+                    <Button Content="设置"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            Height="30"
+                            FontSize="12"
+                            Command="{Binding NavigateToPageCommand}"
+                            CommandParameter="4"
                             Margin="0,0,4,0" />
                 </StackPanel>
             </Grid>

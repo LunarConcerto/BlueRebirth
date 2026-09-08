@@ -33,11 +33,13 @@ public partial class MainWindow : Window
 
         var guardianViewModel = new GuardianViewModel(processManager, _mainViewModel);
         var accountsViewModel = new AccountsViewModel(accountService);
+        var modViewModel = new ModViewModel(new ModService(rootDir), _mainViewModel);
         var settingsViewModel = new SettingsViewModel(settingsService, _mainViewModel);
 
         _mainViewModel.AddPage(launchViewModel);
         _mainViewModel.AddPage(guardianViewModel);
         _mainViewModel.AddPage(accountsViewModel);
+        _mainViewModel.AddPage(modViewModel);
         _mainViewModel.AddPage(settingsViewModel);
         _mainViewModel.SelectedPageIndex = 0;
 
