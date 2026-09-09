@@ -1076,6 +1076,41 @@ internal static class ChapterCopyLoader
         => _copyTypeMap.TryGetValue(copyId, out var ct) ? ct : 0;
 }
 
+/// <summary>アンブラ前哨等级配置（config_outpost_level）：按 (outpost_id, level) 查产出奖励。</summary>
+internal static class OutpostLevelLoader
+{
+    private static readonly Dictionary<(int OutpostId, int Level), ConfigOutpostLevel> _levels = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            foreach (var (_, cfg) in ConfigDbLoader.LoadAll<ConfigOutpostLevel>(configDir, "config_outpost_level.db"))
+                _levels[(checked((int)cfg.OutpostId), checked((int)cfg.Level))] = cfg;
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    /// <summary>返回某前哨指定等级的产出奖励 [[Type, ConfigId, Num], ...]。</summary>
+    public static IReadOnlyList<OutpostItem> GetReward(int outpostId, int level)
+    {
+        if (_levels.TryGetValue((outpostId, level), out var cfg) && cfg.Reward is { } reward)
+        {
+            var result = new List<OutpostItem>();
+            foreach (var entry in reward)
+            {
+                if (entry.Count >= 3)
+                    result.Add(new OutpostItem(checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
+            }
+            return result;
+        }
+        return [];
+    }
+}
+
 /// <summary>每日副本的组掉落与首通奖励配置。</summary>
 internal static class DailyCopyRewardCatalog
 {

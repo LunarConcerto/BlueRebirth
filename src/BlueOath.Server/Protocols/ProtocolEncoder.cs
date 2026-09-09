@@ -997,6 +997,52 @@ internal static class ProtocolEncoder
         return ms.ToArray();
     }
 
+    /// <summary>编码アンブラ前哨（outpost.UpdateOutPostInfo / TOutPostInfo）。
+    /// config_outpost_info 有 id 1..10 共 10 个前哨，对应 config_chapter.outpost_id。
+    /// 缺失时 MubarOutpostPage.SetChapterInfo 里 GetOutPostData() 返回 nil → #data 崩溃。</summary>
+    public static byte[] EncodeOutPostInfo(PlayerOutpost? state = null)
+    {
+        state ??= PlayerAccountFactory.DefaultOutpost();
+        ProtocolPackage ms = new();
+        foreach (var b in state.Buildings.OrderBy(x => x.Id))
+        {
+            ProtocolPackage building = new();
+            building.Write(0x08, unchecked((ulong)b.Id)); // Id(1)
+            building.Write(0x10, unchecked((ulong)b.Level)); // Level(2)
+            if (b.HeroIds is not null)
+                foreach (uint heroId in b.HeroIds)
+                    building.Write(0x18, heroId); // HeroList(3)
+            building.Write(0x20, unchecked((ulong)b.State)); // State(4)
+            building.Write(0x28, unchecked((ulong)b.UseCoin)); // UseCoin(5)
+            if (b.ItemInfo is not null)
+                foreach (OutpostItem item in b.ItemInfo)
+                    building.Write(0x32, EncodeCommonRewardBody(item)); // ItemInfo(6)
+            ms.Write(0x0A, building.ToArray()); // TOutPostInfo.BuildingInfos(1)
+        }
+        ms.Write(0x10, unchecked((ulong)state.SpeedUpTime)); // SpeedUpTime(2)
+        return ms.ToArray();
+    }
+
+    /// <summary>编码 TCommonReward 消息体（字段 1=Type, 2=ConfigId, 3=Num, 4=Id）。</summary>
+    private static byte[] EncodeCommonRewardBody(OutpostItem item)
+    {
+        ProtocolPackage body = new();
+        if (item.Type != 0) body.Write(0x08, unchecked((ulong)item.Type));
+        if (item.ConfigId != 0) body.Write(0x10, unchecked((ulong)item.ConfigId));
+        if (item.Num != 0) body.Write(0x18, unchecked((ulong)item.Num));
+        return body.ToArray();
+    }
+
+    /// <summary>编码 outpost 领取结果（TOPReceiveRet，字段 1=ItemInfo repeated TCommonReward）。</summary>
+    public static byte[] EncodeOutPostReceiveRet(IReadOnlyList<OutpostItem>? items = null)
+    {
+        ProtocolPackage ms = new();
+        if (items is not null)
+            foreach (var item in items)
+                ms.Write(0x0A, EncodeCommonRewardBody(item));
+        return ms.ToArray();
+    }
+
     /// <summary>
     /// 回环 copy.AttackBase 请求（TAttackBaseArg: AttackType(1)/CopyId(2)/HeroIds(3)/EnemyId(4)）
     /// 并附带一个伤害值（字段5，按最大生命值比例的扣血，HpCoefficient 比例尺=1e10 下 10%=1e9）。

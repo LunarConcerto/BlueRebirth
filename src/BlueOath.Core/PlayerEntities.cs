@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json.Serialization;
 using BlueOath.Protocol;
 
@@ -216,6 +217,23 @@ public sealed record PlayerBuilding(
     int FoodMax = 100,
     int ElectricMax = 100);
 
+/// <summary>アンブラ前哨中单个建筑（TBaseBuildingInfo）。Id 对应 config_outpost_info.id。</summary>
+public sealed record PlayerOutpostBuilding(
+    int Id,
+    int Level = 1,
+    IReadOnlyList<uint>? HeroIds = null,
+    int State = 0,
+    int UseCoin = 0,
+    IReadOnlyList<OutpostItem>? ItemInfo = null);
+
+/// <summary>前哨产出道具（TCommonReward）。</summary>
+public sealed record OutpostItem(int Type, int ConfigId, int Num);
+
+/// <summary>アンブラ前哨整体状态（TOutPostInfo）。</summary>
+public sealed record PlayerOutpost(
+    IReadOnlyList<PlayerOutpostBuilding> Buildings,
+    int SpeedUpTime = 0);
+
 /// <summary>单个任务的持久化状态。TaskType 对应客户端 constants.lua 的 TaskType。</summary>
 public sealed record PlayerTaskRecord(
     int TaskType,
@@ -259,6 +277,7 @@ public sealed record PlayerAccount(
     PlayerBuildState? BuildState = null,
     PlayerDailyCopyProgress? DailyCopy = null,
     PlayerTaskProgress? Tasks = null,
+    PlayerOutpost? Outpost = null,
     /// <summary>
     /// guide.Setting 通道保存的全局用户设置（TGuideSetting 的 Key/Value 均为字符串）。
     /// 强化页的三个开关 LOGIC_HERO_INTENSIFY_TypeMatchCancel / _RHeroSelect / _MORESELECT
@@ -342,7 +361,7 @@ public static class PlayerAccountFactory
         ], EquipBagSize: 2000);
         var fleet = DefaultFleet();
         return new PlayerAccount(profileId, character, dock, bag, fashion, equip, fleet,
-            Building: DefaultBuilding(nowSeconds), ProfileDisplayName: characterName);
+            Building: DefaultBuilding(nowSeconds), Outpost: DefaultOutpost(), ProfileDisplayName: characterName);
     }
 
     /// <summary>
@@ -372,6 +391,13 @@ public static class PlayerAccountFactory
         }
         return new PlayerFleet(tactics);
     }
+
+    /// <summary>创建默认アンブラ前哨（10 个前哨，config_outpost_info id 1..10，初始等级 1）。</summary>
+    public static PlayerOutpost DefaultOutpost() => new(
+        Buildings:
+        [
+            .. Enumerable.Range(1, 10).Select(id => new PlayerOutpostBuilding(Id: id, Level: 1, HeroIds: [])),
+        ]);
 }
 
 /// <summary>单个 GM 商品配置（数据驱动，来自 gm-goods.json）。</summary>

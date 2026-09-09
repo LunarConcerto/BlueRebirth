@@ -74,6 +74,7 @@ internal sealed class GameServices
         _copyRandomFactors = RandomFactorLoader.Load(configDir);
         ChapterCopyLoader.Load(configDir);
         DailyCopyRewardCatalog.Load(configDir);
+        OutpostLevelLoader.Load(configDir);
         CopyDisplayLoader.Load(configDir);
         StrategyConfigLoader.Load(configDir);
         MubConversionLoader.Load(configDir);
@@ -330,6 +331,13 @@ internal sealed class GameServices
                 Ret: ProtocolEncoder.EncodeGoodsCopyInfo(),
                 Time: now)),
 
+            // アンブラ前哨（outpost.UpdateOutPostInfo）。缺失时 MubarOutpostPage
+            // SetChapterInfo 里 GetOutPostData() 返回 nil → #data 崩溃。
+            TMessageCodec.EncodeResponse(new TResponse(
+                Method: "outpost.UpdateOutPostInfo",
+                Ret: ProtocolEncoder.EncodeOutPostInfo(account.Outpost),
+                Time: now)),
+
             DailyCopyService.BuildUpdatePush(account.DailyCopy, now),
 
             // 图鉴数据推送。IllustrateInfoRet.IllustrateList 是玩家已解锁的图鉴条目，
@@ -502,6 +510,9 @@ internal sealed class GameServices
             PlayerAccount profileNameReady = SynchronizeProfileDisplayName(account, GetProfileDisplayName(profileId));
             bool profileNameMigrated = !ReferenceEquals(profileNameReady, account);
             account = profileNameReady;
+            PlayerAccount outpostReady = OutpostService.EnsureOutpost(account);
+            bool outpostMigrated = !ReferenceEquals(outpostReady, account);
+            account = outpostReady;
             PlayerAccount bagReady = CleanupPollutedBagShips(account);
             bool bagMigrated = !ReferenceEquals(bagReady, account);
             account = bagReady;
@@ -509,7 +520,7 @@ internal sealed class GameServices
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
             if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
-                profileNameMigrated || bagMigrated)
+                profileNameMigrated || outpostMigrated || bagMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
