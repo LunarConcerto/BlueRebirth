@@ -882,7 +882,153 @@ internal sealed class HeroService(GameServices services)
         return [];
     }
 
-    /// <summary>处理 hero.StudySkill：技能升级。SkillId 对应 PSkillId，Level 递增。</summary>
+    /// <summary>
+    /// 处理 hero.HeroCombineUpLv：舰娘「共鸣」等级升级。
+    /// 未开启（ComLv==0）时首次升级消耗 level-1 阶段的 break_item 开启共鸣并把 ComLv 置为 1；
+    /// 已开启时消耗当前阶段（confId = sf_id*100 + (ComLv-1)/10）的 levelup_item，ComLv 递增 1。
+    /// 返回空；客户端以 UpdateShipCombinationInfo 事件刷新共鸣页。
+    /// </summary>
+    internal async Task<byte[]> BuildHeroCombineUpLvRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        uint heroId = ProtocolDecoder.DecodeHeroIdArg(request.Args);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+
+        HeroDock dock = account.Dock;
+        List<Hero> heroList = dock.Heroes.ToList();
+        int heroIdx = heroList.FindIndex(h => h.HeroId == heroId);
+        if (heroIdx < 0) return [];
+        Hero hero = heroList[heroIdx];
+
+        int shipInfoId = (hero.TemplateId - 1) / 10;
+        if (!services.ShipInfos.TryGetValue(shipInfoId, out ConfigShipInfo? shipInfo) || shipInfo.SfId <= 0)
+            return [];
+        int sfId = checked((int)shipInfo.SfId);
+
+        var combo = hero.CombinationInfo ?? new BlueOath.Core.PlayerCombinationInfo();
+        int curLv = combo.ComLv;
+        if (curLv >= CombinationShipLoader.MaxCombineLv) return [];
+
+        // 未开启：用 level-1 阶段的 break_item 开启共鸣；已开启：用当前阶段 levelup_item 升级。
+        List<List<long>>? costItems;
+        if (curLv == 0)
+            costItems = CombinationShipLoader.Get(CombinationShipLoader.ConfIdFor(sfId, 1))?.BreakItem;
+        else
+            costItems = CombinationShipLoader.Get(CombinationShipLoader.ConfIdFor(sfId, curLv))?.LevelupItem;
+        if (costItems is not { Count: > 0 }) return [];
+
+        foreach (List<long> cost in costItems)
+        {
+            if (cost.Count < 3 || cost[0] <= 0 || cost[2] <= 0) return [];
+            int type = checked((int)cost[0]);
+            int configId = checked((int)cost[1]);
+            int num = checked((int)cost[2]);
+            if (type == GameServices.GoodsTypeCurrency)
+            {
+                if (configId != 1 || account.Character.Gold < num) return [];
+                account = GameServices.AddCurrency(account, configId, -num);
+            }
+            else
+            {
+                int owned = account.Bag?.Items.FirstOrDefault(i => i.TemplateId == configId)?.Num ?? 0;
+                if (owned < num) return [];
+                account = GameServices.AddBagItem(account, configId, -num);
+            }
+        }
+
+        int newLv = curLv == 0 ? 1 : curLv + 1;
+        heroList[heroIdx] = hero with
+        {
+            CombinationInfo = new BlueOath.Core.PlayerCombinationInfo(ComLv: newLv, ComGrade: combo.ComGrade, Combine: combo.Combine, BeCombined: combo.BeCombined)
+        };
+        account = account with { Dock = dock with { Heroes = heroList } };
+        await services.SaveAccountAsync(account, ct);
+        return [];
+    }
+
+    /// <summary>
+    /// 处理 hero.HeroCombine：舰娘「共鸣」配对/解除。
+    /// 配对：MainHero 与 DeputyHero 建立共鸣 —— MainHero.Combine = DeputyHero，
+    /// DeputyHero.BeCombined = MainHero（副位被主位共鸣，副位需已开启共鸣 ComLv&gt;0）。
+    /// 解除：MainHero 传 DeputyHero=0 —— 清空 MainHero.Combine 与旧副位的 BeCombined。
+    /// 返回空；客户端以 UpdateShipCombinaRelation 事件刷新共鸣状态页。
+    /// </summary>
+    internal async Task<byte[]> BuildHeroCombineRetAsync(TRequest request, string profileId, CancellationToken ct)
+    {
+        if (request.Args is null) return [];
+        (uint mainHeroId, uint deputyHeroId) = ProtocolDecoder.DecodeCombineArg(request.Args);
+
+        using var _ = await services.LockAccountAsync(profileId, ct);
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+
+        List<Hero> heroList = account.Dock.Heroes.ToList();
+        int mainIdx = heroList.FindIndex(h => h.HeroId == mainHeroId);
+        if (mainIdx < 0 || mainHeroId == 0) return [];
+        Hero mainHero = heroList[mainIdx];
+
+        BlueOath.Core.PlayerCombinationInfo mainCombo = mainHero.CombinationInfo ?? new BlueOath.Core.PlayerCombinationInfo();
+
+        // 解除共鸣：MainHero 需已建立共鸣。
+        if (deputyHeroId == 0)
+        {
+            if (mainCombo.Combine == 0) return [];
+            uint oldDeputyId = mainCombo.Combine;
+            Hero? oldDeputy = heroList.FirstOrDefault(h => h.HeroId == oldDeputyId);
+            if (oldDeputy is { CombinationInfo: { } od } && od.BeCombined == mainHeroId)
+            {
+                int odIdx = heroList.FindIndex(h => h.HeroId == oldDeputyId);
+                heroList[odIdx] = oldDeputy with
+                {
+                    CombinationInfo = new BlueOath.Core.PlayerCombinationInfo(od.ComLv, od.ComGrade, od.Combine, BeCombined: 0)
+                };
+            }
+            heroList[mainIdx] = mainHero with
+            {
+                CombinationInfo = new BlueOath.Core.PlayerCombinationInfo(mainCombo.ComLv, mainCombo.ComGrade, Combine: 0, mainCombo.BeCombined)
+            };
+            account = account with { Dock = account.Dock with { Heroes = heroList } };
+            await services.SaveAccountAsync(account, ct);
+            return [];
+        }
+
+        // 配对共鸣：副位必须存在且已开启共鸣（ComLv &gt; 0）。
+        int deputyIdx = heroList.FindIndex(h => h.HeroId == deputyHeroId);
+        if (deputyIdx < 0) return [];
+        Hero deputyHero = heroList[deputyIdx];
+        BlueOath.Core.PlayerCombinationInfo deputyCombo = deputyHero.CombinationInfo ?? new BlueOath.Core.PlayerCombinationInfo();
+        if (deputyCombo.ComLv <= 0) return [];
+
+        // 副位已被其它主位占用时拒绝；主位已有共鸣则先解除旧的。
+        if (deputyCombo.BeCombined != 0 && deputyCombo.BeCombined != mainHeroId) return [];
+
+        if (mainCombo.Combine != 0 && mainCombo.Combine != deputyHeroId)
+        {
+            Hero? oldDeputy = heroList.FirstOrDefault(h => h.HeroId == mainCombo.Combine);
+            if (oldDeputy is { CombinationInfo: { } od2 } && od2.BeCombined == mainHeroId)
+            {
+                int odIdx = heroList.FindIndex(h => h.HeroId == mainCombo.Combine);
+                heroList[odIdx] = oldDeputy with
+                {
+                    CombinationInfo = new BlueOath.Core.PlayerCombinationInfo(od2.ComLv, od2.ComGrade, od2.Combine, BeCombined: 0)
+                };
+            }
+        }
+
+        heroList[deputyIdx] = deputyHero with
+        {
+            CombinationInfo = new BlueOath.Core.PlayerCombinationInfo(deputyCombo.ComLv, deputyCombo.ComGrade, deputyCombo.Combine, BeCombined: mainHeroId)
+        };
+        heroList[mainIdx] = mainHero with
+        {
+            CombinationInfo = new BlueOath.Core.PlayerCombinationInfo(mainCombo.ComLv, mainCombo.ComGrade, Combine: deputyHeroId, mainCombo.BeCombined)
+        };
+        account = account with { Dock = account.Dock with { Heroes = heroList } };
+        await services.SaveAccountAsync(account, ct);
+        return [];
+    }
+
     internal async Task<byte[]> BuildStudySkillRetAsync(TRequest request, string profileId, CancellationToken ct)
     {        if (request.Args is null) return [];
         var (heroId, skillId) = ProtocolDecoder.DecodeStudySkillArg(request.Args);

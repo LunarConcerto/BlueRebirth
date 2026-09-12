@@ -1348,6 +1348,38 @@ internal static class ShipAdvanceLoader
     public static int BaseMaxLevel => Get(1) is { } s ? checked((int)s.InitialLevel) : 0;
 }
 
+/// <summary>加载共鸣组合配置（config_combination_ship）。配置 id = sf_id*100 + (combineLv-1)/10，
+/// 每 10 级一个阶段，阶段内逐级升级用 levelup_item，阶段更替用 break_item。</summary>
+internal static class CombinationShipLoader
+{
+    private static readonly Dictionary<int, ConfigCombinationShip> _configs = new();
+    private static bool _loaded;
+
+    /// <summary>共鸣最大等级（客户端 MAXCOMBINELV）。</summary>
+    public const int MaxCombineLv = 100;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _configs.Clear();
+            foreach (var (id, cfg) in ConfigDbLoader.LoadAll<ConfigCombinationShip>(configDir, "config_combination_ship.db"))
+                _configs[id] = cfg;
+            Console.Error.WriteLine($"[combination_ship] loaded {_configs.Count} combination stages");
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"[combination_ship] load failed: {ex.Message}"); }
+        _loaded = true;
+    }
+
+    public static ConfigCombinationShip? Get(int confId)
+        => _configs.GetValueOrDefault(confId);
+
+    /// <summary>某舰娘（sf_id）当前共鸣等级对应的阶段配置 id。</summary>
+    public static int ConfIdFor(int sfId, int combineLv)
+        => sfId * 100 + Math.Max(0, combineLv - 1) / 10;
+}
+
 /// <summary>加载充值礼包配置（config_recharge），key = 礼包 id。</summary>
 internal static class RechargeConfigLoader
 {

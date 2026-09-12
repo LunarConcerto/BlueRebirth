@@ -80,6 +80,7 @@ internal sealed class GameServices
         MubConversionLoader.Load(configDir);
         TalentConfigLoader.Load(configDir);
         ShipAdvanceLoader.Load(configDir);
+        CombinationShipLoader.Load(configDir);
         RechargeConfigLoader.Load(configDir);
         TaskConfigCatalog.Load(configDir);
         CopyBattleLoader.Load(configDir);
@@ -721,7 +722,10 @@ internal sealed class GameServices
         new(hero.HeroId, hero.TemplateId, hero.Level, hero.Fashioning, hero.Exp, hero.CreateTime,
             hero.UpdateTime, hero.Affection, hero.MarryTime, hero.CurHp, hero.Mood, hero.MarryType,
             hero.EquipSlots, hero.Name, hero.ChangeNameTime, hero.Lock, hero.Advance, hero.AdvLv, hero.PSkills,
-            hero.RemouldEffects, hero.RemouldLevel, hero.Intensify);
+            hero.RemouldEffects, hero.RemouldLevel, hero.Intensify,
+            hero.CombinationInfo is { } ci
+                ? new BlueOath.Protocol.PlayerCombinationInfo(ci.ComLv, ci.ComGrade, ci.Combine, ci.BeCombined)
+                : null);
 
     /// <summary>
     /// 由舰娘 TemplateId（config_ship_main 的 key）推导图鉴 IllustrateId

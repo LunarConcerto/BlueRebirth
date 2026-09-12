@@ -48,6 +48,13 @@ public sealed record PlayerCharacter(
     string Message = "",
     int PlotChapterId = 1);
 
+/// <summary>舰娘「共鸣」组合进度。对应 hero_pb.TCombinationInfo（ComLv/ComGrade/Combine/BeCombined）。</summary>
+public sealed record PlayerCombinationInfo(
+    int ComLv = 0,
+    int ComGrade = 0,
+    uint Combine = 0,
+    uint BeCombined = 0);
+
 /// <summary>
 /// 船坞中的单个舰娘实例。对应 <c>hero.UpdateHeroBagData</c> 的 THeroGrid 字段。
 /// 每个 <see cref="Hero"/> 的 <see cref="HeroId"/> 是实例唯一 ID，须与秘书舰
@@ -75,7 +82,8 @@ public sealed record Hero(
     IReadOnlyList<PSkillEntry>? PSkills = null,
     IReadOnlyList<int>? RemouldEffects = null,
     int RemouldLevel = 0,
-    IReadOnlyList<AttrIntensify>? Intensify = null);
+    IReadOnlyList<AttrIntensify>? Intensify = null,
+    PlayerCombinationInfo? CombinationInfo = null);
 
 /// <summary>
 /// 船坞（玩家拥有的全部舰娘）。对应 <c>hero.UpdateHeroBagData</c> 的 HeroBag

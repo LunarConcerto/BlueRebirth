@@ -125,7 +125,11 @@ public sealed record HeroGrid(uint HeroId = 0, int TemplateId = 0, int Lvl = 0, 
     long CurHp = 0, int Mood = 0, int MarryType = 0, IReadOnlyList<uint>? EquipSlots = null, string Name = "",
     int ChangeNameTime = 0, bool Lock = false, int Advance = 0, int AdvLv = 0,
     IReadOnlyList<PSkillEntry>? PSkills = null, IReadOnlyList<int>? ArrRemouldEffect = null,
-    int RemouldLV = 0, IReadOnlyList<AttrIntensify>? Intensify = null);
+    int RemouldLV = 0, IReadOnlyList<AttrIntensify>? Intensify = null,
+    PlayerCombinationInfo? CombinationInfo = null);
+
+/// <summary>舰娘共鸣组合信息（TCombinationInfo）。</summary>
+public sealed record PlayerCombinationInfo(int ComLv = 0, int ComGrade = 0, uint Combine = 0, uint BeCombined = 0);
 
 /// <summary>Payload for the <c>hero.UpdateHeroBagData</c> server message (THeroInfo).</summary>
 public sealed record HeroBag(IReadOnlyList<HeroGrid>? HeroInfo = null, int HeroBagSize = 0);
@@ -791,6 +795,18 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         WriteVarintField(output, 16, unchecked((ulong)value.ChangeNameTime));
         // Lock 必须无条件编码。解锁时若省略 false，客户端增量合并后可能继续保留旧的 true。
         WriteVarintField(output, 12, value.Lock ? 1UL : 0UL);
+        // CombinationInfo (field 27, TCombinationInfo)：共鸣组合进度。全部子字段无条件编码，
+        // 否则客户端 protobuf 对缺省的 uint32/int32 字段读回 nil，船坞 dockpage 的
+        // `0 < combineData.BeCombined` / `0 < combineData.Combine` 会抛 "compare number with nil"。
+        if (value.CombinationInfo is { } ci)
+        {
+            using var ciBody = new MemoryStream();
+            WriteVarintField(ciBody, 1, unchecked((ulong)ci.ComLv));
+            WriteVarintField(ciBody, 2, unchecked((ulong)ci.ComGrade));
+            WriteVarintField(ciBody, 3, unchecked((ulong)ci.Combine));
+            WriteVarintField(ciBody, 4, unchecked((ulong)ci.BeCombined));
+            WriteMessage(output, 27, ciBody.ToArray());
+        }
         return output.ToArray();
     }
 

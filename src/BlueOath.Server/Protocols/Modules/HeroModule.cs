@@ -357,11 +357,41 @@ internal sealed class HeroModule(HeroService hero, GameServices services) : IGam
             case "hero.EquipBinding":
             case "hero.EquipUnBinding":
             case "hero.EquipLockTransplant":
-            case "hero.HeroCombineUpLv":
             case "hero.HeroCombineQuickLevelUp":
             case "hero.HeroCombineBreak":
-            case "hero.HeroCombine":
                 result = ModuleResult.Ok(await GameServices.BuildSimpleRet());
+                break;
+            case "hero.HeroCombineUpLv":
+                // 共鸣升级：消耗道具/货币，需推送船坞（CombinationInfo.ComLv）+ 背包。
+                var combRet = await hero.BuildHeroCombineUpLvRetAsync(request, ctx.ProfileId, ctx.Ct);
+                var combAccount = await ctx.GetAccountAsync();
+                var combHeroes = combAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
+                var combPushes = new List<byte[]>
+                {
+                    TMessageCodec.EncodeResponse(new TResponse(
+                        Method: "hero.UpdateHeroBagData",
+                        Ret: PlayerDataCodec.Encode(new HeroBag(combHeroes, combAccount.Dock.BagSize)),
+                        Time: (uint)ctx.Now)),
+                    services.BuildBagPush(combAccount, (uint)ctx.Now),
+                };
+                result = new ModuleResult { Ret = combRet, PrePushes = combPushes };
+                break;
+            case "hero.HeroCombine":
+                // 共鸣配对/解除：仅改舰娘 CombinationInfo，推送船坞刷新共鸣状态。
+                var comRet = await hero.BuildHeroCombineRetAsync(request, ctx.ProfileId, ctx.Ct);
+                var comAccount = await ctx.GetAccountAsync();
+                var comHeroes = comAccount.Dock.Heroes.Select(GameServices.ToHeroGrid).ToList();
+                result = new ModuleResult
+                {
+                    Ret = comRet,
+                    PrePushes =
+                    [
+                        TMessageCodec.EncodeResponse(new TResponse(
+                            Method: "hero.UpdateHeroBagData",
+                            Ret: PlayerDataCodec.Encode(new HeroBag(comHeroes, comAccount.Dock.BagSize)),
+                            Time: (uint)ctx.Now)),
+                    ],
+                };
                 break;
             default:
                 result = ModuleResult.Empty;

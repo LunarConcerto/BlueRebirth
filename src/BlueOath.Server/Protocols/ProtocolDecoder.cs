@@ -399,6 +399,22 @@ internal static class ProtocolDecoder
         return heroId;
     }
 
+    /// <summary>解码 hero.HeroCombine 参数：MainHero(1, uint32), DeputyHero(2, uint32)。
+    /// DeputyHero 为 0 表示解除共鸣。</summary>
+    internal static (uint MainHero, uint DeputyHero) DecodeCombineArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        uint mainHero = 0, deputyHero = 0;
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (wire != 0) { reader.Skip(wire); continue; }
+            uint value = checked((uint)reader.ReadVarint());
+            if (field == 1) mainHero = value;
+            else if (field == 2) deputyHero = value;
+        }
+        return (mainHero, deputyHero);
+    }
+
     /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>
     internal static (uint HeroId, int SkillId) DecodeStudySkillArg(byte[] args)
     {
