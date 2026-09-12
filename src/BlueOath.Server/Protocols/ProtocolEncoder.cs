@@ -11,34 +11,49 @@ namespace BlueOath.Server.Protocols;
 /// </summary>
 internal static class ProtocolEncoder
 {
-    /// <summary>编码 TBuildShipRet: BuildShipResult(1, repeated TCommonReward)。</summary>
-    internal static byte[] EncodeBuildShipRet(IReadOnlyList<CommonReward> rewards)
+    /// <summary>编码 TBuildShipRet: BuildShipResult(1, repeated TCommonReward)。
+    /// <paramref name="spReward"/> 为附加的「特殊奖励」（每抽附赠道具等），写入 SpReward(2)
+    /// 的第 0 下标（TCommonArrReward{Reward=[...]}），客户端出货演出后打开 GetRewardsPage 展示。</summary>
+    internal static byte[] EncodeBuildShipRet(IReadOnlyList<CommonReward> rewards, IReadOnlyList<CommonReward>? spReward = null)
     {
         ProtocolPackage output = new();
         foreach (CommonReward r in rewards)
         {
-            ProtocolPackage item = new();
-            if (r.Type != 0)
-                item.Write(0x08, unchecked((ulong)r.Type));
-            if (r.ConfigId != 0)
-                item.Write(0x10, unchecked((ulong)r.ConfigId));
-            if (r.Num != 0)
-                item.Write(0x18, unchecked((ulong)r.Num));
-            item.Write(0x20, unchecked((ulong)r.Id));
-            byte[] body = item.ToArray();
-            output.Write(0x0A, body);
+            output.Write(0x0A, EncodeCommonReward(r));
         }
 
         // TransReward(3) 需要与抽取结果按下标对齐，否则 _LoadTenCard 会访问 nil。
-        // SpReward(2) 不能填充空元素：客户端用 next(SpReward) 判断是否需要打开
-        // 额外奖励页，空壳会被误判为真实奖励并显示一个没有内容的报酬页面。
         for (int i = 0; i < rewards.Count; i++)
         {
             output.WriteRaw(0x1A); // TransReward
             output.WriteRaw(0x00);
         }
 
+        // SpReward(2) 不能填充空元素：客户端用 next(SpReward) 判断是否需要打开
+        // 额外奖励页，空壳会被误判为真实奖励并显示一个没有内容的报酬页面。
+        if (spReward is { Count: > 0 })
+        {
+            ProtocolPackage arr = new();
+            foreach (CommonReward r in spReward)
+                arr.Write(0x0A, EncodeCommonReward(r));
+            output.Write(0x12, arr.ToArray());
+        }
+
         return output.ToArray();
+    }
+
+    /// <summary>编码单个 TCommonReward：Type(1)/ConfigId(2)/Num(3)/Id(4)。</summary>
+    private static byte[] EncodeCommonReward(CommonReward r)
+    {
+        ProtocolPackage item = new();
+        if (r.Type != 0)
+            item.Write(0x08, unchecked((ulong)r.Type));
+        if (r.ConfigId != 0)
+            item.Write(0x10, unchecked((ulong)r.ConfigId));
+        if (r.Num != 0)
+            item.Write(0x18, unchecked((ulong)r.Num));
+        item.Write(0x20, unchecked((ulong)r.Id));
+        return item.ToArray();
     }
 
     /// <summary>

@@ -7,6 +7,11 @@ namespace BlueOath.Server.Protocols;
 /// <summary>抽卡/掉落池服务：buildship.BuildShip 的抽取逻辑 + 图鉴动作 illustrate.AddBehaviour。</summary>
 internal sealed class BuildShipService(GameServices services)
 {
+    /// <summary>抽卡附赠的「精鋭戦姫勲章」道具（config_item_info[13000]，GoodsType ITEM）。</summary>
+    private const int EliteShipMedalItem = 13000;
+
+    /// <summary>抽卡数与勋章道具的比例：每抽 1 次赠送 100 个勋章（十连抽 1000 个）。</summary>
+    private const int MedalPerDraw = 100;
     /// <summary>
     /// 处理 illustrate.AddBehaviour：保留客户端上报兼容性，但将对应图鉴条目直接扩展为
     /// 客户端配置中的全部动作，并持久化到账号。
@@ -134,6 +139,15 @@ internal sealed class BuildShipService(GameServices services)
             }
         }
 
+        // 每抽附赠「精鋭戦姫勲章」：抽 N 次送 N*100 个（1:100），入背包并随 bag 推送展示。
+        List<CommonReward>? spReward = null;
+        if (num > 0)
+        {
+            int medalCount = num * MedalPerDraw;
+            account = GameServices.AddBagItem(account, EliteShipMedalItem, medalCount);
+            spReward = [new CommonReward(GameServices.GoodsTypeItem, EliteShipMedalItem, medalCount)];
+        }
+
         if (rewards.Count > 0)
         {
             // 累计该池抽数（用于 20/100 连累计奖励判断）。
@@ -145,7 +159,7 @@ internal sealed class BuildShipService(GameServices services)
             await services.SaveAccountAsync(account, ct);
         }
 
-        return ProtocolEncoder.EncodeBuildShipRet(rewards);
+        return ProtocolEncoder.EncodeBuildShipRet(rewards, spReward);
     }
 
     /// <summary>处理 buildship.BuildShipBox：领取累计抽数宝箱奖励（twenty_drop / ChooseShip）。
