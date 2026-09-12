@@ -415,6 +415,22 @@ internal static class ProtocolDecoder
         return (mainHero, deputyHero);
     }
 
+    /// <summary>解码 building.ProduceItem / building.ComposeItem 参数：BuildingId(1), RecipeId(2), Count(3)。</summary>
+    internal static (int BuildingId, int RecipeId, int Count) DecodeProduceItemArg(byte[] args)
+    {
+        ProtoReader reader = new(args);
+        int buildingId = 0, recipeId = 0, count = 0;
+        while (reader.TryReadField(out int field, out int wire))
+        {
+            if (wire != 0) { reader.Skip(wire); continue; }
+            int value = checked((int)reader.ReadVarint());
+            if (field == 1) buildingId = value;
+            else if (field == 2) recipeId = value;
+            else if (field == 3) count = value;
+        }
+        return (buildingId, recipeId, count);
+    }
+
     /// <summary>解码 hero.StudySkill 参数：HeroId(1, uint32), SkillId(2, int32)。</summary>
     internal static (uint HeroId, int SkillId) DecodeStudySkillArg(byte[] args)
     {

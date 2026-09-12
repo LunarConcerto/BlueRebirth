@@ -19,6 +19,127 @@ internal sealed class BuildingService(GameServices services)
         internal bool Success => Err == 0;
     }
 
+    /// <summary>生产/合成结果：已发放的道具列表（用于 TReceiveRet.ItemInfo）。</summary>
+    internal sealed record ProduceResult(
+        PlayerAccount Account,
+        IReadOnlyList<CommonReward> Rewards,
+        int Err = 0,
+        string ErrMsg = "")
+    {
+        internal bool Success => Err == 0;
+    }
+
+    /// <summary>原料/产出里的 STRENGTH（工人体力）货币 id（CurrencyType.STRENGTH）。</summary>
+    private const int CurrencyStrength = 21;
+
+    /// <summary>building.ProduceItem：按 config_recipe 合成物品。校验建筑存在、配方有效、
+    /// 材料/体力足够，扣原料并立即产出 item（耗时配方离线服直接产出）。</summary>
+    internal async Task<ProduceResult> ProduceItemAsync(
+        string profileId, int buildingId, int recipeId, int count, int now, CancellationToken ct)
+    {
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+        PlayerBuilding state = account.Building ?? PlayerAccountFactory.DefaultBuilding(now);
+        if (count <= 0) return Fail(account, "Invalid produce count");
+        if (!state.Buildings.Any(b => b.Id == buildingId))
+            return Fail(account, $"Building {buildingId} is not owned");
+        ConfigRecipe? recipe = RecipeConfigLoader.GetProduce(recipeId);
+        if (recipe is null || recipe.Item is not { Count: >= 3 })
+            return Fail(account, $"Unknown produce recipe {recipeId}");
+
+        return await ExecuteRecipeAsync(
+            profileId, account, state,
+            [recipe.Rawmaterial1, recipe.Rawmaterial2],
+            recipe.Item, count, ct);
+    }
+
+    /// <summary>building.ComposeItem：按 config_recipe_compose 即时合成物品，逻辑同 ProduceItem
+    /// 但不涉及生产时长。</summary>
+    internal async Task<ProduceResult> ComposeItemAsync(
+        string profileId, int buildingId, int recipeId, int count, int now, CancellationToken ct)
+    {
+        PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
+        PlayerBuilding state = account.Building ?? PlayerAccountFactory.DefaultBuilding(now);
+        if (count <= 0) return Fail(account, "Invalid compose count");
+        if (!state.Buildings.Any(b => b.Id == buildingId))
+            return Fail(account, $"Building {buildingId} is not owned");
+        ConfigRecipeCompose? recipe = RecipeConfigLoader.GetCompose(recipeId);
+        if (recipe is null || recipe.Item is not { Count: >= 3 })
+            return Fail(account, $"Unknown compose recipe {recipeId}");
+
+        return await ExecuteRecipeAsync(
+            profileId, account, state,
+            [recipe.Rawmaterial1, recipe.Rawmaterial2],
+            recipe.Item, count, ct);
+    }
+
+    /// <summary>校验并扣除原料（rawmaterial = [type,id,num]，type1=道具、type5=货币含 STRENGTH 体力），
+    /// 然后发放产出 item=[type,id,num]。STRENGTH 从基地工人体力 WorkerStrength 扣除。</summary>
+    private async Task<ProduceResult> ExecuteRecipeAsync(
+        string profileId,
+        PlayerAccount account,
+        PlayerBuilding state,
+        IReadOnlyList<IReadOnlyList<long>?> rawMaterials,
+        IReadOnlyList<long> item,
+        int count,
+        CancellationToken ct)
+    {
+        int strength = state.WorkerStrength;
+        PlayerAccount after = account;
+
+        foreach (IReadOnlyList<long>? raw in rawMaterials)
+        {
+            if (raw is not { Count: >= 3 } || raw[0] <= 0 || raw[2] <= 0) continue;
+            int matType = checked((int)raw[0]);
+            int matId = checked((int)raw[1]);
+            int matNum = checked((int)raw[2]) * count;
+
+            if (matType == GameServices.GoodsTypeCurrency && matId == CurrencyStrength)
+            {
+                if (strength < matNum) return Fail(account, "Not enough worker strength");
+                strength -= matNum;
+                continue;
+            }
+            if (matType == GameServices.GoodsTypeCurrency)
+            {
+                if (!HasCurrency(after, matId, matNum)) return Fail(account, $"Not enough currency {matId}");
+                after = GameServices.AddCurrency(after, matId, -matNum);
+                continue;
+            }
+            int bag = after.Bag?.Items.FirstOrDefault(i => i.TemplateId == matId)?.Num ?? 0;
+            if (bag < matNum) return Fail(account, $"Not enough material {matId}");
+            after = GameServices.AddBagItem(after, matId, -matNum);
+        }
+
+        int itemType = checked((int)item[0]);
+        int itemId = checked((int)item[1]);
+        int itemNum = checked((int)item[2]) * count;
+        after = itemType == GameServices.GoodsTypeCurrency
+            ? GameServices.AddCurrency(after, itemId, itemNum)
+            : GameServices.AddBagItem(after, itemId, itemNum);
+
+        // 若有 STRENGTH 消耗，写回基地体力。
+        if (strength != state.WorkerStrength)
+            after = after with { Building = state with { WorkerStrength = strength } };
+
+        await services.SaveAccountAsync(after, ct);
+        return new ProduceResult(after, [new CommonReward(itemType, itemId, itemNum)]);
+    }
+
+    private static bool HasCurrency(PlayerAccount account, int id, int num)
+    {
+        long owned = id switch
+        {
+            1 => account.Character.Gold,
+            5 => account.Character.Supply,
+            12 => account.Character.Retire,
+            _ => -1,
+        };
+        return owned >= num;
+    }
+
+    private static ProduceResult Fail(PlayerAccount account, string message) =>
+        new(account, [], Err: 1, ErrMsg: message);
+
     internal async Task<Mutation> AddBuildingAsync(
         string profileId, AddBuildingArg arg, int now, CancellationToken ct)
     {

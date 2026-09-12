@@ -56,6 +56,16 @@ internal static class ProtocolEncoder
         return item.ToArray();
     }
 
+    /// <summary>编码 TReceiveRet：ItemInfo(1, repeated TCommonReward) 为空时只写空 body。</summary>
+    internal static byte[] EncodeReceiveRet(IReadOnlyList<CommonReward>? itemInfo)
+    {
+        ProtocolPackage output = new();
+        if (itemInfo is { Count: > 0 })
+            foreach (CommonReward r in itemInfo)
+                output.Write(0x0A, EncodeCommonReward(r));
+        return output.ToArray();
+    }
+
     /// <summary>
     /// 编码 TBuildShipInfo：
     ///  - CloseTime(field 10)：为配置中启用的卡池设置未来关闭时间，客户端 CheckActIsOpen 据此判定开启。

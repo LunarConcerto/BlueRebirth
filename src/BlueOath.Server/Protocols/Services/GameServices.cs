@@ -68,6 +68,7 @@ internal sealed class GameServices
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
         ConstructionConfigLoader.Load(configDir);
         BuildingConfigLoader.Load(configDir);
+        RecipeConfigLoader.Load(configDir);
         _itemInfos = ItemInfoLoader.Load(configDir);
         _itemSelected = ItemSelectedLoader.Load(configDir);
         (_expPerItem, _expNeeded) = ShipLevelupLoader.Load(configDir);

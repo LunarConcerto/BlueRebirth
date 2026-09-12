@@ -1655,6 +1655,40 @@ internal static class BuildingConfigLoader
     }
 }
 
+/// <summary>基地生产/合成配方配置。config_recipe（生产，含 time/cost_energy）与
+/// config_recipe_compose（合成，即时）。配方产出 item=[type,id,num]，消耗 rawmaterial1..3=[type,id,num]。</summary>
+internal static class RecipeConfigLoader
+{
+    private static Dictionary<int, ConfigRecipe> _recipes = [];
+    private static Dictionary<int, ConfigRecipeCompose> _compose = [];
+    private static bool _loaded;
+
+    /// <summary>耗时配方统一生产时长（秒）。离线服不做真实计时，直接产出。</summary>
+    public const int FixedProduceSeconds = 3;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            _recipes = ConfigDbLoader.LoadAll<ConfigRecipe>(configDir, "config_recipe.db");
+            _compose = ConfigDbLoader.LoadAll<ConfigRecipeCompose>(configDir, "config_recipe_compose.db");
+            Console.Error.WriteLine($"[Recipe] loaded {_recipes.Count} produce recipes / {_compose.Count} compose recipes");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Recipe] load failed: {ex.Message}");
+        }
+        _loaded = true;
+    }
+
+    public static ConfigRecipe? GetProduce(int recipeId)
+        => _recipes.TryGetValue(recipeId, out var cfg) ? cfg : null;
+
+    public static ConfigRecipeCompose? GetCompose(int recipeId)
+        => _compose.TryGetValue(recipeId, out var cfg) ? cfg : null;
+}
+
 /// <summary>加载 config_shop 全部商店 id 与其货架（shelf_list）商品、config_shop_goods 配置。
 /// 客户端商店页会按 config_shop 导航到任意商店，ShopData.GetShopInfoById 在
 /// m_shopInfo[shopId] 缺失时崩溃，因此必须覆盖全部商店。</summary>

@@ -2,8 +2,8 @@ using BlueOath.Protocol;
 
 namespace BlueOath.Server.Protocols;
 
-/// <summary>基地模块：建筑生命周期、舰娘派驻与持久化快照。</summary>
-internal sealed class BuildingModule(BuildingService building) : IGameModule
+/// <summary>基地模块：建筑生命周期、舰娘派驻、物品生产/合成与持久化快照。</summary>
+internal sealed class BuildingModule(BuildingService building, GameServices services) : IGameModule
 {
     public IReadOnlyList<string> Prefixes => ["building"];
 
@@ -63,6 +63,44 @@ internal sealed class BuildingModule(BuildingService building) : IGameModule
                 return new ModuleResult
                 {
                     PrePushes = [BuildingService.BuildInfoPush(account.Building, (uint)ctx.Now)],
+                };
+            }
+            case "building.ProduceItem":
+            {
+                var (bid, rid, cnt) = ProtocolDecoder.DecodeProduceItemArg(request.Args ?? []);
+                BuildingService.ProduceResult produce = await building.ProduceItemAsync(
+                    ctx.ProfileId, bid, rid, cnt, ctx.Now, ctx.Ct);
+                if (!produce.Success)
+                    return new ModuleResult { Err = produce.Err, ErrMsg = produce.ErrMsg };
+                var produceAccount = produce.Account;
+                var producePushes = new List<byte[]>
+                {
+                    services.BuildBagPush(produceAccount, (uint)ctx.Now),
+                    BuildingService.BuildInfoPush(produceAccount.Building, (uint)ctx.Now),
+                };
+                return new ModuleResult
+                {
+                    Ret = ProtocolEncoder.EncodeReceiveRet(produce.Rewards),
+                    PrePushes = producePushes,
+                };
+            }
+            case "building.ComposeItem":
+            {
+                var (bid, rid, cnt) = ProtocolDecoder.DecodeProduceItemArg(request.Args ?? []);
+                BuildingService.ProduceResult compose = await building.ComposeItemAsync(
+                    ctx.ProfileId, bid, rid, cnt, ctx.Now, ctx.Ct);
+                if (!compose.Success)
+                    return new ModuleResult { Err = compose.Err, ErrMsg = compose.ErrMsg };
+                var composeAccount = compose.Account;
+                var composePushes = new List<byte[]>
+                {
+                    services.BuildBagPush(composeAccount, (uint)ctx.Now),
+                    BuildingService.BuildInfoPush(composeAccount.Building, (uint)ctx.Now),
+                };
+                return new ModuleResult
+                {
+                    Ret = ProtocolEncoder.EncodeReceiveRet(compose.Rewards),
+                    PrePushes = composePushes,
                 };
             }
             default:
