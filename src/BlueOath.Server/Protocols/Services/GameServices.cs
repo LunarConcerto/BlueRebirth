@@ -699,6 +699,9 @@ internal sealed class GameServices
         // 旧存档（无 CreateTime 字段）加载后 CreateTime=0，会导致 PeriodManager 里
         // os.date("*t", 0) 报 "time result cannot be represented"，这里兜底为当前时间。
         var createTime = c.CreateTime != 0 ? c.CreateTime : checked((int)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        // HeadShow = 秘书舰是否已誓约。客户端主页据此决定登录动画用 login（ログイン）
+        // 还是 login_m（誓い）语音；必须按秘书舰 MarryTime 推导，否则永远播 login。
+        int headShow = account.Dock.Heroes.Any(h => h.HeroId == c.SecretaryId && h.MarryTime != 0) ? 1 : 0;
         return TMessageCodec.EncodeRetGetUserInfo(new UserInfoFields(
             Uid: c.Uid, Uname: c.Name, Level: c.Level, Class: c.Class, SecretaryId: c.SecretaryId,
             CreateTime: createTime, Gold: c.Gold, Diamond: c.Diamond, Supply: c.Supply, Bath: c.Bath,
@@ -710,7 +713,8 @@ internal sealed class GameServices
             GuildCoinII: c.GuildCoinII, UrEquipCoin: c.UrEquipCoin, ActivityBattlePassExp: c.ActivityBattlePassExp,
             GetHeroCount: c.GetHeroCount, AttackCount: c.AttackCount, MarriedNum: c.MarriedNum,
             Head: c.Head, HeadFrame: c.HeadFrame, Message: c.Message,
-            AchievePoint: TaskConfigCatalog.GetAchievePoint(account)));
+            AchievePoint: TaskConfigCatalog.GetAchievePoint(account),
+            HeadShow: headShow));
     }
 
     internal static BathHeroInfo ToBathHeroInfo(BathHero h) => new(h.HeroId, h.Pos, h.IsAuto, h.StartTime, h.BathTime, h.BuffId, h.BuffTime, h.Power);

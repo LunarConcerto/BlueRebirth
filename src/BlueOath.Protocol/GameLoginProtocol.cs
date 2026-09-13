@@ -29,7 +29,8 @@ public sealed record UserInfoFields(
     int BattlePassExp = 0, int BattlePassGold = 0, int PvePt = 0,
     int GuildCoinII = 0, int UrEquipCoin = 0, int ActivityBattlePassExp = 0,
     int GetHeroCount = 0, int AttackCount = 0, int MarriedNum = 0,
-    int Head = 1021051, int HeadFrame = 0, string Message = "", int AchievePoint = 0);
+    int Head = 1021051, int HeadFrame = 0, string Message = "", int AchievePoint = 0,
+    int HeadShow = 0);
 
 public static class TMessageCodec
 {
@@ -190,7 +191,7 @@ public static class TMessageCodec
         WriteVarintField(output, 35, unchecked((uint)v.Bath));       // Bath (SPA 温泉币，CurrencyType.SPA)
         WriteVarintField(output, 37, unchecked((uint)v.Strategy));   // Strategy (CurrencyType.STRATEGY)
         WriteVarintField(output, 39, unchecked((uint)v.Medal));      // Medal (CurrencyType.MEDAL)
-        WriteVarintField(output, 44, unchecked((uint)0));            // HeadShow (_ReverseMask,_SetSecretary 检查)
+        WriteVarintField(output, 44, unchecked((uint)v.HeadShow));    // HeadShow (主页 IsMarry → login_m 誓约语音)
         WriteVarintField(output, 46, unchecked((uint)7));            // NewTaskStage (ActivityLogic:IsCanShowRedDot 读，缺则 nil 崩；0 触发新手引导)
         WriteVarintField(output, 47, unchecked((uint)v.CopyTrainPoint)); // CopyTrainPoint (CurrencyType.EXERCISES)
         WriteVarintField(output, 48, unchecked((uint)v.Tower));      // Tower (CurrencyType.TOWER)
