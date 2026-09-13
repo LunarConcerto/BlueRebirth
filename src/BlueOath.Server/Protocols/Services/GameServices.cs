@@ -65,6 +65,7 @@ internal sealed class GameServices
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         ShopCatalogLoader.Load(configDir);
+        ParameterCatalogLoader.Load(configDir);
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
         ConstructionConfigLoader.Load(configDir);
         BuildingConfigLoader.Load(configDir);
@@ -125,6 +126,9 @@ internal sealed class GameServices
 
     /// <summary>掉落物品配置（供 BuildShipService）。</summary>
     internal IReadOnlyDictionary<int, ConfigDropItem> DropItems => _dropItems;
+
+    /// <summary>读取 config_parameter 指定 id 的 value，缺失时返回 fallback。</summary>
+    internal int Parameter(int id, int fallback = 0) => ParameterCatalogLoader.Get(id, fallback);
 
     /// <summary>道具配置（宝箱道具通过 DropId 指向 config_drop_item）。</summary>
     internal IReadOnlyDictionary<int, ConfigItemInfo> ItemInfos => _itemInfos;

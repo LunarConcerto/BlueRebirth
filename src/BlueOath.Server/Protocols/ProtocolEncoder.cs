@@ -703,12 +703,16 @@ internal static class ProtocolEncoder
         int grade = 3,
         int firstPass = 1,
         int passTime = 60,
-        IReadOnlyList<CommonReward>? rewards = null)
+        IReadOnlyList<CommonReward>? rewards = null,
+        IReadOnlyList<CommonExtraReward>? exReward = null)
     {
         ProtocolPackage ms = new();
         if (rewards is not null)
             foreach (CommonReward reward in rewards)
                 ms.Write(0x0A, PlayerDataCodec.Encode(reward)); // Reward(1)
+        if (exReward is not null)
+            foreach (CommonExtraReward er in exReward)
+                ms.Write(0x2A, PlayerDataCodec.Encode(er)); // ExReward(5)
         if (copyId != 0)
             ms.Write(0x60, unchecked((ulong)copyId));
         if (grade != 0)
@@ -1019,6 +1023,22 @@ internal static class ProtocolEncoder
         if (maxCopyId == 0 && levels.Count > 0) maxCopyId = levels[0];
         ms.Write(0x10, unchecked((ulong)maxCopyId)); // MaxCopyId(2)
         ms.Write(0x18, 10UL); // CopyType(3)=GoodsCopy
+        return ms.ToArray();
+    }
+
+    /// <summary>编码 goodscopy.UpdateData 推送（TGetGoodsCopyInfo）。
+    /// 客户端 GoodsCopyData:SetData 读 InfoList（TodayMaxDamage/TodayGetGoods/Percent/CopyId）
+    /// 与 HeroDamageList（ShipFleetId/MaxDamage），据此展示物资大作战的伤害排名与奖励。</summary>
+    public static byte[] EncodeGoodsCopyUpdate()
+    {
+        List<int> levels = ChapterCopyLoader.GetGoodsLevels();
+        ProtocolPackage ms = new();
+        foreach (int cid in levels)
+        {
+            ProtocolPackage info = new();
+            info.Write(0x20, unchecked((ulong)cid)); // CopyId(4)
+            ms.Write(0x0A, info.ToArray()); // InfoList(1)：TodayMaxDamage/TodayGetGoods/Percent 缺省 0/nil
+        }
         return ms.ToArray();
     }
 

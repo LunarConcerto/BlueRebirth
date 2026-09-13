@@ -59,6 +59,14 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                     postPushes.Add(await ctx.Services.BuildUpdateUserInfoPushAsync(
                         ctx.ProfileId, now, ctx.Ct));
                 }
+                else if (copyType == 10)
+                {
+                    // 物资大作战：推送 goodscopy.UpdateData，客户端据此刷新伤害排名/奖励显示。
+                    postPushes.Add(TMessageCodec.EncodeResponse(new TResponse(
+                        Method: "goodscopy.UpdateData",
+                        Ret: ProtocolEncoder.EncodeGoodsCopyUpdate(),
+                        Time: now)));
+                }
                 result = new ModuleResult { Ret = ret, PostPushes = postPushes };
                 break;
             case "copy.QuitBase":

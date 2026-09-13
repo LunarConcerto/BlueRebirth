@@ -1728,3 +1728,25 @@ internal static class ShopCatalogLoader
     public static ConfigShopGoods? GetGood(int goodId)
         => _goods.TryGetValue(goodId, out var cfg) ? cfg : null;
 }
+
+/// <summary>加载 config_parameter 全部参数（id → value），供业务侧读取配置值。</summary>
+internal static class ParameterCatalogLoader
+{
+    private static Dictionary<int, int> _values = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            var parameters = ConfigDbLoader.LoadAll<ConfigParameter>(configDir, "config_parameter.db");
+            _values = parameters.ToDictionary(kv => kv.Key, kv => checked((int)kv.Value.Value));
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    public static int Get(int id, int fallback = 0)
+        => _values.TryGetValue(id, out var v) ? v : fallback;
+}

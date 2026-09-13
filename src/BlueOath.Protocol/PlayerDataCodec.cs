@@ -184,6 +184,10 @@ public sealed record RetShopsInfo(
 /// <summary>通用奖励（TCommonReward）。Type 对应 GoodsType，ConfigId 对应物品/货币 id。</summary>
 public sealed record CommonReward(int Type = 0, int ConfigId = 0, int Num = 0, int Id = 0);
 
+/// <summary>TCommonExtraReward: Key(1, string) / Value(2, int32)。
+/// 用于 goods copy 结果页（GoodsCopyResultPage）读取 RankPercent/CopyId/CurDamage 等字段。</summary>
+public sealed record CommonExtraReward(string Key = "", int Value = 0);
+
 /// <summary>每日副本单章节数据（dailycopy_pb.TDailyCopyInfo）。</summary>
 public sealed record DailyCopyInfo(
     int ChapterId = 0,
@@ -959,6 +963,14 @@ var reader = new GameLoginCodec.ProtoReader(payload);
         if (value.ConfigId != 0) WriteVarintField(output, 2, unchecked((ulong)value.ConfigId));
         if (value.Num != 0) WriteVarintField(output, 3, unchecked((ulong)value.Num));
         if (value.Id != 0) WriteVarintField(output, 4, unchecked((ulong)value.Id));
+        return output.ToArray();
+    }
+
+    public static byte[] Encode(CommonExtraReward value)
+    {
+        using var output = new MemoryStream();
+        if (!string.IsNullOrEmpty(value.Key)) WriteStringField(output, 1, value.Key);
+        WriteVarintField(output, 2, unchecked((ulong)value.Value));
         return output.ToArray();
     }
 

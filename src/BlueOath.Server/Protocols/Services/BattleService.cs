@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Linq;
 using BlueOath.Core;
 using BlueOath.Protocol;
 using BlueOath.Server.Configs;
@@ -57,11 +58,44 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
         account = SaveHeroHp(account, passArg.HerosInfo);
 
         // 评级（config_copy_grade_type）：SSS=1..E=8，F=9 为失败。失败不结算战利品、不记录通关进度。
-        bool isVictory = grade < 9;
+        // 货物副本（物资大作战，copyType 10）是伤害测试器：敌人血量极高、必定超时，
+        // 超时即无条件胜利，按最终伤害发放报酬。因此 copyType 10 强制视为胜利。
+        bool isGoodsCopy = copyType == 10;
+        bool isVictory = grade < 9 || isGoodsCopy;
         if (!isVictory)
         {
             await services.SaveAccountAsync(account, ct);
             return ProtocolEncoder.EncodePassBaseRet(copyId, grade, 0, passTime);
+        }
+
+        if (copyType == 10)
+        {
+            // 物资大作战：超时无条件胜利，奖励来自 config_copy_display.drop_info_id 掉落池。
+            // 客户端回传 grade=9（F，超时），但伤害测试器应视为胜利；回传一个成功评级
+            // （grade 6=D 及以上即胜），避免客户端 SettlementPage 按 grade==9 判失败。
+            int winGrade = grade >= 9 || grade <= 0 ? 6 : grade;
+            (account, List<CommonReward> goodsRewards) = GrantCopyRewards(account, copyId, true, now);
+            await services.SaveAccountAsync(account, ct);
+            // 从 PassBaseArg.Evaluate 提取伤害：货物副本按 config_parameter[172]
+            // wuzidazuozhan_min_damage=500 作为缩放基数，CurReward = floor(总伤害 / 500)。
+            // Evaluate 是 TPassEvaluate{Type,Value} 列表，取所有 Value 之和作为总伤害。
+            long totalDamage = passArg.Evaluate?.Sum(e => (long)e.Value) ?? 0;
+            long minDamage = services.Parameter(172, 500);
+            int rewardCount = totalDamage > 0 ? (int)Math.Max(1, totalDamage / Math.Max(1, minDamage)) : goodsRewards.Sum(r => r.Num);
+            // ExReward 供 GoodsCopyResultPage 显示。RankPercent 必须非 nil（页面按 ==-1 判无排名，
+            // nil 会触发 RankPercent/100 算术崩溃）。
+            List<CommonExtraReward> exReward =
+            [
+                new CommonExtraReward("RankPercent", -1),
+                new CommonExtraReward("CopyId", copyId),
+                new CommonExtraReward("CurDamage", checked((int)totalDamage)),
+                new CommonExtraReward("CurCopyMaxDamage", checked((int)totalDamage)),
+                new CommonExtraReward("MaxDamage", checked((int)totalDamage)),
+                new CommonExtraReward("CurReward", rewardCount),
+                new CommonExtraReward("TotalReward", rewardCount),
+                new CommonExtraReward("MonthCardBonus", 0),
+            ];
+            return ProtocolEncoder.EncodePassBaseRet(copyId, winGrade, 1, passTime, goodsRewards, exReward);
         }
 
         if (copyType == 2)
