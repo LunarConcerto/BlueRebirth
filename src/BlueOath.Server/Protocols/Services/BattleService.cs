@@ -199,19 +199,21 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
         CopyDisplayLoader.CopyDropInfo? dropInfo = CopyDisplayLoader.Get(copyId);
         if (dropInfo is null) return (account, []);
 
-        var pending = new List<(int Type, int ConfigId, int Num)>();
-        var path = new HashSet<int>();
+        var pending = new List<DropEntry>();
 
         if (isFirstPass)
             foreach (int rewardId in dropInfo.FirstReward)
                 AppendReward(rewardId, pending);
 
         foreach (int dropId in dropInfo.DropInfoId)
-            DrawDropPool(dropId, pending, path, 0);
+            pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng));
 
         var rewards = new List<CommonReward>();
-        foreach ((int type, int configId, int num) in pending)
+        foreach (DropEntry entry in pending)
         {
+            int type = entry.Type;
+            int configId = entry.ConfigId;
+            int num = entry.Num;
             if (type == GameServices.GoodsTypeCurrency)
             {
                 account = GameServices.AddCurrency(account, configId, num);
@@ -240,70 +242,14 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
         return (account, rewards);
     }
 
-    private static void AppendReward(int rewardId, List<(int Type, int ConfigId, int Num)> pending)
+    private static void AppendReward(int rewardId, List<DropEntry> pending)
     {
         if (rewardId <= 0 ||
             DailyCopyRewardCatalog.GetReward(rewardId) is not { Rewards: { } rewards })
             return;
         foreach (List<long> entry in rewards)
             if (entry.Count >= 3 && entry[2] > 0)
-                pending.Add((checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
-    }
-
-    private bool DrawDropPool(
-        int dropId, List<(int Type, int ConfigId, int Num)> result, HashSet<int> path, int depth)
-    {
-        if (depth >= 16 || !path.Add(dropId) || !services.DropItems.TryGetValue(dropId, out var pool))
-            return false;
-        try
-        {
-            if (pool.DropRate > 0 && pool.Drop is { Count: > 0 })
-                for (int i = 0; i < Math.Max(1, checked((int)pool.DropCount)); i++)
-                    if (WeightedPick(pool.Drop) is { } entry)
-                        ResolveDropEntry(entry, result, path, depth + 1);
-            if (pool.DropAloneCount > 0 && pool.DropAlone is { Count: > 0 })
-                for (int i = 0; i < pool.DropAloneCount; i++)
-                    if (WeightedPick(pool.DropAlone) is { } entry)
-                        ResolveDropEntry(entry, result, path, depth + 1);
-            return true;
-        }
-        finally
-        {
-            path.Remove(dropId);
-        }
-    }
-
-    private void ResolveDropEntry(
-        List<long> entry, List<(int Type, int ConfigId, int Num)> result, HashSet<int> path, int depth)
-    {
-        if (entry.Count < 5) return;
-        int type = checked((int)entry[0]);
-        int configId = checked((int)entry[1]);
-        int min = checked((int)entry[2]);
-        int max = checked((int)entry[3]);
-        if (min <= 0 || max < min) return;
-        int num = min == max ? min : services.Rng.Next(min, checked(max + 1));
-        if (type == GameServices.GoodsTypeDrop)
-        {
-            for (int i = 0; i < num; i++) DrawDropPool(configId, result, path, depth);
-            return;
-        }
-        result.Add((type, configId, num));
-    }
-
-    private List<long>? WeightedPick(List<List<long>> entries)
-    {
-        int totalWeight = entries.Sum(e => e.Count > 4 ? checked((int)e[4]) : 0);
-        if (totalWeight <= 0) return entries.Count > 0 ? entries[0] : null;
-        int roll = services.Rng.Next(totalWeight);
-        int cumulative = 0;
-        foreach (List<long> e in entries)
-        {
-            int w = e.Count > 4 ? checked((int)e[4]) : 0;
-            cumulative += w;
-            if (roll < cumulative) return e;
-        }
-        return entries[^1];
+                pending.Add(new DropEntry(checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
     }
 
     private (PlayerAccount Account, uint EquipId) AddEquip(PlayerAccount account, int templateId)

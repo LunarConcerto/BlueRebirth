@@ -45,8 +45,12 @@ internal sealed class ShopService(GameServices services)
         var pending = new List<PendingReward>();
         for (var i = 0; i < arg.TreasureNum; i++)
         {
-            if (!TryDrawPool(checked((int)item.DropId), pending, [], 0))
+            List<DropEntry> resolved =
+                DropPoolResolver.Resolve(checked((int)item.DropId), services.DropItems, services.Rng);
+            if (resolved.Count == 0)
                 return new([], false, "treasure drop pool is invalid");
+            foreach (DropEntry entry in resolved)
+                pending.Add(new PendingReward(entry.Type, entry.ConfigId, entry.Num));
         }
 
         int newEquipCount = pending.Where(x => x.Type == GameServices.GoodsTypeEquip).Sum(x => x.Num);
@@ -149,8 +153,12 @@ internal sealed class ShopService(GameServices services)
             if (config.DropId <= 0) return new([], false, "select treasure has neither options nor a drop pool");
             for (var i = 0; i < openNum; i++)
             {
-                if (!TryDrawPool(checked((int)config.DropId), pending, [], 0))
+                List<DropEntry> resolved =
+                    DropPoolResolver.Resolve(checked((int)config.DropId), services.DropItems, services.Rng);
+                if (resolved.Count == 0)
                     return new([], false, "select treasure drop pool is invalid");
+                foreach (DropEntry entry in resolved)
+                    pending.Add(new PendingReward(entry.Type, entry.ConfigId, entry.Num));
             }
             if (pending.Any(x => x.Type == GameServices.GoodsTypeShip))
                 return new([], false, "select treasure reward type is not supported yet");
@@ -213,71 +221,5 @@ internal sealed class ShopService(GameServices services)
         byte[] ret = PlayerDataCodec.Encode(new BagTreasureInfoRet(rewards, arg.TreasureId));
         // bag.UpdateBagData 是增量合并；完全耗尽时必须额外推送 Num=0 才会从客户端仓库删除。
         return new(ret, true, "", remaining == 0 ? arg.TreasureId : 0);
-    }
-
-    private bool TryDrawPool(int dropId, List<PendingReward> result, HashSet<int> path, int depth)
-    {
-        if (depth >= 16 || !path.Add(dropId) || !services.DropItems.TryGetValue(dropId, out var pool))
-            return false;
-        int resultCountBefore = result.Count;
-        try
-        {
-            if (pool.DropRate > 0 && pool.Drop is { Count: > 0 })
-            {
-                int drawCount = Math.Max(1, checked((int)pool.DropCount));
-                for (var i = 0; i < drawCount; i++)
-                {
-                    List<long>? entry = WeightedPick(pool.Drop);
-                    if (entry is null || !ResolveEntry(entry, result, path, depth + 1)) return false;
-                }
-            }
-            if (pool.DropAloneCount > 0 && pool.DropAlone is { Count: > 0 })
-            {
-                for (var i = 0; i < pool.DropAloneCount; i++)
-                {
-                    List<long>? entry = WeightedPick(pool.DropAlone);
-                    if (entry is null || !ResolveEntry(entry, result, path, depth + 1)) return false;
-                }
-            }
-            return result.Count > resultCountBefore;
-        }
-        finally
-        {
-            path.Remove(dropId);
-        }
-    }
-
-    private bool ResolveEntry(List<long> entry, List<PendingReward> result, HashSet<int> path, int depth)
-    {
-        if (entry.Count < 5) return false;
-        int type = checked((int)entry[0]);
-        int configId = checked((int)entry[1]);
-        int min = checked((int)entry[2]);
-        int max = checked((int)entry[3]);
-        if (min <= 0 || max < min) return false;
-        int num = min == max ? min : services.Rng.Next(min, checked(max + 1));
-        if (type == GameServices.GoodsTypeDrop)
-        {
-            for (var i = 0; i < num; i++)
-                if (!TryDrawPool(configId, result, path, depth)) return false;
-            return true;
-        }
-        result.Add(new PendingReward(type, configId, num));
-        return true;
-    }
-
-    private List<long>? WeightedPick(List<List<long>> entries)
-    {
-        var candidates = entries.Where(x => x.Count >= 5 && x[4] > 0).ToList();
-        long total = candidates.Sum(x => x[4]);
-        if (total <= 0) return null;
-        long roll = services.Rng.NextInt64(total);
-        long cumulative = 0;
-        foreach (List<long> entry in candidates)
-        {
-            cumulative += entry[4];
-            if (roll < cumulative) return entry;
-        }
-        return candidates[^1];
     }
 }

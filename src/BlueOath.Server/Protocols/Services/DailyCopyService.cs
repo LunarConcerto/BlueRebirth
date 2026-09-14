@@ -95,16 +95,16 @@ internal sealed class DailyCopyService(GameServices services)
         ConfigDailyGroup? group = DailyCopyRewardCatalog.GetGroup(groupId);
         if (group is null) return [];
 
-        List<(int Type, int ConfigId, int Num)> pending = [];
+        List<DropEntry> pending = [];
         if (isTreaty)
         {
             if (firstPass) AppendReward(group.TreatyPassDrop, pending);
             if (group.TreatyBasicDropBase > 0)
-                DrawDropPool(checked((int)group.TreatyBasicDropBase), pending, [], 0);
+                pending.AddRange(DropPoolResolver.Resolve(checked((int)group.TreatyBasicDropBase), services.DropItems, services.Rng));
             if (group.TreatyBasicDropStar is { Count: > 0 } starDrops)
             {
                 int starIndex = Math.Clamp(exStar, 0, starDrops.Count - 1);
-                DrawDropPool(checked((int)starDrops[starIndex]), pending, [], 0);
+                pending.AddRange(DropPoolResolver.Resolve(checked((int)starDrops[starIndex]), services.DropItems, services.Rng));
             }
         }
         else
@@ -118,12 +118,15 @@ internal sealed class DailyCopyService(GameServices services)
 
             if (group.BasicDrop is { } basicDrops && levelIndex < basicDrops.Count)
                 foreach (long dropId in basicDrops[levelIndex])
-                    DrawDropPool(checked((int)dropId), pending, [], 0);
+                    pending.AddRange(DropPoolResolver.Resolve(checked((int)dropId), services.DropItems, services.Rng));
         }
 
         List<CommonReward> result = [];
-        foreach ((int type, int configId, int num) in pending)
+        foreach (DropEntry entry in pending)
         {
+            int type = entry.Type;
+            int configId = entry.ConfigId;
+            int num = entry.Num;
             if (type == GameServices.GoodsTypeCurrency)
             {
                 account = GameServices.AddCurrency(account, configId, num);
@@ -151,70 +154,14 @@ internal sealed class DailyCopyService(GameServices services)
     }
 
     private static void AppendReward(
-        long rewardId, List<(int Type, int ConfigId, int Num)> pending)
+        long rewardId, List<DropEntry> pending)
     {
         if (rewardId <= 0 ||
             DailyCopyRewardCatalog.GetReward(checked((int)rewardId)) is not { Rewards: { } rewards })
             return;
         foreach (List<long> entry in rewards)
             if (entry.Count >= 3 && entry[2] > 0)
-                pending.Add((checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
-    }
-
-    private bool DrawDropPool(
-        int dropId, List<(int Type, int ConfigId, int Num)> result, HashSet<int> path, int depth)
-    {
-        if (depth >= 16 || !path.Add(dropId) || !services.DropItems.TryGetValue(dropId, out var pool))
-            return false;
-        try
-        {
-            if (pool.DropRate > 0 && pool.Drop is { Count: > 0 })
-                for (int i = 0; i < Math.Max(1, checked((int)pool.DropCount)); i++)
-                    if (WeightedPick(pool.Drop) is { } entry)
-                        ResolveDropEntry(entry, result, path, depth + 1);
-            if (pool.DropAloneCount > 0 && pool.DropAlone is { Count: > 0 })
-                for (int i = 0; i < pool.DropAloneCount; i++)
-                    if (WeightedPick(pool.DropAlone) is { } entry)
-                        ResolveDropEntry(entry, result, path, depth + 1);
-            return true;
-        }
-        finally
-        {
-            path.Remove(dropId);
-        }
-    }
-
-    private void ResolveDropEntry(
-        List<long> entry, List<(int Type, int ConfigId, int Num)> result, HashSet<int> path, int depth)
-    {
-        if (entry.Count < 5) return;
-        int type = checked((int)entry[0]);
-        int configId = checked((int)entry[1]);
-        int min = checked((int)entry[2]);
-        int max = checked((int)entry[3]);
-        if (min <= 0 || max < min) return;
-        int num = min == max ? min : services.Rng.Next(min, checked(max + 1));
-        if (type == GameServices.GoodsTypeDrop)
-        {
-            for (int i = 0; i < num; i++) DrawDropPool(configId, result, path, depth);
-            return;
-        }
-        result.Add((type, configId, num));
-    }
-
-    private List<long>? WeightedPick(List<List<long>> entries)
-    {
-        List<List<long>> candidates = entries.Where(x => x.Count >= 5 && x[4] > 0).ToList();
-        long total = candidates.Sum(x => x[4]);
-        if (total <= 0) return null;
-        long roll = services.Rng.NextInt64(total);
-        long cumulative = 0;
-        foreach (List<long> entry in candidates)
-        {
-            cumulative += entry[4];
-            if (roll < cumulative) return entry;
-        }
-        return candidates[^1];
+                pending.Add(new DropEntry(checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
     }
 
     internal static byte[] EncodeSnapshot(PlayerDailyCopyProgress? rawState, int now)

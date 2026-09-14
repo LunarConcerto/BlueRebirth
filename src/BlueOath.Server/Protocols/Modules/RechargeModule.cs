@@ -41,28 +41,31 @@ internal sealed class RechargeModule(GameServices services) : IGameModule
         PlayerAccount account = await services.GetOrCreateAccountAsync(ctx.ProfileId, ctx.Ct);
         int now = ctx.Now;
 
-        var pending = new List<(int Type, int ConfigId, int Num)>();
+        var pending = new List<DropEntry>();
 
         // 固定奖励：config_rewards[Reward].Rewards。
         if (cfg.Reward > 0 && DailyCopyRewardCatalog.GetReward(checked((int)cfg.Reward)) is { Rewards: { } rewardEntries })
             foreach (List<long> entry in rewardEntries)
                 if (entry.Count >= 3 && entry[0] > 0 && entry[2] > 0)
-                    pending.Add((checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
+                    pending.Add(new DropEntry(checked((int)entry[0]), checked((int)entry[1]), checked((int)entry[2])));
 
         // 随机掉落：config_drop_item[Drop] / [DropReward] 加权抽取（含 drop_alone 保底）。
         // 部分礼包无固定 reward（reward=-1），全部内容来自 DropReward 掉落表。
         if (cfg.Drop > 0)
-            DrawDropPool(checked((int)cfg.Drop), pending, new HashSet<int>(), 0);
+            pending.AddRange(DropPoolResolver.Resolve(checked((int)cfg.Drop), services.DropItems, services.Rng));
         if (cfg.DropReward > 0)
-            DrawDropPool(checked((int)cfg.DropReward), pending, new HashSet<int>(), 0);
+            pending.AddRange(DropPoolResolver.Resolve(checked((int)cfg.DropReward), services.DropItems, services.Rng));
 
         services.FileLogger.LogInformation(
             "recharge.DirectBuyItem rechargeId={Id} reward={Reward} drop={Drop} pendingCount={Count}",
             rechargeId, cfg.Reward, cfg.Drop, pending.Count);
 
         var rewards = new List<CommonReward>();
-        foreach ((int type, int configId, int num) in pending)
+        foreach (DropEntry entry in pending)
         {
+            int type = entry.Type;
+            int configId = entry.ConfigId;
+            int num = entry.Num;
             if (type == GameServices.GoodsTypeCurrency)
             {
                 account = GameServices.AddCurrency(account, configId, num);
@@ -108,62 +111,6 @@ internal sealed class RechargeModule(GameServices services) : IGameModule
 
         byte[] ret = ProtocolEncoder.EncodeDirectBuyItemRet(rewards);
         return new ModuleResult { Ret = ret, PrePushes = pushes };
-    }
-
-    /// <summary>递归展开 config_drop_item 掉落池，把结果追加到 pending。</summary>
-    private void DrawDropPool(
-        int dropId, List<(int Type, int ConfigId, int Num)> result, HashSet<int> path, int depth)
-    {
-        if (depth >= 16 || !path.Add(dropId) || !services.DropItems.TryGetValue(dropId, out var pool))
-            return;
-        try
-        {
-            if (pool.DropRate > 0 && pool.Drop is { Count: > 0 })
-                for (int i = 0; i < Math.Max(1, checked((int)pool.DropCount)); i++)
-                    if (WeightedPick(pool.Drop) is { } entry)
-                        ResolveDropEntry(entry, result, path, depth + 1);
-            if (pool.DropAloneCount > 0 && pool.DropAlone is { Count: > 0 })
-                for (int i = 0; i < pool.DropAloneCount; i++)
-                    if (WeightedPick(pool.DropAlone) is { } entry)
-                        ResolveDropEntry(entry, result, path, depth + 1);
-        }
-        finally
-        {
-            path.Remove(dropId);
-        }
-    }
-
-    private void ResolveDropEntry(
-        List<long> entry, List<(int Type, int ConfigId, int Num)> result, HashSet<int> path, int depth)
-    {
-        if (entry.Count < 5) return;
-        int type = checked((int)entry[0]);
-        int configId = checked((int)entry[1]);
-        int min = checked((int)entry[2]);
-        int max = checked((int)entry[3]);
-        if (min <= 0 || max < min) return;
-        int num = min == max ? min : services.Rng.Next(min, checked(max + 1));
-        if (type == GameServices.GoodsTypeDrop)
-        {
-            for (int i = 0; i < num; i++) DrawDropPool(configId, result, path, depth);
-            return;
-        }
-        result.Add((type, configId, num));
-    }
-
-    private List<long>? WeightedPick(List<List<long>> entries)
-    {
-        int totalWeight = entries.Sum(e => e.Count > 4 ? checked((int)e[4]) : 0);
-        if (totalWeight <= 0) return entries.Count > 0 ? entries[0] : null;
-        int roll = services.Rng.Next(totalWeight);
-        int cumulative = 0;
-        foreach (List<long> e in entries)
-        {
-            int w = e.Count > 4 ? checked((int)e[4]) : 0;
-            cumulative += w;
-            if (roll < cumulative) return e;
-        }
-        return entries[^1];
     }
 
     private (PlayerAccount Account, uint EquipId) AddEquip(PlayerAccount account, int templateId)
