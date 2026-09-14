@@ -89,6 +89,7 @@ internal static class ServerHostBuilder
         builder.Services.AddSingleton<IGameModule, CopyModule>();
         builder.Services.AddSingleton<IGameModule, DailyCopyModule>();
         builder.Services.AddSingleton<IGameModule, OutpostModule>();
+        builder.Services.AddSingleton<IGameModule, TowerModule>();
         builder.Services.AddSingleton<IGameModule, TaskModule>();
         builder.Services.AddSingleton<IGameModule, RepairModule>();
         builder.Services.AddSingleton<IGameModule, StrategyModule>();

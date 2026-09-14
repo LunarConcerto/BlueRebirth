@@ -199,7 +199,18 @@ internal sealed class HeroService(GameServices services)
     {
         PlayerAccount account = await services.GetOrCreateAccountAsync(profileId, ct);
         List<FleetEntry> entries = ProtocolDecoder.DecodeSetHerosTactic(request.Args ?? []);
-        PlayerFleet newFleet = new(entries);
+        PlayerFleet existing = account.Fleet ?? PlayerAccountFactory.DefaultFleet();
+        // 客户端只发送当前编队类型的数据（普通页只发 Normal，防卫圈页只发 Tower/LimitTower）。
+        // 不能整体替换，否则其它类型编队丢失：客户端 FleetInfo[其它类型] 为空后，
+        // SetHeroInFleetId 里 ipairs(nil)、GetFleetHeroId 里 #exHeroInfo 等都会崩溃。
+        // 因此仅替换请求中出现的类型，保留其余类型。
+        HashSet<int> incomingTypes = [.. entries.Select(e => e.Type)];
+        List<FleetEntry> merged =
+        [
+            .. existing.Tactics.Where(t => !incomingTypes.Contains(t.Type)),
+            .. entries,
+        ];
+        PlayerFleet newFleet = existing with { Tactics = merged };
         PlayerAccount updated = account with { Fleet = newFleet };
         await services.SaveAccountAsync(updated, ct);
         return ProtocolEncoder.EncodeFleet(newFleet);

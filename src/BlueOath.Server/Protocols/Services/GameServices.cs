@@ -65,6 +65,7 @@ internal sealed class GameServices
         _fashionSfIdMap = BuildFashionSfIdMap();
         _gmMails = GmMailsConfigLoader.Load(options.DataRoot).Mails;
         ShopCatalogLoader.Load(configDir);
+        TowerCatalogLoader.Load(configDir);
         ParameterCatalogLoader.Load(configDir);
         (_extractShips, _dropItems, _specialDraws, _shipInfos) = BuildShipExtractLoader.Load(configDir);
         ConstructionConfigLoader.Load(configDir);
@@ -522,11 +523,14 @@ internal sealed class GameServices
             PlayerAccount bagReady = CleanupPollutedBagShips(account);
             bool bagMigrated = !ReferenceEquals(bagReady, account);
             account = bagReady;
+            PlayerAccount fleetReady = EnsureTowerFleets(account);
+            bool fleetMigrated = !ReferenceEquals(fleetReady, account);
+            account = fleetReady;
             if (account.Character.Level < 80)
                 account = account with { Character = account.Character with { Level = 80 } };
             _accountCache[profileId] = account;
             if (heroMigrated || affectionMigrated || constructionMigrated || buildingMigrated || buildingMaterialsMigrated ||
-                profileNameMigrated || outpostMigrated || bagMigrated)
+                profileNameMigrated || outpostMigrated || bagMigrated || fleetMigrated)
                 await _repo.SaveAccountAsync(account, ct);
             return account;
         }
@@ -657,6 +661,26 @@ internal sealed class GameServices
             for (int i = 0; i < Math.Max(0, item.Num); i++)
                 recovered = AddShip(recovered, NextHeroId(), item.TemplateId, now);
         return recovered;
+    }
+
+    /// <summary>迁移修复：补齐编队类型。旧存档只有 Normal(type=1)，或 SetHerosTactic
+    /// 曾整体替换丢失其它类型。防御圈出击按 chapter.tactic_type 取 FleetType.Tower(2)/
+    /// LimitTower(3)，缺失会回落到无 exHeroInfo 的海域占位编队；缺 Normal(1) 则
+    /// SetHeroInFleetId 里 ipairs(nil) 崩溃。</summary>
+    private static PlayerAccount EnsureTowerFleets(PlayerAccount account)
+    {
+        PlayerFleet fleet = account.Fleet ?? PlayerAccountFactory.DefaultFleet();
+        HashSet<int> present = [.. fleet.Tactics.Select(t => t.Type)];
+        if (present.Contains(1) && present.Contains(2) && present.Contains(3))
+            return account;
+        List<FleetEntry> tactics = fleet.Tactics.ToList();
+        for (int type = 1; type <= 3; type++)
+        {
+            if (present.Contains(type)) continue;
+            for (int i = 1; i <= 5; i++)
+                tactics.Add(new FleetEntry(ModeId: i, Type: type, TacticName: ""));
+        }
+        return account with { Fleet = fleet with { Tactics = tactics } };
     }
 
     private string GetProfileDisplayName(string profileId) =>

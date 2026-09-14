@@ -1729,6 +1729,43 @@ internal static class ShopCatalogLoader
         => _goods.TryGetValue(goodId, out var cfg) ? cfg : null;
 }
 
+/// <summary>加载 config_tower_topic 里全部防卫圈关卡 id（copy_list + area_final_copy）。
+/// 防卫圈关卡不在 config_chapter.level_list 中，需单独识别以便记录通关进度。</summary>
+internal static class TowerCatalogLoader
+{
+    private static readonly HashSet<int> _towerCopyIds = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            ConfigDbLoader.LoadRows(configDir, "config_tower_topic.db", (_, _, json) =>
+            {
+                using var doc = JsonDocument.Parse(json);
+                AddNested(doc.RootElement, "copy_list");
+                AddNested(doc.RootElement, "area_final_copy");
+            });
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    private static void AddNested(JsonElement root, string property)
+    {
+        if (!root.TryGetProperty(property, out var groups) || groups.ValueKind != JsonValueKind.Array) return;
+        foreach (var group in groups.EnumerateArray())
+        {
+            if (group.ValueKind != JsonValueKind.Array) continue;
+            foreach (var item in group.EnumerateArray())
+                _towerCopyIds.Add(item.GetInt32());
+        }
+    }
+
+    public static bool IsTowerCopy(int copyId) => _towerCopyIds.Contains(copyId);
+}
+
 /// <summary>加载 config_parameter 全部参数（id → value），供业务侧读取配置值。</summary>
 internal static class ParameterCatalogLoader
 {

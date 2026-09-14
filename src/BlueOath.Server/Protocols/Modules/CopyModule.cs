@@ -59,6 +59,12 @@ internal sealed class CopyModule(BattleService battle) : IGameModule
                     postPushes.Add(await ctx.Services.BuildUpdateUserInfoPushAsync(
                         ctx.ProfileId, now, ctx.Ct));
                 }
+                else if (TowerCatalogLoader.IsTowerCopy(copyId))
+                {
+                    // ムーボー防卫圈：推送 tower.TowerInfo（含 SavePassCopyId），
+                    // 客户端据此把该关标记为已通关并解锁下一关。
+                    postPushes.Add(TowerModule.BuildTowerInfoPush(account, now));
+                }
                 else if (copyType == 10)
                 {
                     // 物资大作战：推送 goodscopy.UpdateData，客户端据此刷新伤害排名/奖励显示。

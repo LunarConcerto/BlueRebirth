@@ -135,6 +135,20 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
                 copyId, grade, mutation.FirstPass ? 1 : 0, passTime, mutation.Rewards);
         }
 
+        // ムーボー防卫圈（Tower）：关卡不在 config_chapter.level_list，单独记录到
+        // PlayerTowerProgress.SavePassCopyId；客户端据此判断已通关并解锁下一关。
+        if (TowerCatalogLoader.IsTowerCopy(copyId))
+        {
+            PlayerTowerProgress tower = account.Tower ?? new PlayerTowerProgress([]);
+            List<int> passList = tower.SavePassCopyId?.ToList() ?? [];
+            bool towerFirstPass = !passList.Contains(copyId);
+            if (towerFirstPass) passList.Add(copyId);
+            account = account with { Tower = new PlayerTowerProgress(passList) };
+            (account, List<CommonReward> towerRewards) = GrantCopyRewards(account, copyId, towerFirstPass, now);
+            await services.SaveAccountAsync(account, ct);
+            return ProtocolEncoder.EncodePassBaseRet(copyId, grade, towerFirstPass ? 1 : 0, passTime, towerRewards);
+        }
+
         PlayerCopyProgress progress = account.CopyProgress ?? new PlayerCopyProgress([]);
         List<CopyRecord> records = progress.Records.ToList();
         int idx = records.FindIndex(r => r.CopyId == copyId);

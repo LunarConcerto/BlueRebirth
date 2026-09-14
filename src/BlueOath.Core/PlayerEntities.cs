@@ -250,6 +250,11 @@ public sealed record PlayerTaskRecord(
     int RewardTime = 0,
     int Count = 0);
 
+/// <summary>ムーボー防卫圈（Tower）进度：已通关的关卡 id 列表（按通关顺序），
+/// 客户端 TowerData.SavePassCopyId 用它判断已通关/解锁下一关。</summary>
+public sealed record PlayerTowerProgress(
+    IReadOnlyList<int>? SavePassCopyId = null);
+
 /// <summary>
 /// 离线任务进度。日常/周常领奖记录分别按东八区自然日和自然周刷新；其余任务永久保留。
 /// TeachingPtRewardIds 记录已领取的教学履历阶段奖励。
@@ -286,6 +291,7 @@ public sealed record PlayerAccount(
     PlayerDailyCopyProgress? DailyCopy = null,
     PlayerTaskProgress? Tasks = null,
     PlayerOutpost? Outpost = null,
+    PlayerTowerProgress? Tower = null,
     /// <summary>
     /// guide.Setting 通道保存的全局用户设置（TGuideSetting 的 Key/Value 均为字符串）。
     /// 强化页的三个开关 LOGIC_HERO_INTENSIFY_TypeMatchCancel / _RHeroSelect / _MORESELECT
@@ -389,14 +395,19 @@ public static class PlayerAccountFactory
             new PlayerBuildingLand(Index: 6, BuildingId: 2),
         ]);
 
-    /// <summary>创建默认5个空编队（Normal type=1, modeId 1-5）。名称留空，由客户端按当前语言本地化。</summary>
+    /// <summary>创建默认编队：
+    /// Normal(type=1, modeId 1-5)、Tower(type=2, 1-5)、LimitTower(type=3, 1-5)。
+    /// 名称留空由客户端按当前语言本地化。防卫圈（LevelDetailsPage）按 chapter.tactic_type
+    /// 取编队，缺 type=2/3 时会回落到无 exHeroInfo 的海域占位编队并崩溃。</summary>
     public static PlayerFleet DefaultFleet()
     {
-        var tactics = new List<FleetEntry>(5);
+        var tactics = new List<FleetEntry>(15);
         for (int i = 1; i <= 5; i++)
-        {
             tactics.Add(new FleetEntry(ModeId: i, Type: 1, TacticName: ""));
-        }
+        for (int i = 1; i <= 5; i++)
+            tactics.Add(new FleetEntry(ModeId: i, Type: 2, TacticName: ""));
+        for (int i = 1; i <= 5; i++)
+            tactics.Add(new FleetEntry(ModeId: i, Type: 3, TacticName: ""));
         return new PlayerFleet(tactics);
     }
 
