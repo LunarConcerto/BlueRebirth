@@ -1137,7 +1137,19 @@ internal static class DailyCopyRewardCatalog
 /// 掉落表 id 指向 config_drop_item；首通奖励 id 指向 config_rewards。</summary>
 internal static class CopyDisplayLoader
 {
-    public sealed record CopyDropInfo(IReadOnlyList<int> DropInfoId, IReadOnlyList<int> FirstReward);
+    /// <summary>
+    /// 关卡掉落相关配置：
+    /// <list type="bullet">
+    /// <item><see cref="DropInfoId"/> 只是客户端预览用的 <c>config_drop_info</c> id 列表，<b>不是</b>实际掉落池；</item>
+    /// <item><see cref="FirstReward"/> 为首通奖励，索引 <c>config_rewards</c>；</item>
+    /// <item><see cref="PeriodDrop"/> 为周回（周期）海域每次通关的掉落池 id，索引
+    /// <c>config_drop_item</c>，0 表示无。</item>
+    /// </list>
+    /// </summary>
+    public sealed record CopyDropInfo(
+        IReadOnlyList<int> DropInfoId,
+        IReadOnlyList<int> FirstReward,
+        int PeriodDrop);
 
     private static readonly Dictionary<int, CopyDropInfo> _drops = new();
     private static bool _loaded;
@@ -1161,7 +1173,9 @@ internal static class CopyDisplayLoader
                     && firstProp.ValueKind == JsonValueKind.Array)
                     foreach (var item in firstProp.EnumerateArray())
                         if (item.TryGetInt32(out var v)) firstReward.Add(v);
-                _drops[id] = new CopyDropInfo(dropInfo, firstReward);
+                int periodDrop = doc.RootElement.TryGetProperty("period_drop", out var periodProp)
+                    && periodProp.TryGetInt32(out var periodValue) ? periodValue : 0;
+                _drops[id] = new CopyDropInfo(dropInfo, firstReward, periodDrop);
             });
         }
         catch { }
@@ -1170,6 +1184,80 @@ internal static class CopyDisplayLoader
 
     public static CopyDropInfo? Get(int copyDisplayId)
         => _drops.TryGetValue(copyDisplayId, out var info) ? info : null;
+}
+
+/// <summary>
+/// <c>config_fleet</c> / <c>config_copy</c> 的敌舰队掉落信息：
+/// <c>is_last_fleet == 1</c> 标记该关卡最后一支敌舰队——只有击破它才算通关；
+/// <c>drop_id</c>/<c>settle_drop_ids</c>/<c>other_drop_ids</c> 均为 <c>config_drop_item</c> 掉落池 id。
+/// </summary>
+internal static class FleetDropLoader
+{
+    public sealed record FleetDropInfo(
+        int FleetId,
+        bool IsLastFleet,
+        IReadOnlyList<int> DropIds,
+        IReadOnlyList<int> SettleDropIds,
+        IReadOnlyList<int> OtherDropIds);
+
+    private static readonly Dictionary<int, FleetDropInfo> _fleets = new();
+    // copy_id → 该关卡的各组敌舰队（同一 copy_id 可能有昼夜/难度等多行 config_copy）。
+    private static readonly Dictionary<int, List<List<int>>> _copyFleetGroups = new();
+    private static bool _loaded;
+
+    public static void Load(string configDir)
+    {
+        if (_loaded) return;
+        try
+        {
+            foreach ((int id, ConfigFleet cfg) in
+                     ConfigDbLoader.LoadAll<ConfigFleet>(configDir, "config_fleet.db"))
+            {
+                var dropIds = new List<int>();
+                if (cfg.DropId > 0) dropIds.Add(checked((int)cfg.DropId));
+                _fleets[id] = new FleetDropInfo(
+                    id,
+                    cfg.IsLastFleet == 1,
+                    dropIds,
+                    ToInts(cfg.SettleDropIds),
+                    ToInts(cfg.OtherDropIds));
+            }
+            foreach ((_, ConfigCopy cfg) in
+                     ConfigDbLoader.LoadAll<ConfigCopy>(configDir, "config_copy.db"))
+            {
+                if (cfg.CopyId <= 0 || cfg.FleetId is not { Count: > 0 }) continue;
+                int copyId = checked((int)cfg.CopyId);
+                if (!_copyFleetGroups.TryGetValue(copyId, out List<List<int>>? groups))
+                    _copyFleetGroups[copyId] = groups = [];
+                groups.Add(ToInts(cfg.FleetId));
+            }
+        }
+        catch { }
+        _loaded = true;
+    }
+
+    private static List<int> ToInts(List<long>? source)
+        => source is null ? [] : [.. source.Select(static x => checked((int)x))];
+
+    public static FleetDropInfo? Get(int fleetId)
+        => _fleets.TryGetValue(fleetId, out FleetDropInfo? info) ? info : null;
+
+    /// <summary>该敌舰队是否为关卡最后一支。未配置时按 true 处理（单舰队/未知关卡照常结算）。</summary>
+    public static bool IsLastFleet(int fleetId)
+        => !_fleets.TryGetValue(fleetId, out FleetDropInfo? info) || info.IsLastFleet;
+
+    /// <summary>
+    /// 返回 <paramref name="enemyFleetId"/> 所属的那一组敌舰队；找不到时退化为仅该舰队本身
+    /// （避免在同一 copy_id 的多套变体之间重复结算掉落）。
+    /// </summary>
+    public static IReadOnlyList<int> GetBattleFleets(int copyId, int enemyFleetId)
+    {
+        if (_copyFleetGroups.TryGetValue(copyId, out List<List<int>>? groups))
+            foreach (List<int> group in groups)
+                if (group.Contains(enemyFleetId))
+                    return group;
+        return enemyFleetId > 0 ? [enemyFleetId] : [];
+    }
 }
 
 /// <summary>从个人剧情配置生成图鉴协议所需的完整 THeroMemory 列表。</summary>

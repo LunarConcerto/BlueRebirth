@@ -79,6 +79,7 @@ internal sealed class GameServices
         DailyCopyRewardCatalog.Load(configDir);
         OutpostLevelLoader.Load(configDir);
         CopyDisplayLoader.Load(configDir);
+        FleetDropLoader.Load(configDir);
         StrategyConfigLoader.Load(configDir);
         MubConversionLoader.Load(configDir);
         TalentConfigLoader.Load(configDir);

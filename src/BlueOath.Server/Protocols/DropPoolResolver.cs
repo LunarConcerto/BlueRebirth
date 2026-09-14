@@ -35,6 +35,16 @@ internal static class DropPoolResolver
     /// <summary>drop_alone 权重基准：10000 = 100%。</summary>
     private const int WeightBase = 10_000;
 
+    /// <summary>物品/货币的「大量掉落」加成（仅作用于可堆叠类型）。</summary>
+    private const int BulkMinBonus = 600;
+    private const int BulkMaxBonus = 2000;
+
+    /// <summary>
+    /// 是否为可堆叠、适合「大量掉落」的物品/货币；排除装备(2)/舰船(3)/嵌套掉落(4)。
+    /// </summary>
+    private static bool IsBulkGoods(int type)
+        => type is not (GameServices.GoodsTypeEquip or GameServices.GoodsTypeShip or GameServices.GoodsTypeDrop);
+
     /// <summary>解析一个掉落池，返回展开后的奖励列表（Type, ConfigId, Num）。</summary>
     public static List<DropEntry> Resolve(
         int dropId, IReadOnlyDictionary<int, ConfigDropItem> pools, Random rng)
@@ -85,8 +95,17 @@ internal static class DropPoolResolver
         if (entry.Count < 5) return;
         int type = checked((int)entry[0]);
         int configId = checked((int)entry[1]);
-        int min = checked((int)entry[2]) + 600;
-        int max = checked((int)entry[3]) + 2000;
+        int min = checked((int)entry[2]);
+        int max = checked((int)entry[3]);
+
+        // 「增加大量掉落资源」：仅对可堆叠的物品/货币给固定加成。舰船(3)、装备(2)
+        // 与嵌套掉落(4)保持配置原值——它们会创建独立实例或递归展开，加成会让一次
+        // 结算产出成百上千个实例，客户端会卡在加载。
+        if (IsBulkGoods(type))
+        {
+            min += BulkMinBonus;
+            max += BulkMaxBonus;
+        }
 
         if (min <= 0 || max < min) return;
         int num = min == max ? min : rng.Next(min, checked(max + 1));

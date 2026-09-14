@@ -68,6 +68,21 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
             return ProtocolEncoder.EncodePassBaseRet(copyId, grade, 0, passTime);
         }
 
+        // 关卡可能包含多支敌舰队：客户端每击破一支就会发一次 copy.PassBase。
+        // 只有击破最后一支（config_fleet.is_last_fleet == 1）才算通关，届时才结算
+        // 奖励与通关进度；否则仅落盘血量并返回空结果，避免第一支敌舰队就发奖励。
+        // 货物副本（10）是单场伤害测试，按原逻辑即时结算，不做多舰队延迟。
+        int enemyFleetId = passArg.FleetInfo is { Count: > 0 } fleetInfo ? fleetInfo[0].EnemyId : 0;
+        bool isLastFleet = FleetDropLoader.IsLastFleet(enemyFleetId);
+        services.FileLogger.LogInformation(
+            "copy.PassBase copyId={CopyId} type={CopyType} enemyFleet={EnemyFleetId} isLastFleet={IsLastFleet} grade={Grade}",
+            copyId, copyType, enemyFleetId, isLastFleet, grade);
+        if (!isGoodsCopy && !isLastFleet)
+        {
+            await services.SaveAccountAsync(account, ct);
+            return ProtocolEncoder.EncodePassBaseRet(copyId, grade, 0, passTime);
+        }
+
         if (copyType == 10)
         {
             // 物资大作战：超时无条件胜利，奖励来自 config_copy_display.drop_info_id 掉落池。
@@ -121,7 +136,7 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
             }
 
             account = account with { SeaProgress = new PlayerSeaCopyProgress(seaRecords) };
-            (account, List<CommonReward> seaRewards) = GrantCopyRewards(account, copyId, isFirstPass, now);
+            (account, List<CommonReward> seaRewards) = GrantSeaCopyRewards(account, copyId, isFirstPass, now, enemyFleetId);
             await services.SaveAccountAsync(account, ct);
             return ProtocolEncoder.EncodePassBaseRet(copyId, grade, isFirstPass ? 1 : 0, passTime, seaRewards);
         }
@@ -204,8 +219,9 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
     }
 
     /// <summary>
-    /// 从 config_copy_display 读取掉落表（drop_info_id → config_drop_item 池）与首通奖励
-    /// （first_reward → config_rewards），抽取并发放战利品，返回更新后的账号与奖励列表。
+    /// 从 config_copy_display 读取首通奖励（first_reward → config_rewards）与掉落池
+    /// （drop_info_id → config_drop_item），抽取并发放战利品，返回更新后的账号与奖励列表。
+    /// 用于非海域副本（剧情/货物/防卫圈等）的既定行为。
     /// </summary>
     private (PlayerAccount Account, List<CommonReward> Rewards) GrantCopyRewards(
         PlayerAccount account, int copyId, bool isFirstPass, int now)
@@ -222,6 +238,50 @@ internal sealed class BattleService(GameServices services, DailyCopyService dail
         foreach (int dropId in dropInfo.DropInfoId)
             pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng));
 
+        return ApplyPendingRewards(account, pending, now);
+    }
+
+    /// <summary>
+    /// 海域（含周回海域，class_type=2）通关结算：
+    /// <list type="bullet">
+    /// <item>首通：<c>first_reward</c>（config_rewards）；</item>
+    /// <item>每次通关：<c>period_drop</c>（config_drop_item，周回海域的周期掉落）；</item>
+    /// <item>本次出击击破的整组敌舰队各自的 <c>drop_id</c>/<c>settle_drop_ids</c>/<c>other_drop_ids</c>。</item>
+    /// </list>
+    /// <c>drop_info_id</c> 只是客户端预览数据（config_drop_info），不参与发放。
+    /// </summary>
+    private (PlayerAccount Account, List<CommonReward> Rewards) GrantSeaCopyRewards(
+        PlayerAccount account, int copyId, bool isFirstPass, int now, int enemyFleetId)
+    {
+        var pending = new List<DropEntry>();
+
+        CopyDisplayLoader.CopyDropInfo? dropInfo = CopyDisplayLoader.Get(copyId);
+        if (isFirstPass && dropInfo is not null)
+            foreach (int rewardId in dropInfo.FirstReward)
+                AppendReward(rewardId, pending);
+
+        if (dropInfo is { PeriodDrop: > 0 })
+            pending.AddRange(DropPoolResolver.Resolve(dropInfo.PeriodDrop, services.DropItems, services.Rng));
+
+        foreach (int fleetId in FleetDropLoader.GetBattleFleets(copyId, enemyFleetId))
+        {
+            FleetDropLoader.FleetDropInfo? fleet = FleetDropLoader.Get(fleetId);
+            if (fleet is null) continue;
+            foreach (int dropId in fleet.DropIds)
+                pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng));
+            foreach (int dropId in fleet.SettleDropIds)
+                pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng));
+            foreach (int dropId in fleet.OtherDropIds)
+                pending.AddRange(DropPoolResolver.Resolve(dropId, services.DropItems, services.Rng));
+        }
+
+        return ApplyPendingRewards(account, pending, now);
+    }
+
+    /// <summary>把已抽出的掉落条目发放到账号，返回更新后的账号与已发放奖励。</summary>
+    private (PlayerAccount Account, List<CommonReward> Rewards) ApplyPendingRewards(
+        PlayerAccount account, List<DropEntry> pending, int now)
+    {
         var rewards = new List<CommonReward>();
         foreach (DropEntry entry in pending)
         {
