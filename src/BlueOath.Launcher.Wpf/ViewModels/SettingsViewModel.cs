@@ -109,7 +109,7 @@ public class SettingsViewModel : ViewModelBase, INavigationAware
     private void Unlock()
     {
         var result = MessageBox.Show(
-            "设置默认情况下已经配置好，请确认你完全了解所有配置的含义，然后点击确定进行修改。否则请点击取消来退出。",
+            "设置一般情况下不需要修改，已由程序自动配置好。请确认你完全了解这些配置的含义。然后点击确定进行修改。\n如果你不了解这些配置的含义，请点击取消来退出。",
             "修改设置确认",
             MessageBoxButton.OKCancel,
             MessageBoxImage.Warning);
