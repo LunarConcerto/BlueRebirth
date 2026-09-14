@@ -141,4 +141,24 @@ public class SettingsConfig : INotifyPropertyChanged
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
+
+    public void CopyFrom(SettingsConfig other)
+    {
+        GameClientPath = other.GameClientPath;
+        ServerDllPath = other.ServerDllPath;
+        PythonPath = other.PythonPath;
+        InjectorPath = other.InjectorPath;
+        PayloadPath = other.PayloadPath;
+        ProxyScriptPath = other.ProxyScriptPath;
+        DataRoot = other.DataRoot;
+        BaselinePath = other.BaselinePath;
+        UpdateManifestUrl = other.UpdateManifestUrl;
+        AutoUpdateEnabled = other.AutoUpdateEnabled;
+        Region = other.Region;
+        ServerPort = other.ServerPort;
+        GameLoginPort = other.GameLoginPort;
+        GmPort = other.GmPort;
+        SkipBuild = other.SkipBuild;
+        KeepLog = other.KeepLog;
+    }
 }

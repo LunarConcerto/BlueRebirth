@@ -9,7 +9,7 @@ using BlueOath.Launcher.Wpf.Services;
 
 namespace BlueOath.Launcher.Wpf.ViewModels;
 
-public class SettingsViewModel : ViewModelBase
+public class SettingsViewModel : ViewModelBase, INavigationAware
 {
     private readonly SettingsService _settingsService;
     private readonly MainViewModel _mainViewModel;
@@ -17,12 +17,31 @@ public class SettingsViewModel : ViewModelBase
     private string _validationMessage = "";
     private string _updateStatus = "尚未检测更新";
     private Brush _updateStatusBrush = Brushes.Gray;
+    private bool _isEditing;
 
     public SettingsConfig Settings
     {
         get => _settings;
         set => SetProperty(ref _settings, value);
     }
+
+    public bool IsEditing
+    {
+        get => _isEditing;
+        set
+        {
+            if (SetProperty(ref _isEditing, value))
+            {
+                OnPropertyChanged(nameof(EditStateText));
+                OnPropertyChanged(nameof(ShowUnlockButton));
+                System.Windows.Input.CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
+
+    public bool ShowUnlockButton => !IsEditing;
+
+    public string EditStateText => IsEditing ? "当前处于可编辑状态，修改后请点击「保存设置」" : "设置已锁定，如需修改请点击「修改设置」";
 
     public string ValidationMessage
     {
@@ -46,6 +65,7 @@ public class SettingsViewModel : ViewModelBase
 
     public ICommand SaveCommand { get; }
     public ICommand ResetCommand { get; }
+    public ICommand UnlockCommand { get; }
     public ICommand BrowseGameClientCommand { get; }
     public ICommand BrowseServerDllCommand { get; }
     public ICommand BrowseInjectorCommand { get; }
@@ -56,14 +76,15 @@ public class SettingsViewModel : ViewModelBase
     public ICommand BackCommand { get; }
     public ICommand CheckUpdateCommand { get; }
 
-    public SettingsViewModel(SettingsService settingsService, MainViewModel mainViewModel)
+    public SettingsViewModel(SettingsService settingsService, MainViewModel mainViewModel, SettingsConfig settings)
     {
         _settingsService = settingsService;
         _mainViewModel = mainViewModel;
-        _settings = settingsService.Load();
+        _settings = settings;
 
-        SaveCommand = new RelayCommand(Save);
-        ResetCommand = new RelayCommand(Reset);
+        SaveCommand = new RelayCommand(Save, () => IsEditing);
+        ResetCommand = new RelayCommand(Reset, () => IsEditing);
+        UnlockCommand = new RelayCommand(Unlock, () => !IsEditing);
         BackCommand = new RelayCommand(() => _mainViewModel.NavigateTo(0));
         CheckUpdateCommand = new RelayCommand(async () => await CheckForUpdateAsync());
 
@@ -76,11 +97,35 @@ public class SettingsViewModel : ViewModelBase
         BrowseBaselineCommand = new RelayCommand(() => BrowseFile("JSON 文件|*.json", (s, v) => s.BaselinePath = v));
     }
 
+    public void OnNavigatedTo()
+    {
+        // 每次进入设置页：丢弃未保存的修改，并重新锁定。
+        var persisted = _settingsService.Load();
+        _settings.CopyFrom(persisted);
+        IsEditing = false;
+        ValidationMessage = "";
+    }
+
+    private void Unlock()
+    {
+        var result = MessageBox.Show(
+            "设置默认情况下已经配置好，请确认你完全了解所有配置的含义，然后点击确定进行修改。否则请点击取消来退出。",
+            "修改设置确认",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning);
+        if (result == MessageBoxResult.OK)
+        {
+            IsEditing = true;
+            ValidationMessage = "";
+        }
+    }
+
     private void Save()
     {
         _settingsService.Save(_settings);
         _mainViewModel.UpdateLaunchConfig(_settings);
         ValidationMessage = "设置已保存";
+        IsEditing = false;
     }
 
     private async Task CheckForUpdateAsync()

@@ -8,155 +8,216 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="24,16" MaxWidth="800">
 
-                <TextBlock Text="设置" Style="{StaticResource TitleTextStyle}" FontSize="22" Margin="0,0,0,16" />
+                <TextBlock Text="设置" Style="{StaticResource TitleTextStyle}" FontSize="22" Margin="0,0,0,12" />
 
-                <!-- Game Client Path -->
-                <TextBlock Text="游戏客户端目录" Style="{StaticResource BodyTextStyle}"
-                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox Text="{Binding Settings.GameClientPath, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource SettingTextBoxStyle}" />
-                    <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
-                            Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
-                            Command="{Binding BrowseGameClientCommand}" Margin="8,0,0,0" />
-                </Grid>
-
-                <!-- Server DLL Path -->
-                <TextBlock Text="服务器 DLL 路径" Style="{StaticResource BodyTextStyle}"
-                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox Text="{Binding Settings.ServerDllPath, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource SettingTextBoxStyle}" />
-                    <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
-                            Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
-                            Command="{Binding BrowseServerDllCommand}" Margin="8,0,0,0" />
-                </Grid>
-
-                <!-- Python Path -->
-                <TextBlock Text="Python 可执行路径" Style="{StaticResource BodyTextStyle}"
-                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <TextBox Text="{Binding Settings.PythonPath, UpdateSourceTrigger=PropertyChanged}"
-                         Style="{StaticResource SettingTextBoxStyle}" Margin="0,0,0,12" />
-
-                <!-- Injector Path -->
-                <TextBlock Text="注入器路径" Style="{StaticResource BodyTextStyle}"
-                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox Text="{Binding Settings.InjectorPath, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource SettingTextBoxStyle}" />
-                    <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
-                            Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
-                            Command="{Binding BrowseInjectorCommand}" Margin="8,0,0,0" />
-                </Grid>
-
-                <!-- Payload Path -->
-                <TextBlock Text="Payload DLL 路径" Style="{StaticResource BodyTextStyle}"
-                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox Text="{Binding Settings.PayloadPath, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource SettingTextBoxStyle}" />
-                    <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
-                            Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
-                            Command="{Binding BrowsePayloadCommand}" Margin="8,0,0,0" />
-                </Grid>
-
-                <!-- Proxy Script Path -->
-                <TextBlock Text="代理脚本路径" Style="{StaticResource BodyTextStyle}"
-                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox Text="{Binding Settings.ProxyScriptPath, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource SettingTextBoxStyle}" />
-                    <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
-                            Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
-                            Command="{Binding BrowseProxyScriptCommand}" Margin="8,0,0,0" />
-                </Grid>
-
-                <!-- Data Root -->
-                <TextBlock Text="数据目录" Style="{StaticResource BodyTextStyle}"
-                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox Text="{Binding Settings.DataRoot, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource SettingTextBoxStyle}" />
-                    <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
-                            Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
-                            Command="{Binding BrowseDataRootCommand}" Margin="8,0,0,0" />
-                </Grid>
-
-                <!-- Baseline Path -->
-                <TextBlock Text="基线文件路径" Style="{StaticResource BodyTextStyle}"
-                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox Text="{Binding Settings.BaselinePath, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{StaticResource SettingTextBoxStyle}" />
-                    <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
-                            Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
-                            Command="{Binding BrowseBaselineCommand}" Margin="8,0,0,0" />
-                </Grid>
-
-                <!-- Region + Ports Row -->
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                        <TextBlock Text="服务器区域" Style="{StaticResource BodyTextStyle}"
-                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                        <ComboBox SelectedItem="{Binding Settings.Region}"
-                                  Style="{StaticResource SettingComboBoxStyle}">
-                            <ComboBoxItem Content="日服 (jp)" />
-                            <ComboBoxItem Content="国服 (cn)" />
-                        </ComboBox>
+                <!-- Lock state indicator -->
+                <Border CornerRadius="6" Padding="12,8" Margin="0,0,0,16">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="{StaticResource BgCardBrush}" />
+                            <Setter Property="BorderThickness" Value="1" />
+                            <Setter Property="BorderBrush" Value="{StaticResource BgLightBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                    <Setter Property="Background" Value="#3A2E12" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="16"
+                                   VerticalAlignment="Center" Margin="0,0,8,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock Text="{Binding EditStateText}" FontSize="13" VerticalAlignment="Center"
+                                   TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="0,0,8,0">
-                        <TextBlock Text="服务器端口" Style="{StaticResource BodyTextStyle}"
-                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                        <TextBox Text="{Binding Settings.ServerPort, UpdateSourceTrigger=PropertyChanged}"
+                </Border>
+
+                <!-- ===== Locked configuration section ===== -->
+                <StackPanel IsEnabled="{Binding IsEditing}">
+
+                    <!-- Game Client Path -->
+                    <TextBlock Text="游戏客户端目录" Style="{StaticResource BodyTextStyle}"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding Settings.GameClientPath, UpdateSourceTrigger=PropertyChanged}"
                                  Style="{StaticResource SettingTextBoxStyle}" />
-                    </StackPanel>
-                    <StackPanel Grid.Column="2">
-                        <TextBlock Text="GM 端口" Style="{StaticResource BodyTextStyle}"
-                                   Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
-                        <TextBox Text="{Binding Settings.GmPort, UpdateSourceTrigger=PropertyChanged}"
-                                 Style="{StaticResource SettingTextBoxStyle}" />
-                    </StackPanel>
-                </Grid>
+                        <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
+                                Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
+                                Command="{Binding BrowseGameClientCommand}" Margin="8,0,0,0" />
+                    </Grid>
 
-                <!-- Update Detection -->
+                    <!-- Server DLL Path -->
+                    <TextBlock Text="服务器 DLL 路径" Style="{StaticResource BodyTextStyle}"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding Settings.ServerDllPath, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource SettingTextBoxStyle}" />
+                        <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
+                                Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
+                                Command="{Binding BrowseServerDllCommand}" Margin="8,0,0,0" />
+                    </Grid>
+
+                    <!-- Python Path -->
+                    <TextBlock Text="Python 可执行路径" Style="{StaticResource BodyTextStyle}"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                    <TextBox Text="{Binding Settings.PythonPath, UpdateSourceTrigger=PropertyChanged}"
+                             Style="{StaticResource SettingTextBoxStyle}" Margin="0,0,0,12" />
+
+                    <!-- Injector Path -->
+                    <TextBlock Text="注入器路径" Style="{StaticResource BodyTextStyle}"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding Settings.InjectorPath, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource SettingTextBoxStyle}" />
+                        <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
+                                Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
+                                Command="{Binding BrowseInjectorCommand}" Margin="8,0,0,0" />
+                    </Grid>
+
+                    <!-- Payload Path -->
+                    <TextBlock Text="Payload DLL 路径" Style="{StaticResource BodyTextStyle}"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding Settings.PayloadPath, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource SettingTextBoxStyle}" />
+                        <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
+                                Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
+                                Command="{Binding BrowsePayloadCommand}" Margin="8,0,0,0" />
+                    </Grid>
+
+                    <!-- Proxy Script Path -->
+                    <TextBlock Text="代理脚本路径" Style="{StaticResource BodyTextStyle}"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding Settings.ProxyScriptPath, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource SettingTextBoxStyle}" />
+                        <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
+                                Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
+                                Command="{Binding BrowseProxyScriptCommand}" Margin="8,0,0,0" />
+                    </Grid>
+
+                    <!-- Data Root -->
+                    <TextBlock Text="数据目录" Style="{StaticResource BodyTextStyle}"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding Settings.DataRoot, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource SettingTextBoxStyle}" />
+                        <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
+                                Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
+                                Command="{Binding BrowseDataRootCommand}" Margin="8,0,0,0" />
+                    </Grid>
+
+                    <!-- Baseline Path -->
+                    <TextBlock Text="基线文件路径" Style="{StaticResource BodyTextStyle}"
+                               Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding Settings.BaselinePath, UpdateSourceTrigger=PropertyChanged}"
+                                 Style="{StaticResource SettingTextBoxStyle}" />
+                        <Button Grid.Column="1" Content="浏览" Width="60" Height="28"
+                                Style="{StaticResource SecondaryButtonStyle}" FontSize="12"
+                                Command="{Binding BrowseBaselineCommand}" Margin="8,0,0,0" />
+                    </Grid>
+
+                    <!-- Region + Ports Row -->
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                            <TextBlock Text="服务器区域" Style="{StaticResource BodyTextStyle}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                            <ComboBox SelectedItem="{Binding Settings.Region}"
+                                      Style="{StaticResource SettingComboBoxStyle}">
+                                <ComboBoxItem Content="日服 (jp)" />
+                                <ComboBoxItem Content="国服 (cn)" />
+                            </ComboBox>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                            <TextBlock Text="服务器端口" Style="{StaticResource BodyTextStyle}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                            <TextBox Text="{Binding Settings.ServerPort, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource SettingTextBoxStyle}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="GM 端口" Style="{StaticResource BodyTextStyle}"
+                                       Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,4" />
+                            <TextBox Text="{Binding Settings.GmPort, UpdateSourceTrigger=PropertyChanged}"
+                                     Style="{StaticResource SettingTextBoxStyle}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Checkboxes -->
+                    <StackPanel Margin="0,0,0,12">
+                        <CheckBox IsChecked="{Binding Settings.AutoUpdateEnabled}"
+                                  Foreground="{StaticResource TextSecondaryBrush}"
+                                  Content="启动时自动检查更新" Margin="0,0,0,8" />
+                        <StackPanel Orientation="Horizontal">
+                            <CheckBox IsChecked="{Binding Settings.SkipBuild}" Foreground="{StaticResource TextSecondaryBrush}"
+                                      Content="跳过构建" Margin="0,0,20,0" />
+                            <CheckBox IsChecked="{Binding Settings.KeepLog}" Foreground="{StaticResource TextSecondaryBrush}"
+                                      Content="保留日志" />
+                        </StackPanel>
+                    </StackPanel>
+
+                </StackPanel>
+                <!-- ===== End locked section ===== -->
+
+                <!-- Update Detection (action remains available) -->
                 <StackPanel Margin="0,8,0,16">
                     <TextBlock Text="更新检测" Style="{StaticResource BodyTextStyle}" FontSize="16" Margin="0,0,0,10" />
-                    <CheckBox IsChecked="{Binding Settings.AutoUpdateEnabled}"
-                              Foreground="{StaticResource TextSecondaryBrush}"
-                              Content="启动时自动检查更新" Margin="0,0,0,10" />
                     <StackPanel Orientation="Horizontal">
                         <Button Content="立即检测更新" Width="120" Height="30"
                                 Style="{StaticResource SecondaryButtonStyle}"
@@ -171,24 +232,22 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- Checkboxes -->
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                    <CheckBox IsChecked="{Binding Settings.SkipBuild}" Foreground="{StaticResource TextSecondaryBrush}"
-                              Content="跳过构建" Margin="0,0,20,0" />
-                    <CheckBox IsChecked="{Binding Settings.KeepLog}" Foreground="{StaticResource TextSecondaryBrush}"
-                              Content="保留日志" />
-                </StackPanel>
-
                 <!-- Validation -->
                 <TextBlock Text="{Binding ValidationMessage}" FontSize="12"
                            Foreground="{StaticResource SuccessBrush}" Margin="0,0,0,8" />
 
                 <!-- Buttons -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                    <Button Content="修改设置" Width="140" Height="36" FontSize="14" Margin="0,0,10,0"
+                            Command="{Binding UnlockCommand}"
+                            Visibility="{Binding ShowUnlockButton, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Style="{StaticResource DebugLaunchButtonStyle}" />
                     <Button Content="保存设置" Style="{StaticResource PrimaryLaunchButtonStyle}"
-                            Width="140" Height="36" FontSize="14" Command="{Binding SaveCommand}" />
+                            Width="140" Height="36" FontSize="14" Command="{Binding SaveCommand}"
+                            IsEnabled="{Binding IsEditing}" />
                     <Button Content="恢复默认" Style="{StaticResource SecondaryButtonStyle}"
-                            Width="100" Height="36" FontSize="13" Command="{Binding ResetCommand}" Margin="12,0,0,0" />
+                            Width="100" Height="36" FontSize="13" Command="{Binding ResetCommand}"
+                            IsEnabled="{Binding IsEditing}" Margin="12,0,0,0" />
                     <Button Content="返回启动页" Style="{StaticResource SecondaryButtonStyle}"
                             Width="100" Height="36" FontSize="13" Command="{Binding BackCommand}" Margin="12,0,0,0" />
                 </StackPanel>

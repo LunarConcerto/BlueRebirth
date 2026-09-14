@@ -34,7 +34,7 @@ public partial class MainWindow : Window
         var guardianViewModel = new GuardianViewModel(processManager, _mainViewModel);
         var accountsViewModel = new AccountsViewModel(accountService);
         var modViewModel = new ModViewModel(new ModService(rootDir), _mainViewModel);
-        var settingsViewModel = new SettingsViewModel(settingsService, _mainViewModel);
+        var settingsViewModel = new SettingsViewModel(settingsService, _mainViewModel, settings);
 
         _mainViewModel.AddPage(launchViewModel);
         _mainViewModel.AddPage(guardianViewModel);

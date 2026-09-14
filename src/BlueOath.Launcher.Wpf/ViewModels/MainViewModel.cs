@@ -26,6 +26,7 @@ public class MainViewModel : ViewModelBase
             if (SetProperty(ref _selectedPageIndex, value) && value < Pages.Count)
             {
                 CurrentPage = Pages[value];
+                (CurrentPage as INavigationAware)?.OnNavigatedTo();
             }
         }
     }
