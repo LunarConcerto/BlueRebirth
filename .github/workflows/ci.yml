@@ -151,7 +151,7 @@ jobs:
           Write-Host "Uploading release package to Gitee..."
           $uploadJson = & curl.exe --fail-with-body --show-error --progress-bar `
             --connect-timeout 30 `
-            --max-time 900 `
+            --max-time 3600 `
             -X POST `
             -H "Authorization: Bearer $env:GITEE_API" `
             -H "Accept: application/json" `
