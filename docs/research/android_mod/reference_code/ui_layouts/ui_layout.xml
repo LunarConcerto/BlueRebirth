@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- BlueRebirth launcher UI layout: parsed at runtime by com.bluerebirth.mods.UiLayout -->
+<ui>
+  <text id="title" style="title" text="BlueRebirth · Mod 管理器"/>
+  <text id="status" style="status"/>
+  <scroll id="list" weight="1" padding="16,8,16,8"/>
+  <row>
+    <button id="grant" text="授权存储"/>
+    <button id="apply" text="刷新并应用"/>
+  </row>
+  <row>
+    <button id="importSave" text="导入外部存档"/>
+    <button id="exportSave" text="导出存档"/>
+  </row>
+  <row>
+    <button id="resetVanilla" text="一键恢复纯净原版"/>
+    <button id="launch" text="返回启动器主页"/>
+  </row>
+</ui>
