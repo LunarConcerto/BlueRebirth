@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- BlueRebirth 启动器 · 主界面（聚合控制台）
+     布局由 UiInjector 在 MainActivity 上 inflate 并接管；控件 id 供 Java 绑定，勿改 -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:background="@drawable/bg_home"
+    android:scrollbars="none">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingLeft="20dp"
+        android:paddingRight="20dp"
+        android:paddingTop="14dp"
+        android:paddingBottom="16dp">
+
+        <!-- ① 顶部状态提示卡（动态文案，由 Java 轮询 C# 状态同步） -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_white"
+            android:elevation="2dp"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/tv_status_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="正在启动…"
+                android:textColor="#1C2B4A"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_status_hint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="请稍等几秒。"
+                android:textColor="#5B6C8F"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- ② 核心操作区 -->
+        <Button
+            android:id="@+id/btn_start"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/btn_start"
+            android:elevation="2dp"
+            android:stateListAnimator="@null"
+            android:text="开始游戏"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFFFF"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btn_install"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="9dp"
+            android:background="@drawable/btn_install"
+            android:stateListAnimator="@null"
+            android:text="安装倒卖狗死妈包"
+            android:textAllCaps="false"
+            android:textColor="#2E6BE6"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <!-- ③ 聚合功能区：左右两张卡片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:orientation="horizontal">
+
+            <!-- 卡片 A：Mod 管理 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="154dp"
+                android:layout_marginRight="7dp"
+                android:layout_weight="1"
+                android:background="@drawable/card_white"
+                android:elevation="2dp"
+                android:orientation="vertical"
+                android:padding="13dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Mod 管理"
+                    android:textColor="#1C2B4A"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_mod_status"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:text="状态：扫描中…"
+                    android:textColor="#8A97B5"
+                    android:textSize="12sp" />
+
+                <Space
+                    android:layout_width="1dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+
+                <Button
+                    android:id="@+id/btn_mods"
+                    android:layout_width="match_parent"
+                    android:layout_height="42dp"
+                    android:background="@drawable/btn_blue"
+                    android:stateListAnimator="@null"
+                    android:text="进入 Mod 管理器"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <!-- 卡片 B：存档操作 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="154dp"
+                android:layout_marginLeft="7dp"
+                android:layout_weight="1"
+                android:background="@drawable/card_white"
+                android:elevation="2dp"
+                android:orientation="vertical"
+                android:padding="13dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="存档操作"
+                    android:textColor="#1C2B4A"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:text="导入 / 导出服务端存档"
+                    android:textColor="#8A97B5"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btn_import"
+                    android:layout_width="match_parent"
+                    android:layout_height="38dp"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/btn_outline"
+                    android:stateListAnimator="@null"
+                    android:text="导入外部存档"
+                    android:textAllCaps="false"
+                    android:textColor="#2E6BE6"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_export"
+                    android:layout_width="match_parent"
+                    android:layout_height="38dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/btn_outline"
+                    android:stateListAnimator="@null"
+                    android:text="导出外部存档"
+                    android:textAllCaps="false"
+                    android:textColor="#2E6BE6"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ④ 底部工具栏 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_antikill"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_weight="1"
+                android:background="@drawable/btn_pill"
+                android:stateListAnimator="@null"
+                android:text="防杀后台设置"
+                android:textAllCaps="false"
+                android:textColor="#1C2B4A"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btn_close"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginLeft="8dp"
+                android:layout_weight="1"
+                android:background="@drawable/btn_danger_pill"
+                android:stateListAnimator="@null"
+                android:text="关闭启动器"
+                android:textAllCaps="false"
+                android:textColor="#E85C5C"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btn_feedback"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginLeft="8dp"
+                android:layout_weight="1"
+                android:background="@drawable/btn_pill"
+                android:stateListAnimator="@null"
+                android:text="反馈"
+                android:textAllCaps="false"
+                android:textColor="#1C2B4A"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- 版权/免费声明（保留原文案） -->
+        <TextView
+            android:id="@+id/tv_footnote"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="本软件永久免费，如果你付费购得本软件，请你退款"
+            android:textColor="#A6B3CC"
+            android:textSize="10sp" />
+    </LinearLayout>
+</ScrollView>
