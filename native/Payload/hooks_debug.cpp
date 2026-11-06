@@ -1,4 +1,4 @@
-﻿#include "hooks.h"
+#include "hooks.h"
 #ifdef BLUEOATH_LUA_MODS
 #include "lua_mod_loader.h"
 #endif
@@ -2682,6 +2682,91 @@ void TryApplyAttachedFleetsFix() {
     VirtualProtect(address, 6, oldProtect, &oldProtect);
     FlushInstructionCache(GetCurrentProcess(), address, 6);
     Log("attachedFleets null NRE fix applied @0x58F306");
+}
+
+// ---------------------------------------------------------------------------
+// SceneConfigPos.InitFleetsWithBattleFieldInfo player_fleet_position OOB fix.
+//
+// Repro: copy 30111 (chapter 2001 training, copy_type 0). Its boss enemy fleet
+//   config_fleet[301111].battlefield_info = 301111 -> GetEBPKit returns
+//   SceneConfigPos, and config_battlefield_info[301111].player_fleet_position
+//   holds exactly ONE slot ("playerbirth_301111").
+// The player_fleet_position counter is initialised to 1 (0x15E96B:
+//   `C7 45 10 01 00 00 00`), so only one fleet classified as manually
+//   controllable can be seated. The 2nd such fleet fails the bounds check and
+//   the client throws
+//   "DictBattlefieldInfoBlo Invalid player_fleet_position {0}, ..." from
+//   inside StateBattleReady.__EnterBattleFromSearch, wedging the battle FSM
+//   (loading-screen loop / crash; clearing runtime/ is the only recovery
+//   because profiles.db keeps the stuck battle).
+//
+// Both out-of-range branches (player_fleet_position @0x15EA5B,
+// assist_fleet_position @0x15EACC) jump to the SAME report block @0x15EBA2.
+// That block is NOT mergeable: the null-list / null-fleet / null-masterData
+// guards jump to 0x15EB9B, whose report body starts exactly at 0x15EBA2 (also
+// its fallthrough target), so patching 0x15EBA2 would corrupt the null guards.
+//
+// Fix: retarget only the two bounds-check jumps to the "skip seating, keep
+// current position" continuation @0x15EAE9 (safe path; reaches the counter
+// increment and loop continue). Out-of-range fleets stay where they were,
+// matching the documented fallback for missing/empty position arrays.
+// ---------------------------------------------------------------------------
+bool sceneConfigPosBoundsFixApplied = false;
+
+bool SameBytes(const unsigned char* at, const unsigned char* expected, size_t count) {
+    for (size_t i = 0; i < count; ++i) if (at[i] != expected[i]) return false;
+    return true;
+}
+
+void PatchJgeToJmp(uintptr_t base, uint32_t siteRva, uint32_t targetRva, const char* label) {
+    auto address = reinterpret_cast<unsigned char*>(base + siteRva);
+    if (address[0] != 0x0F || address[1] != 0x8D) {
+        char act[24]{};
+        for (int i = 0; i < 6; ++i) { char b[4]{}; sprintf_s(b, "%02X ", address[i]); strcat_s(act, b); }
+        Log(std::string("SceneConfigPos bounds fix refused (") + label +
+            "): opcode mismatch actual=" + act);
+        return;
+    }
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(address, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        Log(std::string("SceneConfigPos bounds fix refused (") + label + "): VirtualProtect failed");
+        return;
+    }
+    address[0] = 0xE9; // jmp rel32 - take the branch unconditionally
+    *reinterpret_cast<int32_t*>(address + 1) = static_cast<int32_t>(
+        (base + targetRva) - (base + siteRva + 5));
+    address[5] = 0x90; // pad the 2 leftover bytes of the original rel32 jcc
+    VirtualProtect(address, 5, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), address, 5);
+    Log(std::string("SceneConfigPos bounds fix applied (") + label + ")");
+}
+
+void TryApplySceneConfigPosBoundsFix() {
+    if (sceneConfigPosBoundsFixApplied) return;
+    sceneConfigPosBoundsFixApplied = true;
+    HMODULE ga = GetModuleHandleW(L"GameAssembly.dll");
+    if (!ga) return;
+    const auto base = reinterpret_cast<uintptr_t>(ga);
+    // Fail closed on an unexpected build: require the JP 1.4.0 prologue of
+    // SceneConfigPos.InitFleetsWithBattleFieldInfo at RVA 0x15E8D0
+    // (`55 8B EC 83 EC 10 80 3D 4E 4D D4 11 00 75 15`) plus the
+    // assist_fleet_position bounds-check tail before writing anything.
+    const unsigned char fnPrologue[15] = {
+        0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x10, 0x80, 0x3D, 0x4E, 0x4D, 0xD4, 0x11, 0x00, 0x75, 0x15
+    };
+    if (!SameBytes(reinterpret_cast<const unsigned char*>(base + 0x15E8D0), fnPrologue, sizeof(fnPrologue))) {
+        Log("SceneConfigPos bounds fix skipped: InitFleetsWithBattleFieldInfo prologue mismatch");
+        return;
+    }
+    const unsigned char tailPattern[11] = {
+        0x83, 0xC4, 0x08, 0x39, 0x45, 0x10, 0x0F, 0x8D, 0xD0, 0x00, 0x00
+    };
+    if (!SameBytes(reinterpret_cast<const unsigned char*>(base + 0x15EAC9), tailPattern, sizeof(tailPattern))) {
+        Log("SceneConfigPos bounds fix skipped: assist_fleet_position tail mismatch");
+        return;
+    }
+    PatchJgeToJmp(base, 0x15EA5B, 0x15EAE9, "player_fleet_position @0x15EA5B");
+    PatchJgeToJmp(base, 0x15EACC, 0x15EAE9, "assist_fleet_position @0x15EACC");
 }
 
 // Per-site stubs (VirtualAlloc), addressed via gNreStubs[i]. Each stub:
@@ -7512,6 +7597,7 @@ void InitializeHooks(HMODULE module) {
         TryApplyOnStageStartFinHook();
         TryApplyPVEStartDataCtorHook();
         TryApplyAttachedFleetsFix();
+        TryApplySceneConfigPosBoundsFix();
         // 绌鸿淇锛歞amageFac(=0) 璇诲彇鍣?0x1052f5a0 寮哄埗杩斿洖 1.0锛岃鐩栬桨鐐?鎴樻枟/楸奸浄鏈哄悇瀛愯矾寰勩€?
         // 杞扮偢鏈?0x51DA87 / 鎴樻枟鏈?0x51E6D7 鐨勪箻娉曞彟鏈?NOP锛堣 TryApplyMainGunDamageFacPatch锛夈€?
         TryApplyDamageFacHook();
